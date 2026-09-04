@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+license = "GPL-3.0-only"
+repository = "https://github.com/aitoolplus/aitoolplus"
+authors = ["aitoolplus contributors"]
+
+[workspace.dependencies]
+aitoolplus-core = { path = "crates/aitoolplus-core" }
+aitoolplus-ui = { path = "crates/aitoolplus-ui" }
+
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+toml_edit = "0.22"
+
+# GPUI community edition, pinned to the same rev as flyclip (verified locally).
+gpui = { git = "https://github.com/gpui-ce/gpui-ce", rev = "c738623ffbcec2aeddc44a645cc6b74646d5cf97" }
+gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce", rev = "c738623ffbcec2aeddc44a645cc6b74646d5cf97" }
+gpui_elements = { git = "https://github.com/gpui-ce/gpui-ce", rev = "c738623ffbcec2aeddc44a645cc6b74646d5cf97" }
+async-channel = "2"
+rfd = "0.15"
+unicode-segmentation = "1.12"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 4
+strip = true

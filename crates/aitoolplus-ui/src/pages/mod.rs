@@ -1,0 +1,588 @@
+//! Feature pages: tool pages (providers/common/prompts), MCP, Skills,
+//! Sessions, Settings.
+
+pub mod mcp_page;
+pub mod sessions_page;
+pub mod settings_page;
+pub mod skills_page;
+pub mod tool_page;
+
+use aitoolplus_core::tools::ToolId;
+use gpui::{Context, IntoElement, MouseButton, Window, div, prelude::*, px};
+
+use crate::components::{ButtonVariant, button_l, icon_button_l};
+use crate::text_area::TextArea;
+use crate::text_input::TextInput;
+use crate::theme::Theme;
+use crate::workspace::Workspace;
+
+/// Which top-level page is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Tool(ToolId),
+    Mcp,
+    Skills,
+    Sessions,
+    Settings,
+}
+
+impl Page {
+    pub fn key(self) -> &'static str {
+        match self {
+            Page::Tool(t) => t.key(),
+            Page::Mcp => "mcp",
+            Page::Skills => "skills",
+            Page::Sessions => "sessions",
+            Page::Settings => "settings",
+        }
+    }
+}
+
+/// Tabs within a tool page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolTab {
+    Providers,
+    Common,
+    Prompts,
+    Runtime,
+    /// Pi extension management (packages + local .ts).
+    Extensions,
+    /// Claude Code/Grok plugin management.
+    Plugins,
+    /// OpenCode companion profiles (OpenAgent / Slim).
+    Addons,
+}
+
+/// All transient UI state owned by the workspace.
+pub struct WorkspaceState {
+    pub tool_tab: ToolTab,
+    /// JSON text buffers for the common-config editor, per tool.
+    pub common_editors: std::collections::BTreeMap<String, gpui::Entity<TextArea>>,
+    pub common_dirty: bool,
+    /// Provider edit dialog state.
+    pub provider_dialog: Option<ProviderDialogState>,
+    /// Prompt edit dialog state.
+    pub prompt_dialog: Option<PromptDialogState>,
+    /// Which session is expanded (tool key + session id).
+    pub open_session: Option<(ToolId, String)>,
+    /// MCP editor dialog.
+    pub mcp_dialog: Option<McpDialogState>,
+    /// Delete confirmations (title, message, action id).
+    pub confirm: Option<ConfirmState>,
+    /// Settings page: import/export feedback.
+    pub settings_tab: SettingsTab,
+    pub skills_tool_filter: Option<ToolId>,
+    pub sessions_tool: ToolId,
+    pub session_search: gpui::Entity<TextInput>,
+    /// Sticky status message.
+    pub toast: Option<Toast>,
+    /// Whether MCP discovery has already run this session.
+    pub mcp_discovered: bool,
+    /// Whether the skills central repo has been scanned this session.
+    pub skills_discovered: bool,
+    /// Session rename dialog: (meta, title input).
+    pub rename_dialog: Option<(
+        aitoolplus_core::session::SessionMeta,
+        gpui::Entity<TextInput>,
+    )>,
+    /// Pi Model Settings transient selections (None = use on-disk value).
+    pub pi_ms_provider: Option<String>,
+    pub pi_ms_model: Option<String>,
+    pub pi_ms_thinking: Option<String>,
+    pub webdav_inputs: Option<WebDavInputs>,
+    pub provider_test_results:
+        std::collections::BTreeMap<String, aitoolplus_core::api_hub::ConnectivityResult>,
+    pub update_info: Option<aitoolplus_core::updater::UpdateInfo>,
+    pub remote_backups: Vec<aitoolplus_core::webdav::RemoteBackup>,
+    pub backup_custom_inputs: Option<BackupCustomInputs>,
+    pub tool_root_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
+    pub addon_editors: std::collections::BTreeMap<String, gpui::Entity<TextArea>>,
+    pub skill_git_url: gpui::Entity<TextInput>,
+    pub proxy_url_input: gpui::Entity<TextInput>,
+    pub cli_path_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    General,
+    Backup,
+    About,
+}
+
+pub struct Toast {
+    pub message: String,
+    pub error: bool,
+}
+
+pub struct BackupCustomInputs {
+    pub source: gpui::Entity<TextInput>,
+    pub restore: gpui::Entity<TextInput>,
+}
+
+pub struct WebDavInputs {
+    pub url: gpui::Entity<TextInput>,
+    pub username: gpui::Entity<TextInput>,
+    pub password: gpui::Entity<TextInput>,
+    pub remote_directory: gpui::Entity<TextInput>,
+}
+
+pub struct ProviderDialogState {
+    /// None = create mode.
+    pub editing_id: Option<String>,
+    pub tool: ToolId,
+    pub name: gpui::Entity<TextInput>,
+    pub category: String,
+    pub settings: gpui::Entity<TextArea>,
+    pub notes: gpui::Entity<TextInput>,
+    pub website: gpui::Entity<TextInput>,
+    /// Selected preset index (None = blank/custom).
+    pub preset_index: Option<usize>,
+    /// API key input shown when a preset is selected.
+    pub api_key: gpui::Entity<TextInput>,
+}
+
+pub struct PromptDialogState {
+    pub editing_id: Option<String>,
+    pub tool: ToolId,
+    pub name: gpui::Entity<TextInput>,
+    pub content: gpui::Entity<TextArea>,
+}
+
+pub struct McpDialogState {
+    pub editing_id: Option<String>,
+    pub name: gpui::Entity<TextInput>,
+    pub server_type: aitoolplus_core::mcp::McpServerType,
+    pub command: gpui::Entity<TextInput>,
+    pub args: gpui::Entity<TextInput>,
+    pub environment: gpui::Entity<TextInput>,
+    pub url: gpui::Entity<TextInput>,
+    pub headers: gpui::Entity<TextInput>,
+    pub timeout_seconds: gpui::Entity<TextInput>,
+    pub group: gpui::Entity<TextInput>,
+}
+
+pub struct ConfirmState {
+    pub title: String,
+    pub message: String,
+    pub action: ConfirmAction,
+}
+
+#[derive(Clone)]
+pub enum ConfirmAction {
+    DeleteProvider { tool: ToolId, id: String },
+    DeletePrompt { tool: ToolId, id: String },
+    DeleteSession { tool: ToolId, id: String },
+    DeleteMcp { id: String },
+}
+
+impl WorkspaceState {
+    pub fn new(cx: &mut Context<Workspace>) -> Self {
+        let session_search =
+            cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
+        let skill_git_url = cx.new(|cx| TextInput::new("https://github.com/owner/skill.git", cx));
+        let proxy_url_input = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx));
+        Self {
+            tool_tab: ToolTab::Providers,
+            common_editors: Default::default(),
+            common_dirty: false,
+            provider_dialog: None,
+            prompt_dialog: None,
+            open_session: None,
+            mcp_dialog: None,
+            confirm: None,
+            settings_tab: SettingsTab::General,
+            skills_tool_filter: None,
+            sessions_tool: ToolId::ClaudeCode,
+            session_search,
+            toast: None,
+            mcp_discovered: false,
+            skills_discovered: false,
+            rename_dialog: None,
+            pi_ms_provider: None,
+            pi_ms_model: None,
+            pi_ms_thinking: None,
+            webdav_inputs: None,
+            provider_test_results: Default::default(),
+            update_info: None,
+            remote_backups: vec![],
+            backup_custom_inputs: None,
+            tool_root_inputs: Default::default(),
+            addon_editors: Default::default(),
+            skill_git_url,
+            proxy_url_input,
+            cli_path_inputs: Default::default(),
+        }
+    }
+
+    pub fn addon_editor(
+        &mut self,
+        kind: aitoolplus_core::opencode_addons::AddonKind,
+        current: &str,
+        cx: &mut Context<Workspace>,
+    ) -> gpui::Entity<TextArea> {
+        let key = kind.key().to_string();
+        if let Some(editor) = self.addon_editors.get(&key) {
+            return editor.clone();
+        }
+        let current = current.to_string();
+        let editor = cx.new(|cx| {
+            let mut editor = TextArea::new("{}", cx);
+            editor.set_max_lines(16, cx);
+            editor.set_text_silent(current, cx);
+            editor
+        });
+        self.addon_editors.insert(key, editor.clone());
+        editor
+    }
+
+    pub fn cli_path_input(
+        &mut self,
+        command: &str,
+        current: &str,
+        cx: &mut Context<Workspace>,
+    ) -> gpui::Entity<TextInput> {
+        if let Some(input) = self.cli_path_inputs.get(command) {
+            return input.clone();
+        }
+        let current = current.to_string();
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("C:\\path\\to\\cli.exe", cx);
+            input.set_text_silent(current, cx);
+            input
+        });
+        self.cli_path_inputs.insert(command.into(), input.clone());
+        input
+    }
+
+    pub fn tool_root_input(
+        &mut self,
+        tool: ToolId,
+        current: &str,
+        cx: &mut Context<Workspace>,
+    ) -> gpui::Entity<TextInput> {
+        let key = tool.key().to_string();
+        if let Some(input) = self.tool_root_inputs.get(&key) {
+            return input.clone();
+        }
+        let current = current.to_string();
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("D:\\custom\\tool-root", cx);
+            input.set_text_silent(current, cx);
+            input
+        });
+        self.tool_root_inputs.insert(key, input.clone());
+        input
+    }
+
+    pub fn backup_custom_inputs(&mut self, cx: &mut Context<Workspace>) -> &BackupCustomInputs {
+        if self.backup_custom_inputs.is_none() {
+            self.backup_custom_inputs = Some(BackupCustomInputs {
+                source: cx.new(|cx| TextInput::new("D:\\path\\to\\file-or-folder", cx)),
+                restore: cx.new(|cx| TextInput::new("可选恢复路径 / optional restore path", cx)),
+            });
+        }
+        self.backup_custom_inputs
+            .as_ref()
+            .expect("backup custom inputs initialized")
+    }
+
+    pub fn webdav_inputs(
+        &mut self,
+        config: &aitoolplus_core::settings::WebDavConfig,
+        cx: &mut Context<Workspace>,
+    ) -> &WebDavInputs {
+        if self.webdav_inputs.is_none() {
+            let url = cx.new(|cx| {
+                let mut input =
+                    TextInput::new("https://dav.example.com/remote.php/dav/files/user", cx);
+                input.set_text_silent(config.url.clone(), cx);
+                input
+            });
+            let username = cx.new(|cx| {
+                let mut input = TextInput::new("Username", cx);
+                input.set_text_silent(config.username.clone(), cx);
+                input
+            });
+            let password = cx.new(|cx| {
+                let mut input = TextInput::new("Password", cx);
+                input.set_secret(true, cx);
+                input.set_text_silent(config.password.clone(), cx);
+                input
+            });
+            let remote_directory = cx.new(|cx| {
+                let mut input = TextInput::new("aitoolplus", cx);
+                input.set_text_silent(config.remote_directory.clone(), cx);
+                input
+            });
+            self.webdav_inputs = Some(WebDavInputs {
+                url,
+                username,
+                password,
+                remote_directory,
+            });
+        }
+        self.webdav_inputs
+            .as_ref()
+            .expect("webdav inputs initialized")
+    }
+
+    pub fn on_page_change(&mut self, page: Page, _cx: &mut Context<Workspace>) {
+        self.toast = None;
+        if let Page::Sessions = page {
+            self.open_session = None;
+        }
+    }
+
+    pub fn modal_active(&self) -> bool {
+        self.provider_dialog.is_some()
+            || self.prompt_dialog.is_some()
+            || self.mcp_dialog.is_some()
+            || self.confirm.is_some()
+            || self.rename_dialog.is_some()
+    }
+
+    /// Resolve or lazily create the common-config editor for a tool.
+    /// `current` is the persisted common config text, read by the caller.
+    pub fn common_editor(
+        &mut self,
+        tool: ToolId,
+        current: &str,
+        cx: &mut Context<Workspace>,
+    ) -> gpui::Entity<TextArea> {
+        let key = tool.key().to_string();
+        if let Some(e) = self.common_editors.get(&key) {
+            return e.clone();
+        }
+        let current = current.to_string();
+        let editor = cx.new(|cx| {
+            let mut ta = TextArea::new("{}", cx);
+            ta.set_text_silent(current, cx);
+            ta
+        });
+        self.common_editors.insert(key, editor.clone());
+        editor
+    }
+
+    pub fn toast(&mut self, message: impl Into<String>, error: bool) {
+        self.toast = Some(Toast {
+            message: message.into(),
+            error,
+        });
+    }
+}
+
+/// Shared modal scaffold: darkened backdrop + centered card.
+pub fn modal_scaffold(
+    theme: &Theme,
+    title: &str,
+    body: gpui::AnyElement,
+    cx: &mut Context<Workspace>,
+    on_close: impl Fn(&mut Workspace, &gpui::MouseDownEvent, &mut Window, &mut Context<Workspace>)
+    + 'static,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let backdrop = div()
+        .id("modal-backdrop")
+        .absolute()
+        .top(px(0.0))
+        .left(px(0.0))
+        .size_full()
+        .bg(t.modal_backdrop)
+        .flex()
+        .items_center()
+        .justify_center()
+        .on_mouse_down(MouseButton::Left, cx.listener(on_close));
+
+    let dialog = div()
+        .id("modal-card")
+        .w(px(620.0))
+        .max_w(gpui::relative(0.9))
+        .max_h(gpui::relative(0.85))
+        .p(px(20.0))
+        .rounded(px(12.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            // stop clicks inside the dialog from closing it
+            cx.stop_propagation();
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .mb(px(12.0))
+                .child(
+                    div()
+                        .text_size(px(15.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child(title.to_string()),
+                )
+                .child(icon_button_l(
+                    "modal-close",
+                    "✕",
+                    "Close",
+                    true,
+                    theme,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.provider_dialog = None;
+                        ws.ui.prompt_dialog = None;
+                        ws.ui.mcp_dialog = None;
+                        ws.ui.confirm = None;
+                        cx.notify();
+                    },
+                )),
+        )
+        .child(body);
+
+    backdrop.child(dialog).into_any_element()
+}
+
+pub fn render_confirm_dialog(
+    state: ConfirmState,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let ConfirmState {
+        title,
+        message,
+        action,
+    } = state;
+    let i = ws.i18n;
+    let danger_label = i.t("删除", "Delete");
+    let cancel_label = i.t("取消", "Cancel");
+
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(
+            div()
+                .text_size(px(13.0))
+                .text_color(t.text_secondary)
+                .child(message),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .gap(px(8.0))
+                .child(button_l(
+                    "confirm-cancel",
+                    cancel_label,
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.confirm = None;
+                        cx.notify();
+                    },
+                ))
+                .child(button_l(
+                    "confirm-ok",
+                    danger_label,
+                    ButtonVariant::Danger,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        ws.ui.confirm = None;
+                        execute_confirm(action.clone(), ws, cx);
+                    },
+                )),
+        );
+
+    modal_scaffold(&t, &title, body.into_any_element(), cx, |ws, _, _, cx| {
+        ws.ui.confirm = None;
+        cx.notify();
+    })
+}
+
+fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    let i = ws.i18n;
+    match action {
+        ConfirmAction::DeleteProvider { tool, id } => {
+            let _ = ws.store.update(|store| {
+                let section = store.tool_mut(tool);
+                aitoolplus_core::providers::delete(&mut section.providers, &id);
+            });
+            ws.persist_store();
+            let msg = i.t("供应商已删除", "provider deleted").to_string();
+            ws.ui.toast(msg, false);
+        }
+        ConfirmAction::DeletePrompt { tool, id } => {
+            let _ = ws.store.update(|store| {
+                let section = store.tool_mut(tool);
+                aitoolplus_core::prompt::delete(&mut section.prompts, &id);
+            });
+            ws.persist_store();
+            let msg = i.t("Prompt 已删除", "prompt deleted").to_string();
+            ws.ui.toast(msg, false);
+        }
+        ConfirmAction::DeleteSession { tool, id } => {
+            let sessions = aitoolplus_core::session::cached_scan(&ws.paths, tool, 500);
+            if let Some(meta) = sessions.iter().find(|s| s.session_id == id) {
+                let _ = aitoolplus_core::session::delete_session(meta);
+                aitoolplus_core::session::invalidate_cache();
+                let msg = i.t("会话已删除", "session deleted").to_string();
+                ws.ui.toast(msg, false);
+            }
+        }
+        ConfirmAction::DeleteMcp { id } => {
+            let _ = ws.store.update(|store| {
+                aitoolplus_core::mcp::delete(&mut store.mcp, &id);
+            });
+            ws.persist_store();
+            let msg = i.t("MCP 服务器已删除", "MCP server deleted").to_string();
+            ws.ui.toast(msg, false);
+        }
+    }
+    cx.notify();
+}
+
+/// Toast pill pinned bottom-right.
+pub fn render_toast(ws: &mut Workspace, _cx: &mut Context<Workspace>) -> Option<gpui::AnyElement> {
+    let toast = ws.ui.toast.as_ref()?;
+    let t = &ws.theme;
+    let (border, bg) = if toast.error {
+        (t.danger, t.danger_subtle)
+    } else {
+        (t.success, t.success_subtle)
+    };
+    Some(
+        div()
+            .absolute()
+            .bottom(px(16.0))
+            .right(px(16.0))
+            .px(px(14.0))
+            .py(px(10.0))
+            .rounded(px(8.0))
+            .bg(bg)
+            .border_1()
+            .border_color(border)
+            .text_size(px(12.5))
+            .text_color(border)
+            .shadow_lg()
+            .child(toast.message.clone())
+            .into_any_element(),
+    )
+}
+
+pub fn workspace_search_placeholder() -> &'static str {
+    "搜索会话…"
+}
+
+/// Page content router.
+pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    match ws.page {
+        Page::Tool(tool) => tool_page::render_tool_page(tool, ws, cx),
+        Page::Mcp => mcp_page::render_mcp_page(ws, cx),
+        Page::Skills => skills_page::render_skills_page(ws, cx),
+        Page::Sessions => sessions_page::render_sessions_page(ws, cx),
+        Page::Settings => settings_page::render_settings_page(ws, cx),
+    }
+}
