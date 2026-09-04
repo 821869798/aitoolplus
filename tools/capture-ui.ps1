@@ -8,6 +8,10 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public class NativeUi {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
@@ -27,11 +31,31 @@ public class NativeUi {
     PostMessage(h, 0x0201, new UIntPtr(1), new IntPtr(packed));
     PostMessage(h, 0x0202, UIntPtr.Zero, new IntPtr(packed));
   }
+  public static IntPtr FindMainWindow(uint targetPid) {
+    IntPtr best = IntPtr.Zero;
+    int bestArea = 0;
+    EnumWindows((h, l) => {
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      if (pid == targetPid && IsWindowVisible(h)) {
+        RECT r;
+        GetWindowRect(h, out r);
+        int area = (r.Right - r.Left) * (r.Bottom - r.Top);
+        if (area > bestArea) {
+          bestArea = area;
+          best = h;
+        }
+      }
+      return true;
+    }, IntPtr.Zero);
+    return best;
+  }
 }
 '@
 $proc = Get-Process aitoolplus -ErrorAction Stop | Select-Object -First 1
-$hwnd = $proc.MainWindowHandle
-if ($hwnd -eq 0) { throw "aitoolplus window handle is zero" }
+$hwnd = [NativeUi]::FindMainWindow($proc.Id)
+if ($hwnd -eq [IntPtr]::Zero) { $hwnd = $proc.MainWindowHandle }
+if ($hwnd -eq [IntPtr]::Zero) { throw "aitoolplus window handle is zero" }
 [NativeUi]::ShowWindow($hwnd, 9) | Out-Null
 [NativeUi]::BringWindowToTop($hwnd) | Out-Null
 [NativeUi]::SetForegroundWindow($hwnd) | Out-Null

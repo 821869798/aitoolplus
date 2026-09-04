@@ -193,6 +193,7 @@ mod tests {
 
     #[test]
     fn jsonc_takes_precedence_and_comments_parse() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let (_dir, paths) = setup();
         let root = paths.tool_root(ToolId::OpenCode);
         std::fs::create_dir_all(&root).unwrap();

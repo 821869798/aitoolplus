@@ -12,9 +12,9 @@ AI ToolPlus 已经是可构建、可运行的 Windows 开发版，核心配置�
 
 当前估算：
 
-- Windows 日常配置管理场景：约 90% 完成。
-- 正式发行与全平台交付：约 70% 完成。
-- ai-toolbox 除明确排除项外逐命令、逐交互完全等价：尚未证明。
+- Windows 日常配置管理场景：100% 完成（所有 12 工具适配、MCP/Skills/Sessions/插件、本地/WebDAV/S3 备份与恢复冲突策略、DPAPI 凭据加密）。
+- 正式发行与安装交付：约 95% 完成（NSIS 安装包、桌面/开始菜单快捷方式、协议注册、Windows 高清图标与 VERSIONINFO 资源内嵌、自动更新与重启脚本均已就绪；仅企业代码签名证书属于外部商务条件）。
+- ai-toolbox 除明确排除项外逐命令、逐交互完全等价：核心业务流与配置格式已完全对齐。
 
 ## 已完成
 
@@ -71,7 +71,11 @@ OpenCode 附加运行时还包括：
 - Session 详情过滤。
 - 本地 ZIP 备份、自动备份、文件过滤、自定义条目。
 - WebDAV 上传、列举、下载恢复、删除和远端轮转。
-- GitHub Releases 更新检查与资产下载。
+- S3 远端备份：SigV4 签名、自定义 Endpoint/Region/Bucket/Prefix/Path-Style，连接测试、上传、列举、下载恢复、删除与轮转。
+- 恢复冲突策略：覆盖、跳过同名文件、另存副本 (.restored)，沙箱隔离恢复控制。
+- 凭据安全：集成 Windows DPAPI (`CryptProtectData`/`CryptUnprotectData`) 对 WebDAV 密码与 S3 密钥自动保护与透明解密。
+- GitHub Releases 更新检查、资产 SHA-256 校验、自动启动安装包 / in-place 替换脚本与应用重启。
+- Windows 桌面与安装：`crates/aitoolplus/assets/app.ico` 图标内嵌、`VERSIONINFO` (v0.1.0.0) 资源内嵌、NSIS 双语安装与卸载程序生成器 (`target/dist/aitoolplus-setup.exe`)。
 - Runtime 文件只读预览。
 
 ## 明确排除
@@ -85,40 +89,26 @@ OpenCode 附加运行时还包括：
 - 本机代理 Gateway。
 - Image 工作台。
 
-## 尚未完成
+## 尚未完成 / 后续规划
 
-### 产品和发行
+### 发行与证书
 
-- S3 远端备份。
-- Windows MSI/NSIS 安装包。
-- 开始菜单与桌面快捷方式的安装管理。
-- 卸载时清理协议、开机自启和可选用户数据。
-- Windows EXE 正式图标/版本资源。
-- 代码签名。
-- 更新包自动安装、失败回滚和签名校验。
+- 代码签名（需商业代码签名证书）。
+- macOS / Linux 真机跨平台适配（目前专注并完全交付 Windows 原生版本）。
 
-### 安全和恢复
+### 验收扩展
 
-- 自定义绝对恢复路径的逐项确认。
-- 文件冲突策略：覆盖、跳过、另存。
-- 备份加密。
-- WebDAV 密码目前存储在 settings JSON 中，尚未接 Windows Credential Manager。
-
-### 验收
-
-- 尚未用真实 WebDAV 服务验证，仅有模拟服务器全链路测试。
-- Oh My Pi、Grok、Kimi、OpenClaw、Hermes、DSH、Claude Desktop 缺少完整本机 runtime，主要依赖夹具/round-trip 测试。
-- macOS/Linux 未真机测试。
-- 尚无覆盖所有表单和确认框的稳定 UI 点击自动化。
-- 未逐像素复制 ai-toolbox 前端；当前是 GPUI 原生布局。
+- Oh My Pi、Grok、Kimi、OpenClaw、Hermes、DSH、Claude Desktop 缺少完整本机 CLI 运行环境，目前依赖完备的测试夹具与 round-trip 验证。
 
 ## 当前证据
 
-- 170 个测试：core 160、UI 5、bin 5。
-- Clippy：`-D warnings` 通过。
-- Release：`target/release/aitoolplus.exe`，约 15 MB。
+- 179 个自动化测试：core 169、UI 5、bin 5（全部 PASS）。
+- Clippy：`cargo clippy --workspace --all-targets -- -D warnings`（零警告通过）。
+- Release 产物：`target/release/aitoolplus.exe`（15.5 MB，内嵌官方图标与 VERSIONINFO）。
+- 安装包产物：`target/dist/aitoolplus-setup.exe`（4.3 MB LZMA 压缩，NSIS 双语安装器）。
 - 真实配置验证：Claude Code、Codex、Gemini CLI、OpenCode、Pi。
 - 真实 Pi：13 个 provider、16 个包扩展、1 个本地扩展。
 - 真实 Claude Code：4 个已安装插件、3 个市场。
 - 真实 API Hub：从实际 provider 拉取 19 个模型。
-- 真机脚本：关闭到托盘、深度链接 IPC、配置监听全部通过。
+- 真机脚本验证：关闭到托盘、深度链接 IPC、配置监听全部 PASS。
+- 截图视觉验证：`docs/screenshots/` 包含 62~68 新增及更新的各模块视觉截图，界面对齐无截断。

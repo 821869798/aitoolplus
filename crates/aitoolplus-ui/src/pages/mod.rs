@@ -90,6 +90,10 @@ pub struct WorkspaceState {
     pub pi_ms_model: Option<String>,
     pub pi_ms_thinking: Option<String>,
     pub webdav_inputs: Option<WebDavInputs>,
+    pub s3_inputs: Option<S3Inputs>,
+    pub restore_conflict_strategy: aitoolplus_core::backup::ConflictStrategy,
+    pub restore_allow_custom_absolute: bool,
+    pub downloaded_update_asset_path: Option<std::path::PathBuf>,
     pub provider_test_results:
         std::collections::BTreeMap<String, aitoolplus_core::api_hub::ConnectivityResult>,
     pub update_info: Option<aitoolplus_core::updater::UpdateInfo>,
@@ -124,6 +128,15 @@ pub struct WebDavInputs {
     pub username: gpui::Entity<TextInput>,
     pub password: gpui::Entity<TextInput>,
     pub remote_directory: gpui::Entity<TextInput>,
+}
+
+pub struct S3Inputs {
+    pub endpoint: gpui::Entity<TextInput>,
+    pub region: gpui::Entity<TextInput>,
+    pub bucket: gpui::Entity<TextInput>,
+    pub access_key_id: gpui::Entity<TextInput>,
+    pub secret_access_key: gpui::Entity<TextInput>,
+    pub prefix: gpui::Entity<TextInput>,
 }
 
 pub struct ProviderDialogState {
@@ -202,6 +215,10 @@ impl WorkspaceState {
             pi_ms_model: None,
             pi_ms_thinking: None,
             webdav_inputs: None,
+            s3_inputs: None,
+            restore_conflict_strategy: aitoolplus_core::backup::ConflictStrategy::Overwrite,
+            restore_allow_custom_absolute: false,
+            downloaded_update_asset_path: None,
             provider_test_results: Default::default(),
             update_info: None,
             remote_backups: vec![],
@@ -324,6 +341,55 @@ impl WorkspaceState {
         self.webdav_inputs
             .as_ref()
             .expect("webdav inputs initialized")
+    }
+
+    pub fn s3_inputs(
+        &mut self,
+        config: &aitoolplus_core::settings::S3Config,
+        cx: &mut Context<Workspace>,
+    ) -> &S3Inputs {
+        if self.s3_inputs.is_none() {
+            let endpoint = cx.new(|cx| {
+                let mut input = TextInput::new("https://s3.amazonaws.com", cx);
+                input.set_text_silent(config.endpoint.clone(), cx);
+                input
+            });
+            let region = cx.new(|cx| {
+                let mut input = TextInput::new("us-east-1", cx);
+                input.set_text_silent(config.region.clone(), cx);
+                input
+            });
+            let bucket = cx.new(|cx| {
+                let mut input = TextInput::new("my-backup-bucket", cx);
+                input.set_text_silent(config.bucket.clone(), cx);
+                input
+            });
+            let access_key_id = cx.new(|cx| {
+                let mut input = TextInput::new("Access Key ID / AKIA...", cx);
+                input.set_text_silent(config.access_key_id.clone(), cx);
+                input
+            });
+            let secret_access_key = cx.new(|cx| {
+                let mut input = TextInput::new("Secret Access Key", cx);
+                input.set_secret(true, cx);
+                input.set_text_silent(config.secret_access_key.clone(), cx);
+                input
+            });
+            let prefix = cx.new(|cx| {
+                let mut input = TextInput::new("aitoolplus", cx);
+                input.set_text_silent(config.prefix.clone(), cx);
+                input
+            });
+            self.s3_inputs = Some(S3Inputs {
+                endpoint,
+                region,
+                bucket,
+                access_key_id,
+                secret_access_key,
+                prefix,
+            });
+        }
+        self.s3_inputs.as_ref().expect("s3 inputs initialized")
     }
 
     pub fn on_page_change(&mut self, page: Page, _cx: &mut Context<Workspace>) {

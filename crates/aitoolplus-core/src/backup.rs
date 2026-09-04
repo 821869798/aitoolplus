@@ -43,10 +43,27 @@ pub struct BackupReport {
     pub skipped: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictStrategy {
+    #[default]
+    Overwrite,
+    Skip,
+    SaveCopy,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RestoreOptions {
+    pub allow_custom_absolute: bool,
+    pub conflict_strategy: ConflictStrategy,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RestoreReport {
     pub restored: usize,
+    pub overwritten: usize,
     pub skipped: Vec<String>,
+    pub copies: Vec<PathBuf>,
 }
 
 /// All known configuration files that influence runtime behavior. Sessions
@@ -281,12 +298,25 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-/// Restore a bundle to current home/app-data paths. Custom absolute restore
-/// paths must be enabled explicitly by the caller.
-pub fn restore_backup(
+/// Inspect a backup archive and parse its manifest without extracting files.
+pub fn inspect_backup(archive: &Path) -> Result<BackupManifest, String> {
+    let file = File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut entry = zip.by_name("manifest.json").map_err(|e| e.to_string())?;
+    let mut raw = String::new();
+    entry.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+    let manifest: BackupManifest = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    if manifest.schema != BACKUP_SCHEMA {
+        return Err(format!("unsupported backup schema: {}", manifest.schema));
+    }
+    Ok(manifest)
+}
+
+/// Restore a bundle with custom options (conflict strategy and custom absolute targets).
+pub fn restore_backup_with_options(
     paths: &Paths,
     archive: &Path,
-    allow_custom_absolute: bool,
+    options: &RestoreOptions,
 ) -> Result<RestoreReport, String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -303,7 +333,7 @@ pub fn restore_backup(
     let mut report = RestoreReport::default();
     for item in manifest.entries {
         let Some(target) =
-            resolve_restore_target(paths, &item.restore_target, allow_custom_absolute)
+            resolve_restore_target(paths, &item.restore_target, options.allow_custom_absolute)
         else {
             report.skipped.push(item.restore_target);
             continue;
@@ -317,17 +347,68 @@ pub fn restore_backup(
                 continue;
             }
         };
-        if let Some(parent) = target.parent() {
+
+        let final_target = if target.exists() {
+            match options.conflict_strategy {
+                ConflictStrategy::Skip => {
+                    report
+                        .skipped
+                        .push(format!("skipped existing: {}", target.display()));
+                    continue;
+                }
+                ConflictStrategy::SaveCopy => {
+                    let parent = target.parent().unwrap_or(Path::new(""));
+                    let stem = target
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("file");
+                    let ext = target.extension().and_then(|s| s.to_str());
+                    let copy_name = if let Some(e) = ext {
+                        format!("{stem}.restored.{e}")
+                    } else {
+                        format!("{stem}.restored")
+                    };
+                    let copy_path = parent.join(copy_name);
+                    report.copies.push(copy_path.clone());
+                    copy_path
+                }
+                ConflictStrategy::Overwrite => {
+                    report.overwritten += 1;
+                    target
+                }
+            }
+        } else {
+            target
+        };
+
+        if let Some(parent) = final_target.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let temp = target.with_extension("restore.tmp");
+        let temp = final_target.with_extension("restore.tmp");
         let mut output = File::create(&temp).map_err(|e| e.to_string())?;
         std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
         output.sync_all().map_err(|e| e.to_string())?;
-        fs::rename(&temp, &target).map_err(|e| e.to_string())?;
+        fs::rename(&temp, &final_target).map_err(|e| e.to_string())?;
         report.restored += 1;
     }
     Ok(report)
+}
+
+/// Restore a bundle to current home/app-data paths. Custom absolute restore
+/// paths must be enabled explicitly by the caller.
+pub fn restore_backup(
+    paths: &Paths,
+    archive: &Path,
+    allow_custom_absolute: bool,
+) -> Result<RestoreReport, String> {
+    restore_backup_with_options(
+        paths,
+        archive,
+        &RestoreOptions {
+            allow_custom_absolute,
+            conflict_strategy: ConflictStrategy::Overwrite,
+        },
+    )
 }
 
 fn is_filtered(paths: &Paths, settings: &AppSettings, file: &Path) -> bool {
@@ -447,6 +528,12 @@ pub fn run_auto_backup_if_due(
     if settings.backup_type == BackupType::Webdav && !settings.webdav.url.trim().is_empty() {
         crate::webdav::upload(&settings.webdav, &output)?;
         prune_remote_backups(&settings.webdav, settings.auto_backup_max_keep)?;
+    } else if settings.backup_type == BackupType::S3
+        && !settings.s3.endpoint.trim().is_empty()
+        && !settings.s3.bucket.trim().is_empty()
+    {
+        crate::s3::upload(&settings.s3, &output)?;
+        crate::s3::prune_remote_backups(&settings.s3, settings.auto_backup_max_keep)?;
     }
     settings.last_auto_backup_time = Some(now.to_rfc3339());
     prune_auto_backups(&directory, settings.auto_backup_max_keep)?;
@@ -608,6 +695,81 @@ mod tests {
                 .join("restored-custom")
                 .join("custom-one")
                 .is_file()
+        );
+    }
+
+    #[test]
+    fn inspect_backup_reads_manifest() {
+        let (directory, paths, settings) = setup();
+        let backup = directory.path().join("inspect.zip");
+        create_backup(&paths, &settings, &backup).unwrap();
+        let manifest = inspect_backup(&backup).unwrap();
+        assert_eq!(manifest.schema, BACKUP_SCHEMA);
+        assert!(!manifest.entries.is_empty());
+    }
+
+    #[test]
+    fn conflict_strategies_skip_and_save_copy() {
+        let (directory, paths, settings) = setup();
+        let backup = directory.path().join("conflict.zip");
+        create_backup(&paths, &settings, &backup).unwrap();
+
+        // 1. Modify existing store file
+        fs::write(paths.store_file(), r#"{"modified": true}"#).unwrap();
+
+        // 2. Restore with Skip
+        let report_skip = restore_backup_with_options(
+            &paths,
+            &backup,
+            &RestoreOptions {
+                allow_custom_absolute: false,
+                conflict_strategy: ConflictStrategy::Skip,
+            },
+        )
+        .unwrap();
+        assert!(report_skip.skipped.iter().any(|s| s.contains("store.json")));
+        assert_eq!(
+            fs::read_to_string(paths.store_file()).unwrap(),
+            r#"{"modified": true}"#
+        );
+
+        // 3. Restore with SaveCopy
+        let report_copy = restore_backup_with_options(
+            &paths,
+            &backup,
+            &RestoreOptions {
+                allow_custom_absolute: false,
+                conflict_strategy: ConflictStrategy::SaveCopy,
+            },
+        )
+        .unwrap();
+        assert!(!report_copy.copies.is_empty());
+        assert!(
+            report_copy
+                .copies
+                .iter()
+                .any(|p| p.to_string_lossy().contains("store.restored.json"))
+        );
+        // Original remains untouched
+        assert_eq!(
+            fs::read_to_string(paths.store_file()).unwrap(),
+            r#"{"modified": true}"#
+        );
+
+        // 4. Restore with Overwrite
+        let report_overwrite = restore_backup_with_options(
+            &paths,
+            &backup,
+            &RestoreOptions {
+                allow_custom_absolute: false,
+                conflict_strategy: ConflictStrategy::Overwrite,
+            },
+        )
+        .unwrap();
+        assert!(report_overwrite.overwritten > 0);
+        assert_eq!(
+            fs::read_to_string(paths.store_file()).unwrap(),
+            r#"{"schema_version":1}"#
         );
     }
 }

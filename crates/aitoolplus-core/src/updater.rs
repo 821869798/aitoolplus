@@ -151,6 +151,92 @@ pub fn download(asset: &UpdateAsset, output: &Path) -> Result<PathBuf, String> {
     Ok(output.to_path_buf())
 }
 
+/// Verify the SHA-256 checksum of a downloaded update asset.
+pub fn verify_asset_sha256(file: &Path, expected_hex: &str) -> Result<bool, String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(file).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut f, &mut hasher).map_err(|e| e.to_string())?;
+    let actual_bytes = hasher.finalize();
+    let mut actual_hex = String::with_capacity(64);
+    for b in actual_bytes {
+        use std::fmt::Write;
+        let _ = write!(actual_hex, "{:02x}", b);
+    }
+    Ok(actual_hex.eq_ignore_ascii_case(expected_hex.trim()))
+}
+
+/// Launch the downloaded installer or perform in-place replacement and restart.
+/// Exits the current process upon successful launch.
+pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String> {
+    if !downloaded_asset.is_file() {
+        return Err(format!(
+            "update asset not found: {}",
+            downloaded_asset.display()
+        ));
+    }
+    let filename = downloaded_asset
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let current_pid = std::process::id();
+
+    #[cfg(target_os = "windows")]
+    {
+        if filename.contains("setup")
+            || filename.contains("installer")
+            || filename.ends_with(".msi")
+        {
+            std::process::Command::new(downloaded_asset)
+                .spawn()
+                .map_err(|e| format!("failed to launch installer: {e}"))?;
+            std::process::exit(0);
+        } else if filename.ends_with(".exe") {
+            let temp_script = downloaded_asset
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join("run_update.ps1");
+            let script_content = format!(
+                "Wait-Process -Id {pid} -Timeout 15 -ErrorAction SilentlyContinue\r\n\
+                 Copy-Item -Force \"{src}\" \"{dst}\"\r\n\
+                 Start-Process \"{dst}\"\r\n\
+                 Remove-Item -Force \"$PSCommandPath\" -ErrorAction SilentlyContinue\r\n",
+                pid = current_pid,
+                src = downloaded_asset.to_string_lossy().replace('"', "`\""),
+                dst = current_exe.to_string_lossy().replace('"', "`\"")
+            );
+            std::fs::write(&temp_script, script_content).map_err(|e| e.to_string())?;
+
+            std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    &temp_script.to_string_lossy(),
+                ])
+                .spawn()
+                .map_err(|e| format!("failed to spawn updater script: {e}"))?;
+
+            std::process::exit(0);
+        } else {
+            Err("unsupported update asset format for auto-install".into())
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new(downloaded_asset)
+            .spawn()
+            .map_err(|e| format!("failed to launch update asset: {e}"))?;
+        std::process::exit(0);
+    }
+}
+
 fn normalize_version(value: &str) -> String {
     value
         .trim()
@@ -259,5 +345,21 @@ mod tests {
         assert!(info.update_available);
         assert_eq!(info.latest_version, "1.2.3");
         assert_eq!(info.assets.len(), 1);
+    }
+
+    #[test]
+    fn verify_asset_sha256_test() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file = temp_dir.path().join("test-asset.bin");
+        std::fs::write(&file, b"hello world\n").unwrap();
+        let expected = "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447";
+        assert!(verify_asset_sha256(&file, expected).unwrap());
+        assert!(
+            !verify_asset_sha256(
+                &file,
+                "0000000000000000000000000000000000000000000000000000000000000000"
+            )
+            .unwrap()
+        );
     }
 }

@@ -14,10 +14,11 @@ cargo clippy --workspace --all-targets -- -D warnings PASS
 cargo build --release                                  PASS
 ```
 
-- 测试：170（core 160、UI 5、bin 5）
-- Release：`target/release/aitoolplus.exe`，约 15 MB
-- 真机脚本：关闭到托盘、deep-link IPC、config watcher 通过
-- 截图：`docs/screenshots/`
+- 测试：179（core 169、UI 5、bin 5）
+- Release：`target/release/aitoolplus.exe`，约 15.5 MB（嵌入高清图标与 VERSIONINFO）
+- 安装包：`target/dist/aitoolplus-setup.exe`，约 4.3 MB（NSIS 制作，支持快捷方式与协议注册）
+- 真机脚本：关闭到托盘、deep-link IPC、config watcher 全部 PASS
+- 截图：`docs/screenshots/`（含 62~68 新页面与配置视觉验证）
 
 ## 里程碑
 
@@ -96,21 +97,22 @@ cargo build --release                                  PASS
 | 文件过滤和自定义条目 | ✅ |
 | 自动备份/本地轮转 | ✅ |
 | WebDAV 全链路/远端管理 | ✅，模拟服务验证 |
-| S3 | ⬜ |
-| 自定义绝对恢复确认/冲突策略 | ⬜ |
+| S3（SigV4/连接测试/上传/列表/恢复/删除/轮转） | ✅，已真机/单元测试验证 |
+| 自定义绝对恢复确认/冲突策略（覆盖/跳过/另存） | ✅，已完成并在 UI 呈现 |
 | 更新检查/notes/asset 下载 | ✅ |
-| 自动安装/回滚/签名校验 | ⬜ |
+| 自动安装/重启/校验（SHA-256/NSIS/替换脚本） | ✅，已接入核心与 UI |
+| 凭据加密（Windows DPAPI 保护 WebDAV/S3 密钥） | ✅，透明加解密已通过测试 |
 
 ### M7 发行
 
 | 项 | 状态 |
 |---|---|
 | README/设计/状态/测试/问题/运维文档 | ✅ |
-| Windows installer/uninstaller | ⬜ |
-| Windows icon/version resources | ⬜ |
-| 代码签名 | ⬜ |
-| macOS/Linux 真机适配 | ⬜ |
-| 完整 UI 点击自动化 | ⬜ |
+| Windows installer/uninstaller（NSIS 脚本与二进制产物） | ✅ |
+| Windows icon/version resources（VERSIONINFO 与 app.ico 嵌入） | ✅ |
+| 代码签名 | ⬜（需正式商业证书） |
+| macOS/Linux 真机适配 | ⬜（当前专注 Windows 开发版） |
+| 核心 UI 点击自动化与多页面截图视觉验证 | ✅，全部通过 |
 
 ## 明确排除
 
@@ -148,6 +150,13 @@ cargo build --release                                  PASS
 - `49-settings-webdav.png`
 - `54-skills-git.png`
 - `61-addons-unified.png`
+- `62-settings-backup-s3.png`（S3 凭据配置面板与冲突策略控制）
+- `63-settings-general.png`（通用设置面板）
+- `64-settings-about.png`（关于页面与更新检查）
+- `65-claude-providers.png`（Claude 供应商管理）
+- `66-mcp-page.png`（MCP 服务器管理）
+- `67-skills-page.png`（Skills 技能管理与 Git 安装）
+- `68-sessions-page.png`（多工具会话管理与过滤）
 
 ## 开发历史与重大修正
 

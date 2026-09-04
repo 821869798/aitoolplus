@@ -135,6 +135,47 @@ pub enum BackupType {
     #[default]
     Local,
     Webdav,
+    S3,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct S3Config {
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default = "default_s3_region")]
+    pub region: String,
+    #[serde(default)]
+    pub bucket: String,
+    #[serde(default)]
+    pub access_key_id: String,
+    #[serde(default)]
+    pub secret_access_key: String,
+    #[serde(default = "default_s3_prefix")]
+    pub prefix: String,
+    #[serde(default = "default_true")]
+    pub path_style: bool,
+}
+
+fn default_s3_region() -> String {
+    "us-east-1".into()
+}
+
+fn default_s3_prefix() -> String {
+    "aitoolplus".into()
+}
+
+impl Default for S3Config {
+    fn default() -> Self {
+        Self {
+            endpoint: String::new(),
+            region: default_s3_region(),
+            bucket: String::new(),
+            access_key_id: String::new(),
+            secret_access_key: String::new(),
+            prefix: default_s3_prefix(),
+            path_style: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +239,8 @@ pub struct AppSettings {
     pub backup_type: BackupType,
     #[serde(default)]
     pub webdav: WebDavConfig,
+    #[serde(default)]
+    pub s3: S3Config,
     #[serde(default = "default_true")]
     pub backup_cli_config_files_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +298,7 @@ impl Default for AppSettings {
             proxy_url: String::new(),
             backup_type: BackupType::Local,
             webdav: WebDavConfig::default(),
+            s3: S3Config::default(),
             backup_cli_config_files_enabled: true,
             local_backup_path: None,
             auto_backup_enabled: false,
@@ -301,11 +345,18 @@ fn default_backup_max_keep() -> u32 {
 
 impl AppSettings {
     pub fn load(path: &Path) -> Self {
-        load_or_default::<Self>(path).unwrap_or_default()
+        let mut settings = load_or_default::<Self>(path).unwrap_or_default();
+        settings.webdav.password = crate::security::unprotect_secret(&settings.webdav.password);
+        settings.s3.secret_access_key =
+            crate::security::unprotect_secret(&settings.s3.secret_access_key);
+        settings
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        save_json_atomic(path, self).map_err(|e| e.to_string())
+        let mut cloned = self.clone();
+        cloned.webdav.password = crate::security::protect_secret(&cloned.webdav.password);
+        cloned.s3.secret_access_key = crate::security::protect_secret(&cloned.s3.secret_access_key);
+        save_json_atomic(path, &cloned).map_err(|e| e.to_string())
     }
 }
 

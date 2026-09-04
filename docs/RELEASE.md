@@ -15,28 +15,28 @@
 
 ### 版本控制
 
-- [ ] 初始化或迁入 Git 仓库。
-- [ ] 审查完整 diff。
+- [x] 初始化或迁入 Git 仓库。
+- [x] 审查完整 diff。
 - [ ] 添加 LICENSE。
 - [ ] 创建版本 tag。
 - [ ] 生成变更日志。
 
 ### Windows 资源
 
-- [ ] 正式 `.ico`。
-- [ ] EXE product/file version。
-- [ ] Company/Product/Copyright metadata。
-- [ ] 托盘和窗口图标验证。
+- [x] 正式 `.ico`（256x256 高清多分辨率）。
+- [x] EXE product/file version（0.1.0.0）。
+- [x] Company/Product/Copyright metadata（嵌入 VERSIONINFO）。
+- [x] 托盘和窗口图标验证。
 
 ### 安装器
 
-- [ ] 选择 MSI、WiX、NSIS 或 cargo-wix。
-- [ ] 安装到用户或机器目录。
-- [ ] 开始菜单/桌面快捷方式。
-- [ ] 注册 `aitoolbox://`。
-- [ ] 配置开机自启选择。
-- [ ] 卸载时删除协议和 Run key。
-- [ ] 询问是否保留 `%APPDATA%\aitoolplus`。
+- [x] 选择 MSI、WiX、NSIS 或 cargo-wix（选定 NSIS，提供 `tools/installer.nsi`）。
+- [x] 安装到用户目录（`$LOCALAPPDATA\Programs\AIToolPlus`，免管理员权限）。
+- [x] 开始菜单/桌面快捷方式。
+- [x] 注册 `aitoolbox://`。
+- [x] 配置开机自启选择。
+- [x] 卸载时删除协议和 Run key。
+- [x] 询问是否保留 `%APPDATA%\aitoolplus`。
 
 ### 签名
 
@@ -50,17 +50,17 @@
 - [ ] 确认实际 GitHub Releases 仓库。
 - [ ] 修正 Cargo repository/update API。
 - [ ] 发布 Windows asset 命名规范。
-- [ ] 下载后启动安装器。
-- [ ] 退出当前实例。
-- [ ] 更新失败回滚。
-- [ ] SHA-256 或签名校验。
+- [x] 下载后启动安装器。
+- [x] 退出当前实例。
+- [x] 更新失败回滚与脱机替换脚本支持。
+- [x] SHA-256 校验。
 
 ### 安全
 
-- [ ] WebDAV 密码迁移系统凭据库。
-- [ ] 自定义绝对路径恢复确认。
-- [ ] 覆盖/跳过/另存冲突策略。
-- [ ] 备份加密方案。
+- [x] WebDAV 密码与 S3 密钥迁移 Windows DPAPI 加密存储。
+- [x] 自定义绝对路径恢复确认与沙箱隔离。
+- [x] 覆盖/跳过/另存冲突策略。
+- [ ] 备份加密方案（压缩包密码）。
 - [ ] 深度链接 import 二次确认 UI（当前直接导入）。
 
 ### 真机矩阵

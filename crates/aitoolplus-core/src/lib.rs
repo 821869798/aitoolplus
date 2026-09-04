@@ -27,6 +27,8 @@ pub mod pi_runtime;
 pub mod presets;
 pub mod prompt;
 pub mod providers;
+pub mod s3;
+pub mod security;
 pub mod session;
 pub mod settings;
 pub mod skill_git;

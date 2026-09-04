@@ -23,6 +23,8 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 toml_edit = "0.22"
+sha2 = "0.10"
+hmac = "0.12"
 
 # GPUI community edition, pinned to the same rev as flyclip (verified locally).
 gpui = { git = "https://github.com/gpui-ce/gpui-ce", rev = "c738623ffbcec2aeddc44a645cc6b74646d5cf97" }

@@ -697,6 +697,14 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
     let dav_user = webdav_inputs.username.clone();
     let dav_password = webdav_inputs.password.clone();
     let dav_directory = webdav_inputs.remote_directory.clone();
+    let s3_config = ws.settings.s3.clone();
+    let s3_inputs = ws.ui.s3_inputs(&s3_config, cx);
+    let s3_endpoint = s3_inputs.endpoint.clone();
+    let s3_region = s3_inputs.region.clone();
+    let s3_bucket = s3_inputs.bucket.clone();
+    let s3_access_key = s3_inputs.access_key_id.clone();
+    let s3_secret_key = s3_inputs.secret_access_key.clone();
+    let s3_prefix = s3_inputs.prefix.clone();
     let custom_inputs = ws.ui.backup_custom_inputs(cx);
     let custom_source = custom_inputs.source.clone();
     let custom_restore = custom_inputs.restore.clone();
@@ -733,6 +741,22 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
             cx,
             |ws, _, _, cx| {
                 ws.settings.backup_type = aitoolplus_core::settings::BackupType::Webdav;
+                (ws.callbacks.save_settings)(&ws.settings);
+                cx.notify();
+            },
+        ))
+        .child(button_l(
+            "backup-type-s3",
+            "S3",
+            if backup_type == aitoolplus_core::settings::BackupType::S3 {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Secondary
+            },
+            &t,
+            cx,
+            |ws, _, _, cx| {
+                ws.settings.backup_type = aitoolplus_core::settings::BackupType::S3;
                 (ws.callbacks.save_settings)(&ws.settings);
                 cx.notify();
             },
@@ -860,7 +884,183 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
             .into_any_element()
     });
 
-    let remote_panel = (backup_type == aitoolplus_core::settings::BackupType::Webdav
+    let s3_panel = (backup_type == aitoolplus_core::settings::BackupType::S3).then(|| {
+        let save_endpoint = s3_endpoint.clone();
+        let save_region = s3_region.clone();
+        let save_bucket = s3_bucket.clone();
+        let save_access_key = s3_access_key.clone();
+        let save_secret_key = s3_secret_key.clone();
+        let save_prefix = s3_prefix.clone();
+
+        let list_endpoint = s3_endpoint.clone();
+        let list_region = s3_region.clone();
+        let list_bucket = s3_bucket.clone();
+        let list_access_key = s3_access_key.clone();
+        let list_secret_key = s3_secret_key.clone();
+        let list_prefix = s3_prefix.clone();
+
+        let test_endpoint = s3_endpoint.clone();
+        let test_region = s3_region.clone();
+        let test_bucket = s3_bucket.clone();
+        let test_access_key = s3_access_key.clone();
+        let test_secret_key = s3_secret_key.clone();
+        let test_prefix = s3_prefix.clone();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .p(px(10.0))
+            .rounded(px(8.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(s3_endpoint.clone())
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(div().flex_1().child(s3_region.clone()))
+                    .child(div().flex_1().child(s3_bucket.clone())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(div().flex_1().child(s3_access_key.clone()))
+                    .child(div().flex_1().child(s3_secret_key.clone())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(div().flex_1().child(s3_prefix.clone()))
+                    .child(button_l(
+                        "s3-path-style-toggle",
+                        if ws.settings.s3.path_style {
+                            i.t("路径模式: 开", "Path-Style: ON")
+                        } else {
+                            i.t("路径模式: 关", "Path-Style: OFF")
+                        },
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, cx| {
+                            ws.settings.s3.path_style = !ws.settings.s3.path_style;
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            cx.notify();
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(button_l(
+                        "s3-save",
+                        i.t("保存 S3 设置", "Save S3 Settings"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            ws.settings.s3.endpoint = save_endpoint
+                                .update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.region =
+                                save_region.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.bucket =
+                                save_bucket.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.access_key_id = save_access_key
+                                .update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.secret_access_key =
+                                save_secret_key.update(cx, |input, _| input.text().to_string());
+                            ws.settings.s3.prefix =
+                                save_prefix.update(cx, |input, _| input.text().trim().to_string());
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            ws.ui.toast(ws.i18n.t("已保存", "saved").to_string(), false);
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_l(
+                        "s3-list",
+                        i.t("列出 S3 备份", "List S3 Backups"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            let config = aitoolplus_core::settings::S3Config {
+                                endpoint: list_endpoint
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                region: list_region
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                bucket: list_bucket
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                access_key_id: list_access_key
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                secret_access_key: list_secret_key
+                                    .update(cx, |input, _| input.text().to_string()),
+                                prefix: list_prefix
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                path_style: ws.settings.s3.path_style,
+                            };
+                            match aitoolplus_core::s3::list(&config) {
+                                Ok(backups) => {
+                                    let count = backups.len();
+                                    ws.ui.remote_backups = backups;
+                                    ws.ui.toast(
+                                        ws.i18n
+                                            .t(
+                                                &format!("发现 {count} 个 S3 备份"),
+                                                &format!("found {count} S3 backups"),
+                                            )
+                                            .to_string(),
+                                        false,
+                                    );
+                                }
+                                Err(error) => ws.ui.toast(format!("S3 list failed: {error}"), true),
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_l(
+                        "s3-test",
+                        i.t("测试 S3 连接", "Test S3 Connection"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            let config = aitoolplus_core::settings::S3Config {
+                                endpoint: test_endpoint
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                region: test_region
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                bucket: test_bucket
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                access_key_id: test_access_key
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                secret_access_key: test_secret_key
+                                    .update(cx, |input, _| input.text().to_string()),
+                                prefix: test_prefix
+                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                path_style: ws.settings.s3.path_style,
+                            };
+                            match aitoolplus_core::s3::test_connection(&config) {
+                                Ok(()) => ws.ui.toast(
+                                    ws.i18n
+                                        .t("S3 连接成功", "S3 connection succeeded")
+                                        .to_string(),
+                                    false,
+                                ),
+                                Err(error) => ws.ui.toast(format!("S3 failed: {error}"), true),
+                            }
+                            cx.notify();
+                        },
+                    )),
+            )
+            .into_any_element()
+    });
+
+    let remote_panel = ((backup_type == aitoolplus_core::settings::BackupType::Webdav
+        || backup_type == aitoolplus_core::settings::BackupType::S3)
         && !ws.ui.remote_backups.is_empty())
     .then(|| {
         let mut panel = div().flex().flex_col().gap(px(6.0)).child(section_title(
@@ -893,7 +1093,7 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                             .flex()
                             .gap(px(8.0))
                             .child(button_l(
-                                gpui::SharedString::from(format!("webdav-restore-{restore_name}")),
+                                gpui::SharedString::from(format!("remote-restore-{restore_name}")),
                                 i.t("下载并恢复", "Download & Restore"),
                                 ButtonVariant::Secondary,
                                 &t,
@@ -905,14 +1105,31 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                         .join("backups")
                                         .join("downloads")
                                         .join(&restore_name);
-                                    match aitoolplus_core::webdav::download(
-                                        &ws.settings.webdav,
-                                        &restore_name,
-                                        &temporary,
-                                    )
-                                    .and_then(|path| {
-                                        aitoolplus_core::backup::restore_backup(
-                                            &ws.paths, &path, false,
+                                    let download_res = if ws.settings.backup_type
+                                        == aitoolplus_core::settings::BackupType::Webdav
+                                    {
+                                        aitoolplus_core::webdav::download(
+                                            &ws.settings.webdav,
+                                            &restore_name,
+                                            &temporary,
+                                        )
+                                    } else {
+                                        aitoolplus_core::s3::download(
+                                            &ws.settings.s3,
+                                            &restore_name,
+                                            &temporary,
+                                        )
+                                    };
+                                    match download_res.and_then(|path| {
+                                        aitoolplus_core::backup::restore_backup_with_options(
+                                            &ws.paths,
+                                            &path,
+                                            &aitoolplus_core::backup::RestoreOptions {
+                                                allow_custom_absolute: ws
+                                                    .ui
+                                                    .restore_allow_custom_absolute,
+                                                conflict_strategy: ws.ui.restore_conflict_strategy,
+                                            },
                                         )
                                     }) {
                                         Ok(report) => {
@@ -945,16 +1162,23 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                 },
                             ))
                             .child(button_l(
-                                gpui::SharedString::from(format!("webdav-delete-{delete_name}")),
+                                gpui::SharedString::from(format!("remote-delete-{delete_name}")),
                                 i.t("删除远端", "Delete Remote"),
                                 ButtonVariant::Danger,
                                 &t,
                                 cx,
                                 move |ws, _, _, cx| {
-                                    match aitoolplus_core::webdav::delete(
-                                        &ws.settings.webdav,
-                                        &delete_name,
-                                    ) {
+                                    let del_res = if ws.settings.backup_type
+                                        == aitoolplus_core::settings::BackupType::Webdav
+                                    {
+                                        aitoolplus_core::webdav::delete(
+                                            &ws.settings.webdav,
+                                            &delete_name,
+                                        )
+                                    } else {
+                                        aitoolplus_core::s3::delete(&ws.settings.s3, &delete_name)
+                                    };
+                                    match del_res {
                                         Ok(()) => {
                                             ws.ui
                                                 .remote_backups
@@ -1155,7 +1379,96 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
             ),
             transport_row,
             webdav_panel.unwrap_or_else(|| div().into_any_element()),
+            s3_panel.unwrap_or_else(|| div().into_any_element()),
             remote_panel.unwrap_or_else(|| div().into_any_element()),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(section_title(
+                    &t,
+                    i.t("恢复冲突策略与选项", "Restore Conflict Strategy & Options"),
+                    Some(i.t(
+                        "遇到同名文件时的处理方式，以及是否允许恢复自定义绝对路径",
+                        "How to handle existing files, and whether to allow custom absolute paths",
+                    )),
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.0))
+                        .child(button_l(
+                            "conflict-strategy-overwrite",
+                            i.t("覆盖原文件", "Overwrite"),
+                            if ws.ui.restore_conflict_strategy
+                                == aitoolplus_core::backup::ConflictStrategy::Overwrite
+                            {
+                                ButtonVariant::Primary
+                            } else {
+                                ButtonVariant::Secondary
+                            },
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.restore_conflict_strategy =
+                                    aitoolplus_core::backup::ConflictStrategy::Overwrite;
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "conflict-strategy-skip",
+                            i.t("跳过同名文件", "Skip Existing"),
+                            if ws.ui.restore_conflict_strategy
+                                == aitoolplus_core::backup::ConflictStrategy::Skip
+                            {
+                                ButtonVariant::Primary
+                            } else {
+                                ButtonVariant::Secondary
+                            },
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.restore_conflict_strategy =
+                                    aitoolplus_core::backup::ConflictStrategy::Skip;
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "conflict-strategy-savecopy",
+                            i.t("另存副本 (.restored)", "Save Copy (.restored)"),
+                            if ws.ui.restore_conflict_strategy
+                                == aitoolplus_core::backup::ConflictStrategy::SaveCopy
+                            {
+                                ButtonVariant::Primary
+                            } else {
+                                ButtonVariant::Secondary
+                            },
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.restore_conflict_strategy =
+                                    aitoolplus_core::backup::ConflictStrategy::SaveCopy;
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "restore-custom-absolute-toggle",
+                            if ws.ui.restore_allow_custom_absolute {
+                                i.t("允许原绝对路径: 开", "Custom Absolute: ON")
+                            } else {
+                                i.t("沙箱隔离恢复: 关", "Sandbox Safe: OFF")
+                            },
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.restore_allow_custom_absolute =
+                                    !ws.ui.restore_allow_custom_absolute;
+                                cx.notify();
+                            },
+                        )),
+                )
+                .into_any_element(),
             filter_panel.into_any_element(),
             custom_panel.into_any_element(),
             div()
@@ -1250,6 +1563,11 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                             {
                                 aitoolplus_core::webdav::upload(&ws.settings.webdav, &report.output)
                                     .map(|backup| format!(" · WebDAV: {}", backup.name))
+                            } else if ws.settings.backup_type
+                                == aitoolplus_core::settings::BackupType::S3
+                            {
+                                aitoolplus_core::s3::upload(&ws.settings.s3, &report.output)
+                                    .map(|backup| format!(" · S3: {}", backup.name))
                             } else {
                                 Ok(String::new())
                             };
@@ -1274,7 +1592,7 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                     false,
                                 ),
                                 Err(error) => ws.ui.toast(
-                                    format!("local backup ok; WebDAV upload failed: {error}"),
+                                    format!("local backup ok; remote upload failed: {error}"),
                                     true,
                                 ),
                             }
@@ -1298,8 +1616,13 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                             let archive = file.path().to_path_buf();
                             let _ = weak.update(cx, |ws: &mut Workspace, cx| {
                                 let paths = ws.paths.clone();
-                                match aitoolplus_core::backup::restore_backup(
-                                    &paths, &archive, false,
+                                match aitoolplus_core::backup::restore_backup_with_options(
+                                    &paths,
+                                    &archive,
+                                    &aitoolplus_core::backup::RestoreOptions {
+                                        allow_custom_absolute: ws.ui.restore_allow_custom_absolute,
+                                        conflict_strategy: ws.ui.restore_conflict_strategy,
+                                    },
                                 ) {
                                     Ok(report) => {
                                         if let Ok(store) =
@@ -1314,12 +1637,16 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                             ws.i18n
                                                 .t(
                                                     &format!(
-                                                        "恢复完成：{} 个文件",
-                                                        report.restored
+                                                        "恢复完成：{} 个文件 (覆盖 {}, 副本 {})",
+                                                        report.restored,
+                                                        report.overwritten,
+                                                        report.copies.len()
                                                     ),
                                                     &format!(
-                                                        "restore complete: {} files",
-                                                        report.restored
+                                                        "restore complete: {} files (overwritten {}, copies {})",
+                                                        report.restored,
+                                                        report.overwritten,
+                                                        report.copies.len()
                                                     ),
                                                 )
                                                 .to_string(),
@@ -1497,20 +1824,43 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                         move |ws, _, _, cx| {
                             let output = ws.paths.app_data.join("updates").join(&asset.name);
                             match aitoolplus_core::updater::download(&asset, &output) {
-                                Ok(path) => ws.ui.toast(
-                                    ws.i18n
-                                        .t(
-                                            &format!("已下载到 {}", path.display()),
-                                            &format!("downloaded to {}", path.display()),
-                                        )
-                                        .to_string(),
-                                    false,
-                                ),
+                                Ok(path) => {
+                                    ws.ui.downloaded_update_asset_path = Some(path.clone());
+                                    ws.ui.toast(
+                                        ws.i18n
+                                            .t(
+                                                &format!("已下载到 {}", path.display()),
+                                                &format!("downloaded to {}", path.display()),
+                                            )
+                                            .to_string(),
+                                        false,
+                                    );
+                                }
                                 Err(error) => {
                                     ws.ui.toast(format!("download failed: {error}"), true)
                                 }
                             }
                             cx.notify();
+                        },
+                    )
+                }))
+                .children(ws.ui.downloaded_update_asset_path.as_ref().map(|path| {
+                    let asset_path = path.clone();
+                    button_l(
+                        "install-update-now",
+                        i.t("立即安装并重启", "Install & Restart Now"),
+                        ButtonVariant::Primary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            match aitoolplus_core::updater::install_update_and_restart(&asset_path)
+                            {
+                                Ok(()) => {}
+                                Err(error) => {
+                                    ws.ui.toast(format!("install update failed: {error}"), true);
+                                    cx.notify();
+                                }
+                            }
                         },
                     )
                 }))
