@@ -1,6 +1,5 @@
 @echo off
 setlocal
-chcp 65001 >nul
 title AI ToolPlus - Portable Build
 
 set "SCRIPT_DIR=%~dp0"
