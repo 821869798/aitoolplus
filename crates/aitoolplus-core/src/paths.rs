@@ -28,10 +28,22 @@ impl Paths {
             .or_else(home_dir)
             .unwrap_or_else(|| PathBuf::from("."));
 
+        let portable_data = std::env::current_exe().ok().and_then(|exe| {
+            let dir = exe.parent()?;
+            let marker = dir.join(".portable");
+            let data_dir = dir.join("data");
+            if marker.exists() || data_dir.is_dir() {
+                Some(data_dir)
+            } else {
+                None
+            }
+        });
+
         let app_data = std::env::var("AITOOLPLUS_APPDATA")
             .ok()
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
+            .or(portable_data)
             .unwrap_or_else(|| default_app_data(&home));
 
         let mut tool_roots = std::collections::HashMap::new();
@@ -232,5 +244,18 @@ mod tests {
         for tool in ToolId::ALL {
             assert_eq!(ToolId::from_key(tool.key()), Some(tool));
         }
+    }
+
+    #[test]
+    fn portable_marker_detection_concept() {
+        let temp = tempfile::tempdir().unwrap();
+        let exe = temp.path().join("aitoolplus.exe");
+        std::fs::write(&exe, b"dummy").unwrap();
+        let marker = temp.path().join(".portable");
+        assert!(!marker.exists());
+        std::fs::write(&marker, b"").unwrap();
+        assert!(marker.exists());
+        let data = temp.path().join("data");
+        assert_eq!(marker.parent().unwrap().join("data"), data);
     }
 }
