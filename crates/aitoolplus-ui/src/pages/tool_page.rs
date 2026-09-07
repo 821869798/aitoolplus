@@ -143,151 +143,86 @@ fn providers_section(
     let providers = ws.tool_providers(tool);
 
     let add_label = i.t("新增供应商", "Add Provider");
-    let export_label = i.t("导出", "Export");
 
-    let mut section = div().flex().flex_col().gap(px(12.0)).child(
-        div()
-            .flex()
-            .flex_col()
-            .items_start()
-            .gap(px(8.0))
-            .child(section_title(
-                &t,
-                i.t("供应商列表", "Provider List"),
-                Some(i.t(
-                    "选择一条记录一键写入真实配置文件",
-                    "Pick an entry to write the real config file",
-                )),
-            ))
-            .child({
-                let mut actions = div().flex().flex_wrap().gap(px(8.0));
-                if let Some(off_id) = aitoolplus_core::providers::official_provider_id(tool) {
-                    if tool != ToolId::ClaudeDesktop {
-                        actions = actions.child(button_l(
-                            "tool-restore-official",
-                            i.t("切回官方", "Switch to Official"),
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            move |ws, _, _, cx| {
-                                ws.apply_provider(tool, off_id, cx);
-                            },
-                        ));
-                    }
-                }
-                if let ToolId::ClaudeDesktop = tool {
-                    actions = actions.child(button_l(
-                        "cd-restore-official",
-                        i.t("恢复官方端点", "Restore Official"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            let i = ws.i18n;
-                            let cd = aitoolplus_core::ClaudeDesktopPaths::from_paths(&ws.paths);
-                            match aitoolplus_core::claude_desktop::restore_official(&cd) {
-                                Ok(_) => {
-                                    let _ = ws.store.update(|db| {
-                                        for p in &mut db.tool_mut(ToolId::ClaudeDesktop).providers {
-                                            p.is_applied = false;
-                                        }
-                                    });
-                                    ws.persist_store();
-                                    let msg = i
-                                        .t("已恢复官方端点", "official endpoints restored")
-                                        .to_string();
-                                    ws.ui.toast(msg, false);
-                                }
-                                Err(e) => {
-                                    let msg = format!("restore failed: {e}");
-                                    ws.ui.toast(msg, true);
-                                }
-                            }
-                            cx.notify();
-                        },
-                    ));
-                }
-                if let ToolId::Hermes = tool {
-                    let enabled = {
+    let mut actions = div().flex().items_center().gap(px(8.0));
+    if let ToolId::Hermes = tool {
+        let enabled = {
+            let h = aitoolplus_core::HermesRuntimePaths::from_paths(&ws.paths);
+            aitoolplus_core::hermes::memory_enabled(&h).unwrap_or(false)
+        };
+        actions = actions.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(i.t("记忆系统", "Memory")),
+                )
+                .child(components::toggle(
+                    "hermes-memory-toggle",
+                    enabled,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let i = ws.i18n;
                         let h = aitoolplus_core::HermesRuntimePaths::from_paths(&ws.paths);
-                        aitoolplus_core::hermes::memory_enabled(&h).unwrap_or(false)
-                    };
-                    actions = actions.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(t.text_secondary)
-                                    .child(i.t("记忆系统", "Memory")),
-                            )
-                            .child(components::toggle(
-                                "hermes-memory-toggle",
-                                enabled,
-                                &t,
-                                cx,
-                                move |ws, _, _, cx| {
-                                    let i = ws.i18n;
-                                    let h =
-                                        aitoolplus_core::HermesRuntimePaths::from_paths(&ws.paths);
-                                    let target = !aitoolplus_core::hermes::memory_enabled(&h)
-                                        .unwrap_or(false);
-                                    match aitoolplus_core::hermes::set_memory_enabled(&h, target) {
-                                        Ok(()) => {
-                                            let msg = if target {
-                                                i.t("记忆已启用", "memory enabled").to_string()
-                                            } else {
-                                                i.t("记忆已停用", "memory disabled").to_string()
-                                            };
-                                            ws.ui.toast(msg, false);
-                                        }
-                                        Err(e) => {
-                                            let msg = format!("failed: {e}");
-                                            ws.ui.toast(msg, true);
-                                        }
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                    );
-                }
-                actions
-                    .child(button_l(
-                        "prov-test-all",
-                        i.t("批量测试", "Test All"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| batch_test_providers(tool, ws, cx),
-                    ))
-                    .child(button_l(
-                        "prov-import",
-                        i.t("导入", "Import"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| import_providers(tool, ws, cx),
-                    ))
-                    .child(button_l(
-                        "prov-export",
-                        export_label,
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| export_providers(tool, ws, cx),
-                    ))
-                    .child(button_l(
-                        "prov-add",
-                        add_label,
-                        ButtonVariant::Primary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| open_provider_dialog(None, tool, ws, cx),
-                    ))
-            }),
-    );
+                        let target = !aitoolplus_core::hermes::memory_enabled(&h).unwrap_or(false);
+                        match aitoolplus_core::hermes::set_memory_enabled(&h, target) {
+                            Ok(()) => {
+                                let msg = if target {
+                                    i.t("记忆已启用", "memory enabled").to_string()
+                                } else {
+                                    i.t("记忆已停用", "memory disabled").to_string()
+                                };
+                                ws.ui.toast(msg, false);
+                            }
+                            Err(e) => {
+                                let msg = format!("failed: {e}");
+                                ws.ui.toast(msg, true);
+                            }
+                        }
+                        cx.notify();
+                    },
+                )),
+        );
+    }
+    actions = actions
+        .child(button_l(
+            "prov-test-all",
+            i.t("批量测试", "Test All"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| batch_test_providers(tool, ws, cx),
+        ))
+        .child(button_l(
+            "prov-add",
+            add_label,
+            ButtonVariant::Primary,
+            &t,
+            cx,
+            move |ws, _, _, cx| open_provider_dialog(None, tool, ws, cx),
+        ));
+
+    let header = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .w_full()
+        .child(section_title(
+            &t,
+            i.t("供应商列表", "Provider List"),
+            Some(i.t(
+                "选择一条记录一键写入真实配置文件",
+                "Pick an entry to write the real config file",
+            )),
+        ))
+        .child(actions);
+
+    let mut section = div().flex().flex_col().gap(px(12.0)).child(header);
 
     if providers.is_empty() {
         section = section.child(empty_state(
@@ -575,6 +510,7 @@ fn provider_row(
         .into_any_element()
 }
 
+#[allow(dead_code)]
 fn import_providers(tool: ToolId, _ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let dialog = rfd::AsyncFileDialog::new().add_filter("JSON", &["json"]);
     let weak = cx.entity().downgrade();
@@ -621,6 +557,7 @@ fn import_providers(tool: ToolId, _ws: &mut Workspace, cx: &mut Context<Workspac
     .detach();
 }
 
+#[allow(dead_code)]
 fn export_providers(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let providers = ws.tool_providers(tool);
     let json = aitoolplus_core::providers::export(&providers);
