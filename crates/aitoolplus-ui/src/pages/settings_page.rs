@@ -2,7 +2,9 @@
 
 use gpui::{Context, IntoElement, div, prelude::*, px};
 
-use crate::components::{ButtonVariant, button_l, card, page_header, section_title};
+use crate::components::{
+    ButtonVariant, button_l, card, input_container, page_header, section_title, toggle,
+};
 use crate::workspace::Workspace;
 
 use super::SettingsTab;
@@ -19,8 +21,12 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
 
     let mut tab_bar = div()
         .flex()
+        .items_center()
         .gap(px(4.0))
-        .border_b_1()
+        .p(px(3.0))
+        .rounded(px(8.0))
+        .bg(t.sidebar_bg)
+        .border_1()
         .border_color(t.card_border);
     for (tab, label) in tabs {
         let is_on = ws.ui.settings_tab == tab;
@@ -29,18 +35,19 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                 .id(gpui::SharedString::from(format!("settings-tab-{:?}", tab)))
                 .cursor_pointer()
                 .px(px(12.0))
-                .py(px(6.0))
-                .mb(px(-1.0))
+                .py(px(4.5))
                 .rounded(px(6.0))
-                .text_size(px(13.0))
+                .text_size(px(12.5))
                 .when(is_on, |s| {
-                    s.text_color(t.accent)
-                        .border_b_2()
-                        .border_color(t.accent)
-                        .font_weight(gpui::FontWeight::MEDIUM)
+                    s.bg(t.card_bg)
+                        .text_color(t.text_primary)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .shadow_xs()
                 })
-                .when(!is_on, |s| s.text_color(t.text_secondary))
-                .hover(|h| h.text_color(t.text_primary))
+                .when(!is_on, |s| {
+                    s.text_color(t.text_secondary)
+                        .hover(|h| h.text_color(t.text_primary).bg(t.card_hover))
+                })
                 .on_click(cx.listener(move |ws, _ev: &gpui::ClickEvent, _w, cx| {
                     ws.ui.settings_tab = tab;
                     cx.notify();
@@ -58,6 +65,9 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     div()
         .flex()
         .flex_col()
+        .w_full()
+        .max_w(px(760.0))
+        .min_w(px(0.0))
         .gap(px(16.0))
         .child(page_header(
             &t,
@@ -172,9 +182,10 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
     let autostart_on = ws.settings.start_with_system;
     let autostart_row = div()
         .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(8.0))
+        .items_center()
+        .justify_between()
+        .w_full()
+        .gap(px(16.0))
         .child(section_title(
             &t,
             i.t("开机自启", "Launch at Login"),
@@ -183,18 +194,9 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
                 "Start AI ToolPlus after Windows sign-in",
             )),
         ))
-        .child(button_l(
+        .child(toggle(
             "autostart-toggle",
-            if autostart_on {
-                i.t("已开启", "Enabled")
-            } else {
-                i.t("已关闭", "Disabled")
-            },
-            if autostart_on {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
+            autostart_on,
             &t,
             cx,
             |ws, _, _, cx| {
@@ -207,9 +209,10 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
     let minimize_on_close = ws.settings.minimize_to_tray_on_close;
     let minimize_row = div()
         .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(8.0))
+        .items_center()
+        .justify_between()
+        .w_full()
+        .gap(px(16.0))
         .child(section_title(
             &t,
             i.t("关闭时最小化到托盘", "Minimize to Tray on Close"),
@@ -218,18 +221,9 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
                 "Keep the tray running when the close button is clicked",
             )),
         ))
-        .child(button_l(
+        .child(toggle(
             "minimize-on-close-toggle",
-            if minimize_on_close {
-                i.t("已开启", "Enabled")
-            } else {
-                i.t("已关闭", "Disabled")
-            },
-            if minimize_on_close {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
+            minimize_on_close,
             &t,
             cx,
             |ws, _, _, cx| {
@@ -242,26 +236,18 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
     let start_minimized = ws.settings.start_minimized;
     let start_minimized_row = div()
         .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(8.0))
+        .items_center()
+        .justify_between()
+        .w_full()
+        .gap(px(16.0))
         .child(section_title(
             &t,
             i.t("启动时最小化", "Start Minimized"),
             Some(i.t("应用启动后直接进入托盘", "Start directly in the tray")),
         ))
-        .child(button_l(
+        .child(toggle(
             "start-minimized-toggle",
-            if start_minimized {
-                i.t("已开启", "Enabled")
-            } else {
-                i.t("已关闭", "Disabled")
-            },
-            if start_minimized {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
+            start_minimized,
             &t,
             cx,
             |ws, _, _, cx| {
@@ -340,7 +326,7 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
                     },
                 )),
         )
-        .child(proxy_input)
+        .child(input_container(&t, proxy_input))
         .child(button_l(
             "proxy-save",
             i.t("保存代理 URL", "Save Proxy URL"),

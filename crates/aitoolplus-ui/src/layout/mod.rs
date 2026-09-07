@@ -13,15 +13,15 @@ impl Workspace {
         let i = &self.i18n;
 
         let mut col = div()
-            .w(px(170.0))
+            .w(px(176.0))
             .flex_shrink_0()
             .flex()
             .flex_col()
             .bg(t.sidebar_bg)
             .border_r_1()
             .border_color(t.card_border)
-            .pt(px(6.0))
-            .pb(px(6.0));
+            .pt(px(8.0))
+            .pb(px(8.0));
 
         col = col.child(self.sidebar_group(i.t("编码工具", "Coding Tools")));
 
@@ -53,10 +53,10 @@ impl Workspace {
     fn sidebar_group(&self, label: SharedString) -> impl IntoElement {
         let t = &self.theme;
         div()
-            .px(px(14.0))
-            .pt(px(12.0))
+            .px(px(16.0))
+            .pt(px(14.0))
             .pb(px(4.0))
-            .text_size(px(10.5))
+            .text_size(px(11.0))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(t.text_muted)
             .child(label)
@@ -83,18 +83,18 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(8.0))
-            .mx(px(6.0))
-            .my(px(1.0))
-            .px(px(8.0))
-            .h(px(28.0))
+            .mx(px(8.0))
+            .my(px(1.5))
+            .px(px(10.0))
+            .h(px(30.0))
             .rounded(px(6.0))
             .when(is_active, |s| {
                 s.bg(t.row_selected)
                     .text_color(t.accent)
-                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
             })
             .when(!is_active, |s| s.text_color(t.text_secondary))
-            .hover(|h| if is_active { h } else { h.bg(t.row_hover) })
+            .hover(|h| if is_active { h } else { h.bg(t.row_hover).text_color(t.text_primary) })
             .on_click(
                 cx.listener(move |this, _ev: &gpui::ClickEvent, _window, cx| {
                     this.navigate(page, cx);
@@ -120,16 +120,13 @@ impl Workspace {
         let theme_mode = self.settings.theme_mode;
         let lang = self.settings.language;
 
-        let is_dark_now = t.is_dark;
-        let _ = is_dark_now;
-
         div()
-            .h(px(44.0))
+            .h(px(46.0))
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_between()
-            .px(px(16.0))
+            .px(px(18.0))
             .bg(t.sidebar_bg)
             .border_b_1()
             .border_color(t.card_border)
@@ -137,37 +134,49 @@ impl Workspace {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(10.0))
                     .child(
                         div()
-                            .text_size(px(14.0))
+                            .text_size(px(14.5))
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(t.text_primary)
                             .child(i.t("AI ToolPlus", "AI ToolPlus")),
                     )
                     .child(
-                        div().text_size(px(11.0)).text_color(t.text_muted).child(
-                            i.t("AI 编程助手配置工作台", "Coding assistant config workbench"),
-                        ),
+                        div()
+                            .px(px(7.0))
+                            .py(px(2.0))
+                            .rounded(px(4.0))
+                            .bg(t.card_border)
+                            .text_size(px(10.5))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(t.text_muted)
+                            .child(i.t("AI 编程助手工作台", "Config Workbench")),
                     ),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(8.0))
                     .child(
                         div()
                             .id("theme-btn")
                             .cursor_pointer()
                             .flex()
                             .items_center()
+                            .justify_center()
                             .h(px(28.0))
-                            .px(px(8.0))
+                            .px(px(10.0))
                             .rounded(px(6.0))
+                            .border_1()
+                            .border_color(t.card_border)
+                            .bg(t.card_bg)
+                            .shadow_xs()
                             .text_size(px(13.0))
                             .text_color(t.text_secondary)
-                            .hover(|h| h.bg(t.row_hover).text_color(t.text_primary))
+                            .hover(|h| h.bg(t.row_hover).border_color(t.card_border_hover).text_color(t.text_primary))
+                            .active(|a| a.opacity(0.85))
                             .tooltip(move |_w, cx| {
                                 let label = match theme_mode {
                                     aitoolplus_core::settings::ThemeMode::Dark => "暗色 / Dark",
@@ -193,13 +202,19 @@ impl Workspace {
                             .cursor_pointer()
                             .flex()
                             .items_center()
+                            .justify_center()
                             .h(px(28.0))
-                            .px(px(8.0))
+                            .px(px(10.0))
                             .rounded(px(6.0))
+                            .border_1()
+                            .border_color(t.card_border)
+                            .bg(t.card_bg)
+                            .shadow_xs()
                             .text_size(px(12.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(t.text_secondary)
-                            .hover(|h| h.bg(t.row_hover).text_color(t.text_primary))
+                            .hover(|h| h.bg(t.row_hover).border_color(t.card_border_hover).text_color(t.text_primary))
+                            .active(|a| a.opacity(0.85))
                             .tooltip(move |_w, cx| {
                                 let label = match lang {
                                     aitoolplus_core::settings::Language::Zh => "中文",

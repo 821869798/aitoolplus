@@ -1,28 +1,16 @@
 //! System tray icon + menu (cc-switch parity).
 //!
-//! Menu structure (rebuilt whenever the store changes):
-//!   打开 AI ToolPlus / Open
-//!   退出 / Quit
-//!   ─────────────
-//!   供应商 / Providers
-//!     Claude Code
-//!       ✓ Provider A   (applied)
-//!         Provider B   ← click = apply + switch
-//!     Codex
-//!       …
-//!
-//! muda 0.19 note: menus have no item-clear API, so a store change rebuilds
-//! and swaps the whole tray menu (`TrayIcon::set_menu`). Event ids are
-//! compared by string; provider entries use `t:<tool>|<provider-id>`.
+//! Shares the UI thread's Win32 message pump rather than running one of its own.
+//! `tray-icon` and `muda` both create ordinary Win32 windows on the calling thread,
+//! and GPUI's event loop dispatches messages for every window on its thread —
+//! so building the tray from inside the GPUI run loop is all the integration needed.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use gpui::App as GpuiApp;
 
-pub enum TrayEvent {
+pub enum TrayAction {
     ShowWindow,
     Quit,
     /// Apply this provider for the tool (grouped quick-switch).
@@ -31,137 +19,189 @@ pub enum TrayEvent {
         provider_id: String,
         provider_name: String,
     },
+    /// Rebuild menu from fresh snapshot.
+    UpdateMenu(ToolGroupSnapshot),
 }
 
 /// Snapshot of (tool, provider-id, provider-name, is_applied).
 pub type ToolGroupSnapshot = Vec<(&'static str, String, String, bool)>;
 
-/// Cloneable handle for pushing menu snapshots into the tray thread.
-/// (The full `TrayHandle` owns the one-shot event receiver and stays with
-/// the GPUI pump.)
+static MAIN_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static TRAY_SENDER: OnceLock<async_channel::Sender<TrayAction>> = OnceLock::new();
+
+pub fn set_main_thread_id(tid: u32) {
+    MAIN_THREAD_ID.store(tid, Ordering::Release);
+}
+
+/// Wake up GPUI's Win32 message pump if sleeping in GetMessageW.
+fn wake_ui_thread() {
+    #[cfg(windows)]
+    {
+        let tid = MAIN_THREAD_ID.load(Ordering::Acquire);
+        if tid != 0 {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+                    tid,
+                    windows::Win32::UI::WindowsAndMessaging::WM_NULL,
+                    windows::Win32::Foundation::WPARAM(0),
+                    windows::Win32::Foundation::LPARAM(0),
+                );
+            }
+        }
+    }
+}
+
+pub fn post_tray_action(action: TrayAction) {
+    if let Some(tx) = TRAY_SENDER.get() {
+        let _ = tx.try_send(action);
+        wake_ui_thread();
+    }
+}
+
+/// Cloneable handle for pushing menu snapshots into the tray.
 #[derive(Clone)]
 pub struct TrayMenuUpdater {
-    menu_dirty: Arc<AtomicBool>,
-    groups: Arc<Mutex<ToolGroupSnapshot>>,
+    tx: async_channel::Sender<TrayAction>,
 }
 
 impl TrayMenuUpdater {
-    /// Push a fresh snapshot; the tray thread swaps the menu on its next tick.
+    /// Push a fresh snapshot; the menu updates on the UI thread.
     pub fn update_groups(&self, groups: ToolGroupSnapshot) {
-        if let Ok(mut guard) = self.groups.lock() {
-            *guard = groups;
+        let _ = self.tx.try_send(TrayAction::UpdateMenu(groups));
+        wake_ui_thread();
+    }
+}
+
+pub fn init_tray(initial_groups: ToolGroupSnapshot, cx: &mut GpuiApp) -> TrayMenuUpdater {
+    #[cfg(windows)]
+    set_main_thread_id(unsafe { windows::Win32::System::Threading::GetCurrentThreadId() });
+
+    let (tx, rx) = async_channel::unbounded::<TrayAction>();
+    TRAY_SENDER.set(tx.clone()).ok();
+    let updater = TrayMenuUpdater { tx: tx.clone() };
+
+    let groups_state = Arc::new(Mutex::new(initial_groups.clone()));
+    let groups_for_events = groups_state.clone();
+
+    #[cfg(target_os = "windows")]
+    let image = tray_icon::Icon::from_resource(1, Some((32, 32)))
+        .or_else(|_| {
+            tray_icon::Icon::from_rgba(crate::icon::rgba(), crate::icon::SIZE, crate::icon::SIZE)
+        })
+        .expect("infallible icon");
+
+    #[cfg(not(target_os = "windows"))]
+    let image = tray_icon::Icon::from_rgba(crate::icon::rgba(), crate::icon::SIZE, crate::icon::SIZE)
+        .expect("infallible icon");
+
+    let menu = build_menu(&initial_groups).unwrap_or_default();
+    let tray_icon = match tray_icon::TrayIconBuilder::new()
+        .with_tooltip("AI ToolPlus")
+        .with_icon(image)
+        .with_menu(Box::new(menu))
+        .build()
+    {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("tray build failed: {e}");
+            return updater;
         }
-        self.menu_dirty.store(true, Ordering::Relaxed);
-    }
-}
+    };
 
-pub struct TrayHandle {
-    pub events: mpsc::Receiver<TrayEvent>,
-    menu_dirty: Arc<AtomicBool>,
-    groups: Arc<Mutex<ToolGroupSnapshot>>,
-    /// Keeps the tray thread alive; dropped with the handle.
-    _lifeline: mpsc::Sender<()>,
-}
-
-impl TrayHandle {
-    /// Cloneable updater for callers that only need to refresh the menu.
-    pub fn updater(&self) -> TrayMenuUpdater {
-        TrayMenuUpdater {
-            menu_dirty: self.menu_dirty.clone(),
-            groups: self.groups.clone(),
-        }
-    }
-
-    /// Push a fresh snapshot; the tray thread swaps the menu on its next tick.
-    pub fn update_groups(&self, groups: ToolGroupSnapshot) {
-        self.updater().update_groups(groups);
-    }
-}
-
-pub fn spawn_tray() -> TrayHandle {
-    let (tx, rx) = mpsc::channel::<TrayEvent>();
-    // lifeline: dropped when TrayHandle drops -> thread exits
-    let (life_tx, life_rx) = mpsc::channel::<()>();
-    let menu_dirty = Arc::new(AtomicBool::new(true));
-    let groups = Arc::new(Mutex::new(Vec::new()));
-    let dirty_for_thread = menu_dirty.clone();
-    let groups_for_thread = groups.clone();
-    let life_tx_thread = life_tx.clone();
-    let _ = life_rx; // kept alive by the thread loop below
-
-    thread::Builder::new()
-        .name("tray".into())
-        .spawn(move || {
-            let icon =
-                tray_icon::Icon::from_rgba(include_bytes!("../assets/icon.rgba").to_vec(), 32, 32)
-                    .unwrap_or_else(|_| {
-                        tray_icon::Icon::from_rgba(vec![0u8; 32 * 32 * 4], 32, 32)
-                            .expect("infallible rgba")
+    muda::MenuEvent::set_event_handler(Some(move |event: muda::MenuEvent| {
+        let ev_id = event.id().0.clone();
+        match ev_id.as_str() {
+            "app:open" => post_tray_action(TrayAction::ShowWindow),
+            "app:quit" => post_tray_action(TrayAction::Quit),
+            value => {
+                if let Some((tool, id)) = decode_provider_item_id(value) {
+                    let name = current_name(&groups_for_events, tool, &id);
+                    post_tray_action(TrayAction::ApplyProvider {
+                        tool,
+                        provider_id: id,
+                        provider_name: name,
                     });
-
-            let tray = match tray_icon::TrayIconBuilder::new()
-                .with_tooltip("AI ToolPlus")
-                .with_icon(icon)
-                .with_menu(Box::new(build_menu(&groups_for_thread).unwrap_or_default()))
-                .build()
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("tray build failed: {e}");
-                    return;
                 }
-            };
+            }
+        }
+    }));
 
-            let menu_channel = muda::MenuEvent::receiver();
-            loop {
-                if dirty_for_thread.swap(false, Ordering::Relaxed)
-                    && let Ok(menu) = build_menu(&groups_for_thread)
-                {
-                    // set_menu swaps the whole native menu
-                    tray.set_menu(Some(Box::new(menu)));
-                }
-                if let Ok(ev) = menu_channel.try_recv() {
-                    let ev_id = ev.id().0.clone();
-                    match ev_id.as_str() {
-                        "app:open" => {
-                            let _ = tx.send(TrayEvent::ShowWindow);
-                        }
-                        "app:quit" => {
-                            let _ = tx.send(TrayEvent::Quit);
-                            tray.set_visible(false).ok();
-                            break;
-                        }
-                        value => {
-                            if let Some((tool, id)) = decode_provider_item_id(value) {
-                                let name = current_name(&groups_for_thread, tool, &id);
-                                let _ = tx.send(TrayEvent::ApplyProvider {
-                                    tool,
-                                    provider_id: id,
-                                    provider_name: name,
-                                });
-                            }
-                        }
+    tray_icon::TrayIconEvent::set_event_handler(Some(move |event: tray_icon::TrayIconEvent| {
+        if matches!(
+            event,
+            tray_icon::TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                button_state: tray_icon::MouseButtonState::Up,
+                ..
+            } | tray_icon::TrayIconEvent::DoubleClick {
+                button: tray_icon::MouseButton::Left,
+                ..
+            }
+        ) {
+            post_tray_action(TrayAction::ShowWindow);
+        }
+    }));
+
+    let updater_for_pump = updater.clone();
+    cx.spawn(async move |cx| {
+        while let Ok(action) = rx.recv().await {
+            match action {
+                TrayAction::ShowWindow => {
+                    if let Some(window) = ensure_workspace_window(cx, &updater_for_pump) {
+                        let _ = window.update(cx, |_, window, _cx| {
+                            crate::app::restore_window_from_tray(window);
+                        });
                     }
                 }
-                // lifeline probe: life_tx errors once TrayHandle is dropped
-                if life_tx_thread.send(()).is_err() {
-                    tray.set_visible(false).ok();
-                    break;
+                TrayAction::Quit => {
+                    crate::app::request_quit();
+                    tray_icon.set_visible(false).ok();
+                    cx.update(|cx| cx.quit());
+                    return;
                 }
-                thread::sleep(std::time::Duration::from_millis(60));
+                TrayAction::ApplyProvider {
+                    tool,
+                    provider_id,
+                    provider_name,
+                } => {
+                    if let Some(handle) = ensure_workspace_window(cx, &updater_for_pump) {
+                        let _ = handle.update(cx, |root, window, cx| {
+                            if let Ok(ws) = root.view().clone().downcast::<aitoolplus_ui::Workspace>() {
+                                ws.update(cx, |ws, cx| {
+                                    if let Some(tool_id) = aitoolplus_core::ToolId::from_key(tool) {
+                                        ws.apply_provider(tool_id, &provider_id, cx);
+                                        let i = ws.i18n;
+                                        let msg = i
+                                            .t(
+                                                &format!("已从托盘切换：{provider_name}"),
+                                                &format!("switched via tray: {provider_name}"),
+                                            )
+                                            .to_string();
+                                        ws.ui.toast(msg, false);
+                                    }
+                                });
+                            }
+                            crate::app::restore_window_from_tray(window);
+                        });
+                    }
+                }
+                TrayAction::UpdateMenu(new_groups) => {
+                    if let Ok(mut guard) = groups_state.lock() {
+                        *guard = new_groups.clone();
+                    }
+                    if let Ok(menu) = build_menu(&new_groups) {
+                        tray_icon.set_menu(Some(Box::new(menu)));
+                    }
+                }
             }
-        })
-        .expect("failed to spawn tray thread");
+        }
+    })
+    .detach();
 
-    TrayHandle {
-        events: rx,
-        menu_dirty,
-        groups,
-        _lifeline: life_tx,
-    }
+    updater
 }
 
-fn build_menu(groups: &Mutex<ToolGroupSnapshot>) -> Result<muda::Menu, String> {
+fn build_menu(groups: &ToolGroupSnapshot) -> Result<muda::Menu, String> {
     let menu = muda::Menu::new();
     let open = muda::MenuItem::with_id("app:open", "打开 AI ToolPlus / Open", true, None);
     let quit = muda::MenuItem::with_id("app:quit", "退出 / Quit", true, None);
@@ -169,7 +209,6 @@ fn build_menu(groups: &Mutex<ToolGroupSnapshot>) -> Result<muda::Menu, String> {
     menu.append_items(&[&open, &quit, &separator])
         .map_err(|e| e.to_string())?;
 
-    let groups = groups.lock().map_err(|e| e.to_string())?;
     if groups.is_empty() {
         return Ok(menu);
     }
@@ -274,12 +313,12 @@ fn pretty_tool_name(tool: &str) -> &'static str {
 fn ensure_workspace_window(
     cx: &mut gpui::AsyncApp,
     updater: &TrayMenuUpdater,
-) -> Option<gpui::WindowHandle<aitoolplus_ui::Workspace>> {
+) -> Option<gpui::WindowHandle<gpui_kit::component::Root>> {
     cx.update(|cx| {
         if let Some(existing) = cx
             .windows()
             .into_iter()
-            .find_map(|window| window.downcast::<aitoolplus_ui::Workspace>())
+            .find_map(|window| window.downcast::<gpui_kit::component::Root>())
         {
             return Some(existing);
         }
@@ -298,61 +337,6 @@ fn ensure_workspace_window(
             }
         }
     })
-}
-
-/// Poll tray events inside GPUI's event loop.
-pub fn pump_tray_events(handle: TrayHandle, cx: &mut GpuiApp) {
-    let updater = handle.updater();
-    let TrayHandle { events, .. } = handle;
-
-    cx.spawn(async move |cx| {
-        loop {
-            while let Ok(ev) = events.try_recv() {
-                match ev {
-                    TrayEvent::ShowWindow => {
-                        if let Some(window) = ensure_workspace_window(cx, &updater) {
-                            let _ = window.update(cx, |_, window, _cx| {
-                                window.activate_window();
-                            });
-                        }
-                    }
-                    TrayEvent::Quit => {
-                        crate::app::request_quit();
-                        cx.update(|cx| cx.quit());
-                        return;
-                    }
-                    TrayEvent::ApplyProvider {
-                        tool,
-                        provider_id,
-                        provider_name,
-                    } => {
-                        // Reopen the workspace if the main window was closed,
-                        // then apply through the same verified UI path.
-                        if let Some(handle) = ensure_workspace_window(cx, &updater) {
-                            let _ = handle.update(cx, |ws, window, cx| {
-                                if let Some(tool_id) = aitoolplus_core::ToolId::from_key(tool) {
-                                    ws.apply_provider(tool_id, &provider_id, cx);
-                                    let i = ws.i18n;
-                                    let msg = i
-                                        .t(
-                                            &format!("已从托盘切换：{provider_name}"),
-                                            &format!("switched via tray: {provider_name}"),
-                                        )
-                                        .to_string();
-                                    ws.ui.toast(msg, false);
-                                }
-                                window.activate_window();
-                            });
-                        }
-                    }
-                }
-            }
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(120))
-                .await;
-        }
-    })
-    .detach();
 }
 
 /// Build the tray snapshot from the store: every non-disabled provider per

@@ -265,6 +265,111 @@ pub fn export(providers: &[ProviderRecord]) -> String {
     serde_json::to_string_pretty(&sorted).unwrap_or_else(|_| "[]".into())
 }
 
+/// Standard stable id for the built-in official provider (cc-switch parity).
+pub fn official_provider_id(tool: ToolId) -> Option<&'static str> {
+    match tool {
+        ToolId::ClaudeCode => Some("claude-official"),
+        ToolId::Codex => Some("codex-official"),
+        ToolId::GeminiCli => Some("gemini-official"),
+        ToolId::Grok => Some("grok-official"),
+        ToolId::ClaudeDesktop => Some("claude-desktop-official"),
+        _ => None,
+    }
+}
+
+/// Check if a provider id belongs to the official persistent provider.
+pub fn is_official_provider(tool: ToolId, id: &str) -> bool {
+    official_provider_id(tool).is_some_and(|off_id| off_id == id)
+}
+
+/// Create the official provider record for a tool (cc-switch parity).
+pub fn official_provider_record(tool: ToolId) -> Option<ProviderRecord> {
+    match tool {
+        ToolId::ClaudeCode => {
+            let mut rec = ProviderRecord::new("Claude 官方 / Official", "official");
+            rec.id = "claude-official".into();
+            rec.website_url = Some("https://claude.ai".into());
+            rec.notes = Some("Anthropic 官方直连，使用 claude login 网页登录凭据".into());
+            rec.settings_config = serde_json::to_string_pretty(&serde_json::json!({
+                "env": {}
+            }))
+            .unwrap_or_default();
+            Some(rec)
+        }
+        ToolId::Codex => {
+            let mut rec = ProviderRecord::new("OpenAI 官方 / Official", "official");
+            rec.id = "codex-official".into();
+            rec.website_url = Some("https://platform.openai.com".into());
+            rec.notes = Some("OpenAI 官方直连，使用官方 codex login 凭据".into());
+            rec.settings_config = serde_json::to_string_pretty(&serde_json::json!({
+                "toml": "model_provider = \"openai\"\n\n[model_providers.openai]\nname = \"OpenAI\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n"
+            }))
+            .unwrap_or_default();
+            Some(rec)
+        }
+        ToolId::GeminiCli => {
+            let mut rec = ProviderRecord::new("Google 官方 / Official", "official");
+            rec.id = "gemini-official".into();
+            rec.website_url = Some("https://aistudio.google.com".into());
+            rec.notes = Some("Google 官方直连，使用官方 OAuth 登录凭据".into());
+            rec.settings_config = serde_json::to_string_pretty(&serde_json::json!({
+                "env": {},
+                "security": { "auth": { "selectedType": "oauth" } }
+            }))
+            .unwrap_or_default();
+            Some(rec)
+        }
+        ToolId::Grok => {
+            let mut rec = ProviderRecord::new("Grok 官方 / Official", "official");
+            rec.id = "grok-official".into();
+            rec.website_url = Some("https://x.ai".into());
+            rec.notes = Some("xAI 官方直连".into());
+            rec.settings_config = serde_json::to_string_pretty(&serde_json::json!({
+                "toml": "model_provider = \"grok\"\n"
+            }))
+            .unwrap_or_default();
+            Some(rec)
+        }
+        ToolId::ClaudeDesktop => {
+            let mut rec = ProviderRecord::new("Claude Desktop 官方 / Official", "official");
+            rec.id = "claude-desktop-official".into();
+            rec.website_url = Some("https://claude.ai/download".into());
+            rec.notes = Some("Claude Desktop 官方端点".into());
+            rec.settings_config = "{}".into();
+            Some(rec)
+        }
+        _ => None,
+    }
+}
+
+/// Ensure the persistent official provider exists in `providers` (cc-switch parity).
+/// If not present, it is inserted at index 0. If no provider in the list is currently
+/// applied, marks the official provider as applied.
+pub fn ensure_official_provider(tool: ToolId, providers: &mut Vec<ProviderRecord>) -> bool {
+    let Some(id) = official_provider_id(tool) else {
+        return false;
+    };
+    let any_applied = providers.iter().any(|p| p.is_applied);
+    if let Some(existing) = providers.iter_mut().find(|p| p.id == id) {
+        if !any_applied {
+            existing.is_applied = true;
+        }
+        return false;
+    }
+    let Some(mut official) = official_provider_record(tool) else {
+        return false;
+    };
+    if !any_applied {
+        official.is_applied = true;
+    }
+    official.sort_index = 0;
+    for p in providers.iter_mut() {
+        p.sort_index += 1;
+    }
+    providers.insert(0, official);
+    true
+}
+
 /// Parse an export and import it.
 pub fn import_json(providers: &mut Vec<ProviderRecord>, json: &str) -> Result<usize, String> {
     let incoming: Vec<ProviderRecord> =
@@ -469,5 +574,30 @@ mod tests {
                 .category,
             "official"
         );
+    }
+
+    #[test]
+    fn official_persistent_provider_lifecycle() {
+        let mut providers = vec![];
+        assert!(ensure_official_provider(ToolId::ClaudeCode, &mut providers));
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "claude-official");
+        assert!(providers[0].is_applied, "first provider applied by default");
+        assert_eq!(providers[0].category, "official");
+        assert!(is_official_provider(ToolId::ClaudeCode, "claude-official"));
+        assert!(!is_official_provider(ToolId::ClaudeCode, "custom-id"));
+
+        // Idempotent: does not duplicate
+        assert!(!ensure_official_provider(ToolId::ClaudeCode, &mut providers));
+        assert_eq!(providers.len(), 1);
+
+        // Codex official provider
+        let mut codex_providers = vec![];
+        assert!(ensure_official_provider(ToolId::Codex, &mut codex_providers));
+        assert_eq!(codex_providers[0].id, "codex-official");
+        assert!(codex_providers[0].settings()["toml"]
+            .as_str()
+            .unwrap()
+            .contains("model_provider = \"openai\""));
     }
 }

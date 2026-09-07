@@ -26,10 +26,8 @@ toml_edit = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
 
-# GPUI community edition, pinned to the same rev as flyclip (verified locally).
-gpui = { git = "https://github.com/gpui-ce/gpui-ce", rev = "c738623ffbcec2aeddc44a645cc6b74646d5cf97" }
-gpui_platform = { git = "https://github.com/gpui-ce/gpui-ce", rev = "c738623ffbcec2aeddc44a645cc6b74646d5cf97" }
-gpui_elements = { git = "https://github.com/gpui-ce/gpui-ce", rev = "c738623ffbcec2aeddc44a645cc6b74646d5cf97" }
+# GPUI Kit (crates.io, without gpui-shell)
+gpui-kit = { version = "0.6.0", default-features = false, features = ["component", "assets"] }
 async-channel = "2"
 rfd = "0.15"
 unicode-segmentation = "1.12"

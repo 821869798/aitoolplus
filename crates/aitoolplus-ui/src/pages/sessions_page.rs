@@ -5,7 +5,9 @@ use aitoolplus_core::tools::ToolId;
 use gpui::{Context, IntoElement, div, prelude::*, px};
 use serde_json::Value;
 
-use crate::components::{BadgeKind, ButtonVariant, badge, button_l, empty_state, page_header};
+use crate::components::{
+    BadgeKind, ButtonVariant, badge, button_l, empty_state, input_container, page_header,
+};
 use crate::text_input::TextInput;
 use crate::workspace::Workspace;
 
@@ -39,16 +41,19 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                 .rounded(px(6.0))
                 .text_size(px(12.5))
                 .when(is_on, |s| {
-                    s.bg(t.accent_subtle)
+                    s.bg(t.card_bg)
                         .border_1()
                         .border_color(t.accent)
                         .text_color(t.accent)
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .shadow_xs()
                 })
                 .when(!is_on, |s| {
                     s.bg(t.input_bg)
                         .border_1()
-                        .border_color(t.input_border)
+                        .border_color(t.card_border)
                         .text_color(t.text_secondary)
+                        .hover(|h| h.bg(t.card_hover).text_color(t.text_primary))
                 })
                 .on_click(cx.listener(move |ws, _ev: &gpui::ClickEvent, _w, cx| {
                     ws.ui.sessions_tool = key;
@@ -118,6 +123,9 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     let mut section = div()
         .flex()
         .flex_col()
+        .w_full()
+        .max_w(px(860.0))
+        .min_w(px(0.0))
         .gap(px(12.0))
         .child(page_header(
             &t,
@@ -132,12 +140,7 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         .child(
             div()
                 .w(px(320.0))
-                .p(px(8.0))
-                .rounded(px(8.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(t.input_border)
-                .child(search),
+                .child(input_container(&t, search)),
         );
 
     if filtered.is_empty() {
@@ -197,33 +200,48 @@ fn session_row(
         .flex_col()
         .w_full()
         .min_w(px(0.0))
-        .items_start()
-        .gap(px(8.0))
-        .p(px(12.0))
+        .gap(px(10.0))
+        .p(px(14.0))
         .rounded(px(8.0))
         .bg(t.card_bg)
         .border_1()
         .border_color(if is_open { t.accent } else { t.card_border })
-        .hover(|h| h.bg(t.card_hover))
-        .child(badge(&t, fmt_time(s.last_active_at), BadgeKind::Accent))
+        .shadow_xs()
+        .hover(move |h| {
+            h.bg(t.card_hover).border_color(if is_open {
+                t.accent
+            } else {
+                t.card_border_hover
+            })
+        })
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(2.0))
-                .flex_1()
+                .gap(px(4.0))
+                .w_full()
                 .min_w(px(0.0))
+                .overflow_hidden()
                 .child(
                     div()
-                        .text_size(px(13.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_primary)
-                        .child(display_title),
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(t.text_primary)
+                                .overflow_hidden()
+                                .child(display_title),
+                        )
+                        .child(badge(&t, fmt_time(s.last_active_at), BadgeKind::Accent)),
                 )
                 .children(s.project_dir.clone().map(|d| {
                     div()
-                        .text_size(px(11.0))
+                        .text_size(px(11.5))
                         .text_color(t.text_muted)
+                        .overflow_hidden()
                         .child(d)
                         .into_any_element()
                 })),
@@ -425,7 +443,7 @@ pub fn render_rename_dialog(
         .flex()
         .flex_col()
         .gap(px(12.0))
-        .child(input.clone())
+        .child(input_container(&t, input.clone()))
         .child(
             div()
                 .flex()

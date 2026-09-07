@@ -86,7 +86,7 @@ pub fn pump_messages(
                 let handle = cx.update(|cx| {
                     cx.windows()
                         .into_iter()
-                        .find_map(|window| window.downcast::<aitoolplus_ui::Workspace>())
+                        .find_map(|window| window.downcast::<gpui_kit::component::Root>())
                 });
                 let handle = match handle {
                     Some(handle) => Some(handle),
@@ -96,31 +96,35 @@ pub fn pump_messages(
                     }),
                 };
                 if let Some(handle) = handle {
-                    let _ = handle.update(cx, |workspace, window, cx| {
-                        if message.starts_with("aitoolbox://") {
-                            match aitoolplus_core::deeplink::import_into_store(
-                                &message,
-                                workspace.store.store_mut(),
-                            ) {
-                                Ok((tool, name)) => {
-                                    workspace.persist_store();
-                                    workspace.navigate(aitoolplus_ui::pages::Page::Tool(tool), cx);
-                                    workspace.ui.toast(
-                                        workspace
-                                            .i18n
-                                            .t(
-                                                &format!("已导入供应商 {name}"),
-                                                &format!("imported provider {name}"),
-                                            )
-                                            .to_string(),
-                                        false,
-                                    );
+                    let _ = handle.update(cx, |root, window, cx| {
+                        if let Ok(workspace) = root.view().clone().downcast::<aitoolplus_ui::Workspace>() {
+                            workspace.update(cx, |workspace, cx| {
+                                if message.starts_with("aitoolbox://") {
+                                    match aitoolplus_core::deeplink::import_into_store(
+                                        &message,
+                                        workspace.store.store_mut(),
+                                    ) {
+                                        Ok((tool, name)) => {
+                                            workspace.persist_store();
+                                            workspace.navigate(aitoolplus_ui::pages::Page::Tool(tool), cx);
+                                            workspace.ui.toast(
+                                                workspace
+                                                    .i18n
+                                                    .t(
+                                                        &format!("已导入供应商 {name}"),
+                                                        &format!("imported provider {name}"),
+                                                    )
+                                                    .to_string(),
+                                                false,
+                                            );
+                                        }
+                                        Err(error) => workspace.ui.toast(error, true),
+                                    }
                                 }
-                                Err(error) => workspace.ui.toast(error, true),
-                            }
+                                cx.notify();
+                            });
                         }
                         window.activate_window();
-                        cx.notify();
                     });
                 }
             }

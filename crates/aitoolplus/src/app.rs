@@ -15,6 +15,52 @@ pub fn request_quit() {
     ALLOW_WINDOW_CLOSE.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+#[cfg(windows)]
+pub fn get_window_hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundation::HWND> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(win32) => {
+            Some(windows::Win32::Foundation::HWND(win32.hwnd.get() as _))
+        }
+        _ => None,
+    }
+}
+
+pub fn hide_window_to_tray(window: &gpui::Window) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        if let Some(hwnd) = get_window_hwnd(window) {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+            return;
+        }
+    }
+    window.minimize_window();
+}
+
+pub fn restore_window_from_tray(window: &gpui::Window) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+        };
+        if let Some(hwnd) = get_window_hwnd(window) {
+            unsafe {
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                } else {
+                    let _ = ShowWindow(hwnd, SW_SHOW);
+                }
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+    }
+    window.activate_window();
+}
+
 /// gpui's App context, aliased to avoid colliding with our own `App`.
 use gpui::App as GpuiAppContext;
 
@@ -147,7 +193,7 @@ pub fn open_main_window(
     application: &mut App,
     tray: crate::tray::TrayMenuUpdater,
     cx: &mut GpuiAppContext,
-) -> anyhow::Result<gpui::WindowHandle<Workspace>> {
+) -> anyhow::Result<gpui::WindowHandle<gpui_kit::component::Root>> {
     let paths = application.paths.clone();
     let store = std::mem::replace(&mut application.store, StoreHandle::open(&paths)?);
     let settings = application.settings.clone();
@@ -225,18 +271,31 @@ pub fn open_main_window(
                 })
                 .unwrap_or(false);
             if minimize {
-                window.minimize_window();
+                hide_window_to_tray(window);
                 false
             } else {
+                crate::app::request_quit();
+                cx.quit();
                 true
             }
         });
         window.focus(&workspace.read(cx).focus_handle(cx), cx);
-        workspace
+        cx.new(|cx| gpui_kit::component::Root::new(workspace, window, cx))
     })?;
 
     if start_minimized {
-        let _ = handle.update(cx, |_, window, _| window.minimize_window());
+        let _ = handle.update(cx, |_, window, _| hide_window_to_tray(window));
     }
     Ok(handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_request_quit() {
+        request_quit();
+        assert!(ALLOW_WINDOW_CLOSE.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }

@@ -28,6 +28,9 @@ impl ProviderPreset {
     /// Build the final settings JSON with the user's key injected.
     pub fn settings_with_key(&self, api_key: &str) -> Value {
         let mut out = self.settings.clone();
+        if self.api_key_field.is_empty() {
+            return out;
+        }
         // Claude/Gemini presets inject into env.
         if let Some(env) = out.get_mut("env").and_then(Value::as_object_mut) {
             env.insert(
@@ -68,6 +71,14 @@ fn s(env_pairs: &[(&str, &str)]) -> Value {
 /// Claude Code presets (cc-switch parity, top vendors).
 pub fn claude_code_presets() -> Vec<ProviderPreset> {
     vec![
+        ProviderPreset {
+            name: "Claude 官方",
+            category: "official",
+            website_url: "https://claude.ai",
+            api_key_field: "",
+            settings: s(&[]),
+            extra_env: &[],
+        },
         ProviderPreset {
             name: "Kimi (Moonshot)",
             category: "official",
@@ -387,17 +398,30 @@ pub fn codex_presets() -> Vec<ProviderPreset> {
 
 /// Gemini CLI presets.
 pub fn gemini_presets() -> Vec<ProviderPreset> {
-    vec![ProviderPreset {
-        name: "Google AI Studio (API Key)",
-        category: "official",
-        website_url: "https://aistudio.google.com/app/apikey",
-        api_key_field: "GEMINI_API_KEY",
-        settings: serde_json::json!({
-            "env": { "GEMINI_API_KEY": "" },
-            "security": { "auth": { "selectedType": "gemini-api-key" } }
-        }),
-        extra_env: &[],
-    }]
+    vec![
+        ProviderPreset {
+            name: "Google 官方 (Web OAuth)",
+            category: "official",
+            website_url: "https://aistudio.google.com",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "env": {},
+                "security": { "auth": { "selectedType": "oauth" } }
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
+            name: "Google AI Studio (API Key)",
+            category: "official",
+            website_url: "https://aistudio.google.com/app/apikey",
+            api_key_field: "GEMINI_API_KEY",
+            settings: serde_json::json!({
+                "env": { "GEMINI_API_KEY": "" },
+                "security": { "auth": { "selectedType": "gemini-api-key" } }
+            }),
+            extra_env: &[],
+        },
+    ]
 }
 
 /// All presets for a tool.
@@ -417,13 +441,15 @@ mod tests {
     #[test]
     fn claude_presets_have_valid_shapes() {
         let presets = claude_code_presets();
-        assert!(presets.len() >= 14, "expected a cc-switch-sized list");
+        assert!(presets.len() >= 15, "expected a cc-switch-sized list");
         for p in &presets {
             assert!(!p.name.is_empty());
             assert!(p.website_url.starts_with("https://"));
             assert!(p.settings.get("env").is_some(), "{} missing env", p.name);
             assert!(
-                p.api_key_field == "ANTHROPIC_AUTH_TOKEN" || p.api_key_field == "ANTHROPIC_API_KEY",
+                p.api_key_field.is_empty()
+                    || p.api_key_field == "ANTHROPIC_AUTH_TOKEN"
+                    || p.api_key_field == "ANTHROPIC_API_KEY",
                 "{} bad key field",
                 p.name
             );
@@ -488,7 +514,7 @@ mod tests {
     fn presets_router() {
         assert!(!presets_for(ToolId::ClaudeCode).is_empty());
         assert!(!presets_for(ToolId::Codex).is_empty());
-        assert_eq!(presets_for(ToolId::GeminiCli).len(), 1);
+        assert_eq!(presets_for(ToolId::GeminiCli).len(), 2);
         assert!(
             presets_for(ToolId::Pi).is_empty(),
             "Pi discovers from runtime instead"

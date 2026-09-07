@@ -2,6 +2,8 @@
 
 #![allow(clippy::type_complexity, clippy::collapsible_if)]
 
+extern crate gpui_kit as gpui;
+
 pub mod components;
 pub mod i18n;
 pub mod layout;
@@ -19,10 +21,10 @@ pub use workspace::{Workspace, WorkspaceCallbacks};
 /// want to live in constants. (Same trick as flyclip.)
 pub(crate) const fn rgba_const(hex: u32) -> gpui::Rgba {
     let [r, g, b, a] = hex.to_be_bytes();
-    gpui::Rgba::new(
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
-    )
+    gpui::Rgba {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        a: a as f32 / 255.0,
+    }
 }

@@ -490,7 +490,6 @@ impl Element for TextAreaElement {
                     background_color: None,
                     underline: None,
                     strikethrough: None,
-                    letter_spacing: None,
                 }]
             };
             let shaped = window.text_system().shape_line(

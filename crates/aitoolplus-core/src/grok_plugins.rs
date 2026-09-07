@@ -1,6 +1,6 @@
 //! Grok native plugin management (`grok plugin`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,21 @@ fn resolve_grok() -> Option<PathBuf> {
     {
         return Some(PathBuf::from(path));
     }
+    // Direct filesystem check for common global install locations
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let home = PathBuf::from(home);
+        let candidates = [
+            home.join(".bun").join("bin").join("grok.exe"),
+            home.join("AppData")
+                .join("Roaming")
+                .join("npm")
+                .join("grok.cmd"),
+            home.join(".local").join("bin").join("grok"),
+        ];
+        if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+            return Some(path);
+        }
+    }
     if let Ok(output) = Command::new("where").arg("grok").output()
         && let Some(path) = String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -41,24 +56,12 @@ fn resolve_grok() -> Option<PathBuf> {
     {
         return Some(path);
     }
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    let home = PathBuf::from(home);
-    [
-        home.join(".bun").join("bin").join("grok.exe"),
-        home.join("AppData")
-            .join("Roaming")
-            .join("npm")
-            .join("grok.cmd"),
-        home.join(".local").join("bin").join("grok"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
+    None
 }
 
-fn run(paths: &Paths, args: &[&str]) -> Result<String, String> {
-    let program = resolve_grok().ok_or("未找到 grok CLI")?;
+fn run_with_program(program: &Path, paths: &Paths, args: &[&str]) -> Result<String, String> {
     let label = program.display().to_string();
-    let mut command = Command::new(&program);
+    let mut command = Command::new(program);
     command
         .args(args)
         .env("GROK_HOME", paths.tool_root(ToolId::Grok));
@@ -75,6 +78,11 @@ fn run(paths: &Paths, args: &[&str]) -> Result<String, String> {
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+fn run(paths: &Paths, args: &[&str]) -> Result<String, String> {
+    let program = resolve_grok().ok_or("未找到 grok CLI")?;
+    run_with_program(&program, paths, args)
 }
 
 fn capabilities(value: &Value) -> Vec<String> {
@@ -167,6 +175,22 @@ pub fn list_available(paths: &Paths) -> Result<Vec<GrokPlugin>, String> {
             .map_err(|error| format!("invalid Grok available plugin JSON: {error}"))?;
     let array = value.as_array().cloned().unwrap_or_default();
     Ok(parse(&array, true))
+}
+
+/// Fetch both installed and available plugins using a single resolved binary.
+pub fn list_all(paths: &Paths) -> Result<(Vec<GrokPlugin>, Vec<GrokPlugin>), String> {
+    let program = resolve_grok().ok_or("未找到 grok CLI")?;
+    let installed_json = run_with_program(&program, paths, &["plugin", "list", "--json"])?;
+    let installed_val: Value = serde_json::from_str(&installed_json)
+        .map_err(|e| format!("invalid Grok plugin JSON: {e}"))?;
+    let installed = parse(installed_val.as_array().unwrap_or(&vec![]), false);
+
+    let avail_json = run_with_program(&program, paths, &["plugin", "list", "--json", "--available"])?;
+    let avail_val: Value = serde_json::from_str(&avail_json)
+        .map_err(|e| format!("invalid Grok available plugin JSON: {e}"))?;
+    let available = parse(avail_val.as_array().unwrap_or(&vec![]), true);
+
+    Ok((installed, available))
 }
 
 pub fn install(paths: &Paths, plugin: &GrokPlugin) -> Result<(), String> {

@@ -2,9 +2,12 @@
 //! CLI configurations (providers, prompts, MCP, skills, sessions), mirroring
 //! the feature set of coulsontl/ai-toolbox.
 
+extern crate gpui_kit as gpui;
+
 mod app;
 mod autostart;
 mod config_watch;
+mod icon;
 mod log;
 mod single_instance;
 mod tray;
@@ -61,26 +64,26 @@ fn main() {
 
     tracing::info!("starting aitoolplus (data at {})", paths.app_data.display());
 
-    // Tray on its own thread + GPUI pump for its events.
-    let tray_handle = tray::spawn_tray();
-    tray_handle.update_groups(tray::snapshot_from_store(application.store.store()));
-    let tray_for_window = tray_handle.updater();
-    let protocol_updater = tray_handle.updater();
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
+        gpui_kit::init(cx);
 
-    gpui_platform::application().run(move |cx| {
         // Keep running with no windows: GPUI must not quit when the
         // last window closes; the tray reopens it.
-        cx.set_quit_mode(gpui::QuitMode::Explicit);
+        cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
 
-        if let Err(e) = app::open_main_window(&mut application, tray_for_window, cx) {
+        let initial_groups = tray::snapshot_from_store(application.store.store());
+        let tray_updater = tray::init_tray(initial_groups, cx);
+
+        if let Err(e) = app::open_main_window(&mut application, tray_updater.clone(), cx) {
             tracing::error!("failed to open main window: {e}");
             cx.quit();
             return;
         }
 
-        single_instance::pump_messages(message_receiver, protocol_updater, cx);
+        single_instance::pump_messages(message_receiver, tray_updater, cx);
         config_watch::pump(config_events, cx);
-        tray::pump_tray_events(tray_handle, cx);
     });
 
     drop(instance);

@@ -80,20 +80,7 @@ pub fn resolve_pi_program() -> Option<PathBuf> {
     {
         return Some(PathBuf::from(path));
     }
-    if let Ok(found) = Command::new("where").arg("pi").output() {
-        let first = String::from_utf8_lossy(&found.stdout)
-            .lines()
-            .next()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(PathBuf::from);
-        if let Some(p) = first
-            && p.is_file()
-        {
-            return Some(p);
-        }
-    }
-    // bun global bin is the default install location for `pi`
+    // Direct filesystem check for common global install locations (much faster than `where.exe`)
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         let home = PathBuf::from(home);
         let bun = home.join(".bun").join("bin").join("pi.exe");
@@ -109,6 +96,19 @@ pub fn resolve_pi_program() -> Option<PathBuf> {
             return Some(npm_global);
         }
     }
+    if let Ok(found) = Command::new("where").arg("pi").output() {
+        let first = String::from_utf8_lossy(&found.stdout)
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(PathBuf::from);
+        if let Some(p) = first
+            && p.is_file()
+        {
+            return Some(p);
+        }
+    }
     None
 }
 
@@ -120,16 +120,17 @@ pub fn extensions_path(paths: &Paths) -> PathBuf {
     pi_root(paths).join("extensions")
 }
 
-/// Run a `pi` subcommand against the runtime root. Returns (stdout, args).
-fn run_pi(paths: &Paths, args: &[&str]) -> Result<(String, Vec<String>), String> {
-    let program = resolve_pi_program().ok_or_else(|| {
-        "未找到 pi CLI。请先安装：npm i -g @mariozechner/pi-coding-agent".to_string()
-    })?;
+/// Run a `pi` subcommand against the runtime root using a resolved program binary.
+fn run_pi_with_program(
+    program: &Path,
+    paths: &Paths,
+    args: &[&str],
+) -> Result<(String, Vec<String>), String> {
     let cli_label = program.display().to_string();
     let root = pi_root(paths);
 
     let run = |args: &[&str]| -> Result<String, String> {
-        let mut cmd = Command::new(&program);
+        let mut cmd = Command::new(program);
         cmd.args(args)
             .env("PI_CODING_AGENT_DIR", &root)
             .env("NPM_CONFIG_LEGACY_PEER_DEPS", "true");
@@ -170,6 +171,14 @@ fn run_pi(paths: &Paths, args: &[&str]) -> Result<(String, Vec<String>), String>
         }
         Err(err) => Err(err),
     }
+}
+
+/// Run a `pi` subcommand against the runtime root. Returns (stdout, args).
+fn run_pi(paths: &Paths, args: &[&str]) -> Result<(String, Vec<String>), String> {
+    let program = resolve_pi_program().ok_or_else(|| {
+        "未找到 pi CLI。请先安装：npm i -g @mariozechner/pi-coding-agent".to_string()
+    })?;
+    run_pi_with_program(&program, paths, args)
 }
 
 fn is_unknown_no_approve_error(message: &str) -> bool {
@@ -391,17 +400,22 @@ pub fn fetch_npm_latest_version(package: &str) -> Result<String, String> {
         .ok_or_else(|| "no latest tag".into())
 }
 
-/// Fast local list: `pi list` packages + local extensions + installed
-/// versions. No network calls; safe to invoke while building a UI page.
+/// Local extension list: `pi list` packages + local extensions + installed
+/// versions. Invokes external processes, so call from background thread/task.
 pub fn list_extensions(paths: &Paths) -> Result<PiExtensionListResult, String> {
-    let cli_path = resolve_pi_program().map(|p| p.display().to_string());
-    let cli_version = cli_path
+    let program = resolve_pi_program();
+    let cli_path = program.as_ref().map(|p| p.display().to_string());
+    let cli_version = program
         .as_ref()
-        .and_then(|_| run_pi(paths, &["--version"]).ok())
+        .and_then(|p| run_pi_with_program(p, paths, &["--version"]).ok())
         .map(|(out, _)| out.lines().next().unwrap_or("").trim().to_string())
         .filter(|v| !v.is_empty());
 
-    let mut extensions = match run_pi(paths, &["list", "--no-approve"]) {
+    let prog = program.ok_or_else(|| {
+        "未找到 pi CLI。请先安装：npm i -g @mariozechner/pi-coding-agent".to_string()
+    })?;
+
+    let mut extensions = match run_pi_with_program(&prog, paths, &["list", "--no-approve"]) {
         Ok((out, _)) => parse_list_output(&out),
         Err(e) => return Err(e),
     };

@@ -10,7 +10,8 @@ use gpui::{Context, IntoElement, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::components::{
-    BadgeKind, ButtonVariant, badge, button_l, empty_state, page_header, section_title,
+    BadgeKind, ButtonVariant, badge, button_l, empty_state, input_container, page_header,
+    section_title,
 };
 use crate::text_input::TextInput;
 use crate::workspace::Workspace;
@@ -70,6 +71,8 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
     let mut section = div()
         .flex()
         .flex_col()
+        .w_full()
+        .min_w(px(0.0))
         .gap(px(12.0))
         .child(page_header(
             &t,
@@ -205,11 +208,18 @@ fn server_row(s: &McpServer, ws: &mut Workspace, cx: &mut Context<Workspace>) ->
         .bg(t.card_bg)
         .border_1()
         .border_color(if enabled_count > 0 {
-            t.success
+            crate::rgba_const(0x10b98166)
         } else {
             t.card_border
         })
-        .hover(|h| h.bg(t.card_hover));
+        .shadow_xs()
+        .hover(move |h| {
+            h.bg(t.card_hover).border_color(if enabled_count > 0 {
+                crate::rgba_const(0x10b981aa)
+            } else {
+                t.card_border_hover
+            })
+        });
 
     // header line
     row = row.child(
@@ -519,7 +529,7 @@ pub fn render_mcp_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("名称", "Name")))
-                .child(name.clone()),
+                .child(input_container(&t, name.clone())),
         )
         .child(
             div().flex().gap(px(8.0)).child(
@@ -587,11 +597,11 @@ pub fn render_mcp_dialog(
                         .flex()
                         .gap(px(8.0))
                         .w_full()
-                        .child(div().flex_1().min_w(px(0.0)).child(command.clone()))
-                        .child(div().w(px(200.0)).child(args.clone())),
+                        .child(div().flex_1().min_w(px(0.0)).child(input_container(&t, command.clone())))
+                        .child(div().w(px(200.0)).child(input_container(&t, args.clone()))),
                 )
                 .child(field_label(i.t("环境变量", "Environment")))
-                .child(environment.clone())
+                .child(input_container(&t, environment.clone()))
                 .into_any_element()
         } else {
             div()
@@ -599,9 +609,9 @@ pub fn render_mcp_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("服务器 URL", "Server URL")))
-                .child(url.clone())
+                .child(input_container(&t, url.clone()))
                 .child(field_label(i.t("请求头", "Headers")))
-                .child(headers.clone())
+                .child(input_container(&t, headers.clone()))
                 .into_any_element()
         })
         .child(
@@ -610,7 +620,7 @@ pub fn render_mcp_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("工具超时（秒）", "Tool timeout (seconds)")))
-                .child(timeout_seconds.clone()),
+                .child(input_container(&t, timeout_seconds.clone())),
         )
         .child(
             div()
@@ -618,7 +628,7 @@ pub fn render_mcp_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("分组", "Group")))
-                .child(group.clone()),
+                .child(input_container(&t, group.clone())),
         )
         .child(
             div()

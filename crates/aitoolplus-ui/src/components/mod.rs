@@ -17,6 +17,7 @@ pub enum ButtonVariant {
     Secondary,
     Danger,
     Ghost,
+    Outline,
 }
 
 const WHITE: Rgba = crate::rgba_const(0xffffffff);
@@ -32,12 +33,46 @@ pub fn button_l<V: 'static>(
 ) -> gpui::AnyElement {
     let t = theme.clone();
     let label: SharedString = label.into();
-    let (bg, bg_hover, fg, border) = match variant {
-        ButtonVariant::Primary => (t.accent, t.accent_hover, WHITE, None),
-        ButtonVariant::Secondary => (t.card_bg, t.card_hover, t.text_primary, Some(t.card_border)),
-        ButtonVariant::Danger => (t.danger, t.danger, WHITE, None),
-        ButtonVariant::Ghost => (t.bg, t.row_hover, t.text_secondary, None),
+
+    let (bg, bg_hover, fg, border, has_shadow) = match variant {
+        ButtonVariant::Primary => (
+            t.accent,
+            t.accent_hover,
+            WHITE,
+            Some(crate::rgba_const(0xffffff26)),
+            true,
+        ),
+        ButtonVariant::Secondary => (
+            t.card_bg,
+            t.card_hover,
+            t.text_primary,
+            Some(t.card_border),
+            true,
+        ),
+        ButtonVariant::Danger => (
+            t.danger_subtle,
+            t.danger,
+            t.danger,
+            Some(crate::rgba_const(0xf8717140)),
+            false,
+        ),
+        ButtonVariant::Ghost => (
+            crate::rgba_const(0x00000000),
+            t.row_hover,
+            t.text_secondary,
+            None,
+            false,
+        ),
+        ButtonVariant::Outline => (
+            crate::rgba_const(0x00000000),
+            t.row_hover,
+            t.text_primary,
+            Some(t.card_border),
+            false,
+        ),
     };
+
+    let is_danger = variant == ButtonVariant::Danger;
     let is_ghost = variant == ButtonVariant::Ghost;
 
     div()
@@ -47,25 +82,30 @@ pub fn button_l<V: 'static>(
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .h(px(30.0))
-        .px(px(14.0))
+        .h(px(28.0))
+        .px(px(12.0))
         .rounded(px(6.0))
-        .text_size(px(13.0))
-        .when(!is_ghost, |s| s.bg(bg))
-        .map(move |s| match border {
-            Some(b) => s.border_1().border_color(b),
-            None => s,
-        })
-        .text_color(fg)
+        .text_size(px(12.5))
         .font_weight(gpui::FontWeight::MEDIUM)
+        .bg(bg)
+        .text_color(fg)
+        .when_some(border, |s, b| s.border_1().border_color(b))
+        .when(has_shadow, |s| s.shadow_xs())
         .hover(move |h| {
-            let mut h2 = h.bg(bg_hover);
-            if is_ghost {
-                h2 = h2.text_color(t.text_primary);
+            let mut h = h.bg(bg_hover);
+            if is_danger {
+                h = h
+                    .text_color(WHITE)
+                    .border_color(t.danger)
+                    .shadow_xs();
+            } else if is_ghost {
+                h = h.text_color(t.text_primary);
+            } else if variant == ButtonVariant::Secondary || variant == ButtonVariant::Outline {
+                h = h.border_color(t.card_border_hover);
             }
-            h2
+            h
         })
-        .active(move |a| a.bg(t.active_overlay))
+        .active(move |a| a.opacity(0.85))
         .on_mouse_down(MouseButton::Left, cx.listener(on_click))
         .child(label)
         .into_any_element()
@@ -84,8 +124,9 @@ pub fn icon_button_l<V: 'static>(
     let t = theme.clone();
     let icon: SharedString = icon.into();
     let title: SharedString = title.into();
-    let hover_color = if danger { t.danger_subtle } else { t.row_hover };
-    let text_color = if danger { t.danger } else { t.text_secondary };
+    let hover_bg = if danger { t.danger_subtle } else { t.row_hover };
+    let text_color = if danger { t.danger } else { t.text_muted };
+    let hover_text = if danger { t.danger } else { t.text_primary };
 
     div()
         .id(id.into())
@@ -96,12 +137,10 @@ pub fn icon_button_l<V: 'static>(
         .justify_center()
         .size(px(28.0))
         .rounded(px(6.0))
-        .text_size(px(14.0))
+        .text_size(px(13.5))
         .text_color(text_color)
-        .hover(move |h| {
-            h.bg(hover_color)
-                .text_color(if danger { t.danger } else { t.text_primary })
-        })
+        .hover(move |h| h.bg(hover_bg).text_color(hover_text))
+        .active(|a| a.opacity(0.8))
         .tooltip(move |_window, cx| {
             let tip = title.clone();
             cx.new(|_| Tooltip::new(tip)).into()
@@ -127,15 +166,18 @@ impl Tooltip {
 
 impl gpui::Render for Tooltip {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let bg = crate::rgba_const(0x1a1a1cf2);
+        let bg = crate::rgba_const(0x18181be6);
         div()
             .px(px(8.0))
             .py(px(4.0))
             .rounded(px(6.0))
             .bg(bg)
+            .border_1()
+            .border_color(crate::rgba_const(0xffffff1a))
             .text_size(px(11.5))
+            .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(WHITE)
-            .shadow_lg()
+            .shadow_md()
             .whitespace_nowrap()
             .child(self.text.clone())
     }
@@ -153,9 +195,12 @@ pub fn toggle<V: 'static>(
     on_toggle: impl Fn(&mut V, &gpui::MouseDownEvent, &mut Window, &mut Context<V>) + 'static,
 ) -> gpui::AnyElement {
     let t = theme.clone();
-    let track = if on { t.track_on } else { t.track_off };
-    let knob_color = t.thumb;
-    let knob_left = if on { px(20.0) } else { px(2.0) };
+    let (track_bg, track_border) = if on {
+        (t.accent, crate::rgba_const(0xffffff22))
+    } else {
+        (t.track_off, t.card_border)
+    };
+    let knob_left = if on { px(18.0) } else { px(2.0) };
 
     div()
         .id(id.into())
@@ -163,18 +208,21 @@ pub fn toggle<V: 'static>(
         .relative()
         .flex_shrink_0()
         .h(px(20.0))
-        .w(px(38.0))
+        .w(px(36.0))
         .rounded(px(10.0))
-        .bg(track)
+        .bg(track_bg)
+        .border_1()
+        .border_color(track_border)
+        .hover(|h| h.opacity(0.92))
         .child(
             div()
                 .absolute()
-                .top(px(2.0))
+                .top(px(1.0))
                 .left(knob_left)
                 .size(px(16.0))
                 .rounded(px(8.0))
-                .bg(knob_color)
-                .shadow_sm(),
+                .bg(WHITE)
+                .shadow_xs(),
         )
         .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
         .into_any_element()
@@ -189,16 +237,18 @@ pub fn card(theme: &Theme, children: Vec<gpui::AnyElement>) -> gpui::AnyElement 
     let mut builder = div()
         .flex()
         .flex_col()
-        .p(px(16.0))
-        .rounded(px(10.0))
+        .w_full()
+        .p(px(14.0))
+        .rounded(px(8.0))
         .bg(t.card_bg)
         .border_1()
-        .border_color(t.card_border);
+        .border_color(t.card_border)
+        .shadow_xs();
     for (idx, row) in children.into_iter().enumerate() {
         if idx > 0 {
             builder = builder.child(
                 div()
-                    .my(px(10.0))
+                    .my(px(8.0))
                     .h(px(1.0))
                     .w_full()
                     .bg(t.card_border)
@@ -232,7 +282,7 @@ pub fn section_title(
             s.child(
                 div()
                     .text_size(px(12.0))
-                    .text_color(t.text_secondary)
+                    .text_color(t.text_muted)
                     .child(sib),
             )
         })
@@ -253,14 +303,14 @@ pub fn page_header(
         .gap(px(3.0))
         .child(
             div()
-                .text_size(px(20.0))
+                .text_size(px(18.0))
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(t.text_primary)
                 .child(title),
         )
         .child(
             div()
-                .text_size(px(13.0))
+                .text_size(px(12.5))
                 .text_color(t.text_secondary)
                 .child(subtitle),
         )
@@ -282,27 +332,29 @@ pub enum BadgeKind {
 
 pub fn badge(theme: &Theme, text: impl Into<SharedString>, kind: BadgeKind) -> gpui::AnyElement {
     let t = theme.clone();
-    let (fg, bg) = match kind {
-        BadgeKind::Success => (t.success, t.success_subtle),
-        BadgeKind::Warning => (t.warning, t.warning_subtle),
-        BadgeKind::Danger => (t.danger, t.danger_subtle),
-        BadgeKind::Neutral => (t.text_secondary, t.hover_overlay),
-        BadgeKind::Accent => (t.accent, t.accent_subtle),
+    let (fg, bg, border) = match kind {
+        BadgeKind::Success => (t.success, t.success_subtle, crate::rgba_const(0x34d39940)),
+        BadgeKind::Warning => (t.warning, t.warning_subtle, crate::rgba_const(0xfbbf2440)),
+        BadgeKind::Danger => (t.danger, t.danger_subtle, crate::rgba_const(0xf8717140)),
+        BadgeKind::Neutral => (t.text_secondary, t.hover_overlay, t.card_border),
+        BadgeKind::Accent => (t.accent, t.accent_subtle, crate::rgba_const(0x4c8dff40)),
     };
     let text: SharedString = text.into();
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(6.0))
+        .gap(px(5.0))
         .px(px(8.0))
-        .h(px(22.0))
-        .rounded(px(11.0))
+        .h(px(20.0))
+        .rounded(px(10.0))
         .bg(bg)
+        .border_1()
+        .border_color(border)
         .child(
             div()
-                .size(px(6.0))
-                .rounded(px(3.0))
+                .size(px(5.0))
+                .rounded(px(2.5))
                 .bg(fg)
                 .into_any_element(),
         )
@@ -357,4 +409,39 @@ pub fn empty_state(
                 .child(hint),
         )
         .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// Input & TextArea Containers
+// ---------------------------------------------------------------------------
+
+pub fn input_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
+    let t = theme.clone();
+    div()
+        .w_full()
+        .h(px(32.0))
+        .px(px(10.0))
+        .flex()
+        .items_center()
+        .rounded(px(6.0))
+        .bg(t.input_bg)
+        .border_1()
+        .border_color(t.input_border)
+        .shadow_xs()
+        .hover(move |h| h.border_color(t.card_border_hover))
+        .child(child)
+}
+
+pub fn textarea_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
+    let t = theme.clone();
+    div()
+        .w_full()
+        .p(px(10.0))
+        .rounded(px(6.0))
+        .bg(t.input_bg)
+        .border_1()
+        .border_color(t.input_border)
+        .shadow_xs()
+        .hover(move |h| h.border_color(t.card_border_hover))
+        .child(child)
 }

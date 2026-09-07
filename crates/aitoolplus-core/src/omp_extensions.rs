@@ -39,6 +39,21 @@ fn resolve_omp() -> Option<PathBuf> {
     {
         return Some(PathBuf::from(path));
     }
+    // Direct filesystem check for common global install locations
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let home = PathBuf::from(home);
+        let candidates = [
+            home.join(".bun").join("bin").join("omp.exe"),
+            home.join("AppData")
+                .join("Roaming")
+                .join("npm")
+                .join("omp.cmd"),
+            home.join(".local").join("bin").join("omp"),
+        ];
+        if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
+            return Some(path);
+        }
+    }
     if let Ok(output) = Command::new("where").arg("omp").output()
         && let Some(path) = String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -50,24 +65,12 @@ fn resolve_omp() -> Option<PathBuf> {
     {
         return Some(path);
     }
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    let home = PathBuf::from(home);
-    [
-        home.join(".bun").join("bin").join("omp.exe"),
-        home.join("AppData")
-            .join("Roaming")
-            .join("npm")
-            .join("omp.cmd"),
-        home.join(".local").join("bin").join("omp"),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
+    None
 }
 
-fn run(paths: &Paths, args: &[&str]) -> Result<String, String> {
-    let program = resolve_omp().ok_or("未找到 omp CLI")?;
+fn run_with_program(program: &Path, paths: &Paths, args: &[&str]) -> Result<String, String> {
     let label = program.display().to_string();
-    let mut command = Command::new(&program);
+    let mut command = Command::new(program);
     command.args(args).env("PI_CODING_AGENT_DIR", root(paths));
     #[cfg(windows)]
     {
@@ -83,6 +86,11 @@ fn run(paths: &Paths, args: &[&str]) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(format!("{stderr}\nomp_cli={label}"))
     }
+}
+
+fn run(paths: &Paths, args: &[&str]) -> Result<String, String> {
+    let program = resolve_omp().ok_or("未找到 omp CLI")?;
+    run_with_program(&program, paths, args)
 }
 
 fn parse_cli_list(raw: &str) -> Vec<PiExtensionSummary> {
@@ -198,7 +206,7 @@ fn scan_local(directory: &Path) -> Result<Vec<PiExtensionSummary>, String> {
 pub fn list(paths: &Paths) -> Result<OmpExtensionList, String> {
     let cli = resolve_omp();
     let raw = match &cli {
-        Some(_) => run(paths, &["plugin", "list", "--json"]),
+        Some(prog) => run_with_program(prog, paths, &["plugin", "list", "--json"]),
         None => Ok("{}".into()),
     }?;
     let mut extensions = parse_cli_list(&raw);
@@ -212,7 +220,7 @@ pub fn list(paths: &Paths) -> Result<OmpExtensionList, String> {
     extensions.sort_by(|a, b| a.source.cmp(&b.source));
     let cli_version = cli
         .as_ref()
-        .and_then(|_| run(paths, &["--version"]).ok())
+        .and_then(|prog| run_with_program(prog, paths, &["--version"]).ok())
         .map(|value| value.trim().into());
     Ok(OmpExtensionList {
         extensions_path: extensions_path(paths),

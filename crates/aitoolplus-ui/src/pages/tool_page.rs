@@ -10,8 +10,8 @@ use gpui::{Context, IntoElement, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::components::{
-    self, BadgeKind, ButtonVariant, badge, button_l, empty_state, icon_button_l, page_header,
-    section_title,
+    self, BadgeKind, ButtonVariant, badge, button_l, empty_state, icon_button_l, input_container,
+    page_header, section_title, textarea_container,
 };
 use crate::text_area::TextArea;
 use crate::text_input::TextInput;
@@ -92,8 +92,12 @@ fn tabs_bar(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
 
     let mut bar = div()
         .flex()
+        .items_center()
         .gap(px(4.0))
-        .border_b_1()
+        .p(px(3.0))
+        .rounded(px(8.0))
+        .bg(t.sidebar_bg)
+        .border_1()
         .border_color(t.card_border);
     for (tab, label) in tabs {
         let is_active = tab == current;
@@ -102,18 +106,19 @@ fn tabs_bar(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                 .id(gpui::ElementId::Name(format!("tool-tab-{:?}", tab).into()))
                 .cursor_pointer()
                 .px(px(12.0))
-                .py(px(6.0))
-                .mb(px(-1.0))
+                .py(px(4.5))
                 .rounded(px(6.0))
-                .text_size(px(13.0))
+                .text_size(px(12.5))
                 .when(is_active, |s| {
-                    s.text_color(t.accent)
-                        .border_b_2()
-                        .border_color(t.accent)
-                        .font_weight(gpui::FontWeight::MEDIUM)
+                    s.bg(t.card_bg)
+                        .text_color(t.text_primary)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .shadow_xs()
                 })
-                .when(!is_active, |s| s.text_color(t.text_secondary))
-                .hover(|h| h.text_color(t.text_primary))
+                .when(!is_active, |s| {
+                    s.text_color(t.text_secondary)
+                        .hover(|h| h.text_color(t.text_primary).bg(t.row_hover))
+                })
                 .on_click(cx.listener(move |this, _ev: &gpui::ClickEvent, _w, cx| {
                     this.ui.tool_tab = tab;
                     cx.notify();
@@ -156,6 +161,20 @@ fn providers_section(
             ))
             .child({
                 let mut actions = div().flex().flex_wrap().gap(px(8.0));
+                if let Some(off_id) = aitoolplus_core::providers::official_provider_id(tool) {
+                    if tool != ToolId::ClaudeDesktop {
+                        actions = actions.child(button_l(
+                            "tool-restore-official",
+                            i.t("切回官方", "Switch to Official"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                ws.apply_provider(tool, off_id, cx);
+                            },
+                        ));
+                    }
+                }
                 if let ToolId::ClaudeDesktop = tool {
                     actions = actions.child(button_l(
                         "cd-restore-official",
@@ -336,34 +355,40 @@ fn provider_row(
         .flex()
         .w_full()
         .min_w(px(0.0))
-        .items_center()
-        .gap(px(10.0))
-        .child(status_badge)
-        .child(badge(&t, p.category.as_str(), BadgeKind::Accent))
-        .children(test_badge)
+        .items_start()
+        .justify_between()
+        .gap(px(12.0))
         .child(
             div()
                 .flex()
                 .flex_col()
+                .gap(px(4.0))
                 .flex_1()
                 .min_w(px(0.0))
-                .overflow_hidden()
-                .gap(px(2.0))
                 .child(
                     div()
-                        .text_size(px(13.5))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_primary)
-                        .child(p.name.clone()),
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(t.text_primary)
+                                .child(p.name.clone()),
+                        )
+                        .child(badge(&t, p.category.as_str(), BadgeKind::Accent))
+                        .child(status_badge),
                 )
                 .children(p.notes.clone().map(|n| {
                     div()
-                        .text_size(px(11.5))
+                        .text_size(px(12.0))
                         .text_color(t.text_muted)
                         .child(n)
                         .into_any_element()
                 })),
-        );
+        )
+        .children(test_badge.map(|tb| div().flex_shrink_0().child(tb)));
 
     let pid_up = p.id.clone();
     let pid_down = p.id.clone();
@@ -496,28 +521,35 @@ fn provider_row(
                 cx.notify();
             },
         ))
-        .child(button_l(
-            gpui::SharedString::from(format!("prov-del-{pid4}")),
-            i.t("删除", "Delete"),
-            ButtonVariant::Danger,
-            &t,
-            cx,
-            move |ws, _, _, cx| {
-                ws.ui.confirm = Some(super::ConfirmState {
-                    title: ws.i18n.t("删除供应商", "Delete Provider").to_string(),
-                    message: ws
-                        .i18n
-                        .t("确定要删除这条供应商配置吗？", "Delete this provider?")
-                        .to_string(),
-                    action: super::ConfirmAction::DeleteProvider {
-                        tool,
-                        id: pid4.clone(),
-                    },
-                });
-                cx.notify();
-            },
-        ));
+        .children((!aitoolplus_core::providers::is_official_provider(tool, &p.id)).then(|| {
+            button_l(
+                gpui::SharedString::from(format!("prov-del-{pid4}")),
+                i.t("删除", "Delete"),
+                ButtonVariant::Danger,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    ws.ui.confirm = Some(super::ConfirmState {
+                        title: ws.i18n.t("删除供应商", "Delete Provider").to_string(),
+                        message: ws
+                            .i18n
+                            .t("确定要删除这条供应商配置吗？", "Delete this provider?")
+                            .to_string(),
+                        action: super::ConfirmAction::DeleteProvider {
+                            tool,
+                            id: pid4.clone(),
+                        },
+                    });
+                    cx.notify();
+                },
+            )
+        }));
 
+    let border_color = if p.is_applied {
+        crate::rgba_const(0x10b98166)
+    } else {
+        t.card_border
+    };
     div()
         .id(gpui::SharedString::from(format!("provider-card-{}", p.id)))
         .flex()
@@ -525,16 +557,19 @@ fn provider_row(
         .w_full()
         .min_w(px(0.0))
         .gap(px(10.0))
-        .p(px(12.0))
+        .p(px(14.0))
         .rounded(px(8.0))
         .bg(t.card_bg)
         .border_1()
-        .border_color(if p.is_applied {
-            t.success
-        } else {
-            t.card_border
+        .border_color(border_color)
+        .shadow_xs()
+        .hover(move |h| {
+            h.bg(t.card_hover).border_color(if p.is_applied {
+                crate::rgba_const(0x10b981aa)
+            } else {
+                t.card_border_hover
+            })
         })
-        .hover(|h| h.bg(t.card_hover))
         .child(header)
         .child(actions)
         .into_any_element()
@@ -982,21 +1017,63 @@ fn apply_prompt(tool: ToolId, id: &str, ws: &mut Workspace, cx: &mut Context<Wor
 fn runtime_section(
     tool: ToolId,
     ws: &mut Workspace,
-    _cx: &mut Context<Workspace>,
+    cx: &mut Context<Workspace>,
 ) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
-    let adapter = aitoolplus_core::adapters::adapter_for(tool);
-    let files = adapter.runtime_files(&ws.paths);
 
-    let mut section = div().flex().flex_col().gap(px(12.0)).child(page_header(
-        &t,
-        i.t("运行时文件", "Runtime Files"),
-        i.t(
-            "只读预览工具当前的真实配置文件",
-            "Read-only preview of the tool's real config files",
-        ),
-    ));
+    let need_reload = match &ws.ui.runtime_files_cache {
+        Some((cached_tool, _)) => *cached_tool != tool,
+        None => true,
+    };
+    if need_reload {
+        let adapter = aitoolplus_core::adapters::adapter_for(tool);
+        let files = adapter.runtime_files(&ws.paths);
+        let cached = files
+            .into_iter()
+            .map(|(label, path)| {
+                let exists = path.exists();
+                let content = if exists {
+                    std::fs::read_to_string(&path).unwrap_or_else(|e| format!("<read error: {e}>"))
+                } else {
+                    i.t("（文件不存在）", "(file missing)").to_string()
+                };
+                (label, path, exists, content)
+            })
+            .collect();
+        ws.ui.runtime_files_cache = Some((tool, cached));
+    }
+
+    let files = match &ws.ui.runtime_files_cache {
+        Some((_, f)) => f.clone(),
+        None => vec![],
+    };
+
+    let mut section = div().flex().flex_col().gap(px(12.0)).child(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(page_header(
+                &t,
+                i.t("运行时文件", "Runtime Files"),
+                i.t(
+                    "只读预览工具当前的真实配置文件",
+                    "Read-only preview of the tool's real config files",
+                ),
+            ))
+            .child(button_l(
+                "runtime-refresh-btn",
+                i.t("刷新", "Refresh"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    ws.ui.runtime_files_cache = None;
+                    cx.notify();
+                },
+            )),
+    );
 
     if files.is_empty() {
         section = section.child(empty_state(
@@ -1008,13 +1085,7 @@ fn runtime_section(
         return section.into_any_element();
     }
 
-    for (label, path) in files {
-        let exists = path.exists();
-        let content = if exists {
-            std::fs::read_to_string(&path).unwrap_or_else(|e| format!("<read error: {e}>"))
-        } else {
-            i.t("（文件不存在）", "(file missing)").to_string()
-        };
+    for (label, path, exists, content) in files {
         let truncated: String = content.chars().take(4000).collect();
         let overflow = content.chars().count() > 4000;
 
@@ -1431,12 +1502,8 @@ fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
                 section = section.child(rows);
             }
 
-            let editor = cx.new(|cx| {
-                let mut ta = TextArea::new("{}", cx);
-                ta.set_text_silent(serde_json::to_string_pretty(&other).unwrap_or_default(), cx);
-                ta.set_max_lines(10, cx);
-                ta
-            });
+            let pretty = serde_json::to_string_pretty(&other).unwrap_or_default();
+            let editor = ws.ui.pi_other_editor(&pretty, cx);
             let editor_save = editor.clone();
             section = section
                 .child(
@@ -1462,6 +1529,7 @@ fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
                                     &ws.paths, &edited,
                                 ) {
                                     Ok(_) => {
+                                        ws.ui.pi_other_editor = None;
                                         let msg = ws.i18n.t("已保存", "saved").to_string();
                                         ws.ui.toast(msg, false);
                                     }
@@ -1494,6 +1562,7 @@ fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
 }
 
 fn spawn_tool_action<F>(
+    target: Option<ToolId>,
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
     success_zh: String,
@@ -1508,12 +1577,103 @@ fn spawn_tool_action<F>(
         let result = cx.background_spawn(async move { operation(paths) }).await;
         let _ = weak.update(cx, |workspace, cx| {
             match result {
-                Ok(()) => workspace.ui.toast(
-                    workspace.i18n.t(&success_zh, &success_en).to_string(),
-                    false,
-                ),
+                Ok(()) => {
+                    workspace.ui.toast(
+                        workspace.i18n.t(&success_zh, &success_en).to_string(),
+                        false,
+                    );
+                    if let Some(tool) = target {
+                        match tool {
+                            ToolId::Pi => {
+                                workspace.ui.pi_extensions = None;
+                                load_pi_extensions(workspace, cx);
+                            }
+                            ToolId::OhMyPi => {
+                                workspace.ui.omp_extensions = None;
+                                load_omp_extensions(workspace, cx);
+                            }
+                            ToolId::Grok => {
+                                workspace.ui.grok_plugins = None;
+                                load_grok_plugins(workspace, cx);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 Err(error) => workspace.ui.toast(error, true),
             }
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+pub fn load_pi_extensions(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.pi_extensions_loading {
+        return;
+    }
+    ws.ui.pi_extensions_loading = true;
+    let paths = ws.paths.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let result = cx
+            .background_spawn(async move {
+                aitoolplus_core::pi_extensions::list_extensions(&paths)
+            })
+            .await;
+        let _ = weak.update(cx, |workspace, cx| {
+            workspace.ui.pi_extensions = Some(result);
+            workspace.ui.pi_extensions_loading = false;
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+pub fn load_omp_extensions(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.omp_extensions_loading {
+        return;
+    }
+    ws.ui.omp_extensions_loading = true;
+    let paths = ws.paths.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let result = cx
+            .background_spawn(async move {
+                aitoolplus_core::omp_extensions::list(&paths).map(|result| {
+                    aitoolplus_core::pi_extensions::PiExtensionListResult {
+                        extensions: result.extensions,
+                        cli_path: result.cli_path,
+                        cli_version: result.cli_version,
+                    }
+                })
+            })
+            .await;
+        let _ = weak.update(cx, |workspace, cx| {
+            workspace.ui.omp_extensions = Some(result);
+            workspace.ui.omp_extensions_loading = false;
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+pub fn load_grok_plugins(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.grok_plugins_loading {
+        return;
+    }
+    ws.ui.grok_plugins_loading = true;
+    let paths = ws.paths.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let result = cx
+            .background_spawn(async move {
+                aitoolplus_core::grok_plugins::list_all(&paths)
+            })
+            .await;
+        let _ = weak.update(cx, |workspace, cx| {
+            workspace.ui.grok_plugins = Some(result);
+            workspace.ui.grok_plugins_loading = false;
             cx.notify();
         });
     })
@@ -1534,50 +1694,95 @@ fn extensions_section(
     debug_assert!(matches!(tool, ToolId::Pi | ToolId::OhMyPi));
 
     let is_pi = tool == ToolId::Pi;
-    let list = if is_pi {
-        aitoolplus_core::pi_extensions::list_extensions(&ws.paths)
-    } else {
-        aitoolplus_core::omp_extensions::list(&ws.paths).map(|result| {
-            aitoolplus_core::pi_extensions::PiExtensionListResult {
-                extensions: result.extensions,
-                cli_path: result.cli_path,
-                cli_version: result.cli_version,
-            }
-        })
-    };
-    let mut section = div()
-        .flex()
-        .flex_col()
-        .gap(px(12.0))
-        .child(page_header(
-            &t,
-            i.t("扩展管理", "Extensions"),
-            if is_pi {
-                i.t(
-                    "pi list 为事实源：包扩展走 Pi CLI，本地扩展来自 <root>/extensions",
-                    "pi list is the source of truth: packages via the Pi CLI, locals from <root>/extensions",
-                )
-            } else {
-                i.t(
-                    "omp plugin list 为事实源：包扩展走 OMP CLI，本地扩展来自 <root>/extensions",
-                    "omp plugin list is the source of truth; locals come from <root>/extensions",
-                )
-            },
-        ));
+    if is_pi {
+        if ws.ui.pi_extensions.is_none() && !ws.ui.pi_extensions_loading {
+            load_pi_extensions(ws, cx);
+        }
+    } else if ws.ui.omp_extensions.is_none() && !ws.ui.omp_extensions_loading {
+        load_omp_extensions(ws, cx);
+    }
 
-    let install_input = cx.new(|cx| {
-        TextInput::new(
-            if is_pi {
-                i.t(
-                    "来源，如 npm:pi-mcp-adapter",
-                    "Source, e.g. npm:pi-mcp-adapter",
-                )
-            } else {
-                i.t("来源，如 npm:context-mode", "Source, e.g. npm:context-mode")
-            },
-            cx,
-        )
-    });
+    let is_loading = if is_pi {
+        ws.ui.pi_extensions_loading
+    } else {
+        ws.ui.omp_extensions_loading
+    };
+
+    let cached_list = if is_pi {
+        ws.ui.pi_extensions.as_ref()
+    } else {
+        ws.ui.omp_extensions.as_ref()
+    };
+
+    let refresh_label = if is_loading {
+        i.t("刷新中…", "Refreshing…")
+    } else {
+        i.t("刷新", "Refresh")
+    };
+
+    let mut section = div().flex().flex_col().gap(px(12.0)).child(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(page_header(
+                &t,
+                i.t("扩展管理", "Extensions"),
+                if is_pi {
+                    i.t(
+                        "pi list 为事实源：包扩展走 Pi CLI，本地扩展来自 <root>/extensions",
+                        "pi list is the source of truth: packages via the Pi CLI, locals from <root>/extensions",
+                    )
+                } else {
+                    i.t(
+                        "omp plugin list 为事实源：包扩展走 OMP CLI，本地扩展来自 <root>/extensions",
+                        "omp plugin list is the source of truth; locals come from <root>/extensions",
+                    )
+                },
+            ))
+            .child(button_l(
+                if is_pi { "pi-ext-refresh-btn" } else { "omp-ext-refresh-btn" },
+                refresh_label,
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    if is_pi {
+                        ws.ui.pi_extensions = None;
+                        load_pi_extensions(ws, cx);
+                    } else {
+                        ws.ui.omp_extensions = None;
+                        load_omp_extensions(ws, cx);
+                    }
+                    cx.notify();
+                },
+            )),
+    );
+
+    let install_input = if is_pi {
+        ws.ui.pi_extension_input.clone()
+    } else {
+        ws.ui.omp_extension_input.clone()
+    };
+
+    let Some(list) = cached_list else {
+        return section
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .p(px(32.0))
+                    .rounded(px(8.0))
+                    .bg(t.card_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .text_size(px(13.0))
+                    .text_color(t.text_secondary)
+                    .child(i.t("正在查询扩展列表…", "Loading extensions…")),
+            )
+            .into_any_element();
+    };
 
     match list {
         Ok(result) => {
@@ -1656,6 +1861,7 @@ fn extensions_section(
                                 move |ws, _, _, cx| {
                                     let source = source_update.clone();
                                     spawn_tool_action(
+                                        Some(tool),
                                         ws,
                                         cx,
                                         "扩展已更新".into(),
@@ -1689,6 +1895,7 @@ fn extensions_section(
                                 move |ws, _, _, cx| {
                                     let source = source_remove.clone();
                                     spawn_tool_action(
+                                        Some(tool),
                                         ws,
                                         cx,
                                         format!("已移除 {source}"),
@@ -1730,7 +1937,11 @@ fn extensions_section(
                                     local_kind,
                                     local_path.as_deref(),
                                 ) {
-                                    Ok(()) => ws.ui.toast("local extension removed", false),
+                                    Ok(()) => {
+                                        ws.ui.toast("local extension removed", false);
+                                        ws.ui.omp_extensions = None;
+                                        load_omp_extensions(ws, cx);
+                                    }
                                     Err(error) => ws.ui.toast(error, true),
                                 }
                                 cx.notify();
@@ -1817,7 +2028,11 @@ fn extensions_section(
                         cx,
                         move |ws, _, _, cx| {
                             let src: String =
-                                input_entity.update(cx, |inp, _| inp.text().trim().to_string());
+                                input_entity.update(cx, |inp, cx| {
+                                    let val = inp.text().trim().to_string();
+                                    inp.set_text("", cx);
+                                    val
+                                });
                             if src.is_empty() {
                                 let msg = ws.i18n.t("请输入来源", "source required").to_string();
                                 ws.ui.toast(msg, true);
@@ -1826,7 +2041,7 @@ fn extensions_section(
                             }
                             let success_zh = format!("已安装 {src}");
                             let success_en = format!("installed {src}");
-                            spawn_tool_action(ws, cx, success_zh, success_en, move |paths| {
+                            spawn_tool_action(Some(tool), ws, cx, success_zh, success_en, move |paths| {
                                 let result = if tool == ToolId::Pi {
                                     aitoolplus_core::pi_extensions::install_extension(&paths, &src)
                                         .map(|_| ())
@@ -1856,7 +2071,7 @@ fn extensions_section(
                         .border_color(t.danger)
                         .text_size(px(12.0))
                         .text_color(t.danger)
-                        .child(e),
+                        .child(e.clone()),
                 );
         }
     }
@@ -2272,28 +2487,75 @@ fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
 fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
-    let installed = aitoolplus_core::grok_plugins::list_installed(&ws.paths);
-    let available = aitoolplus_core::grok_plugins::list_available(&ws.paths);
-    let mut section = div().flex().flex_col().gap(px(12.0)).child(page_header(
-        &t,
-        i.t("Grok 插件", "Grok Plugins"),
-        i.t(
-            "通过 grok plugin 管理原生插件",
-            "Manage native plugins via grok plugin",
-        ),
-    ));
 
-    match installed {
-        Ok(plugins) => {
+    if ws.ui.grok_plugins.is_none() && !ws.ui.grok_plugins_loading {
+        load_grok_plugins(ws, cx);
+    }
+
+    let is_loading = ws.ui.grok_plugins_loading;
+    let refresh_label = if is_loading {
+        i.t("刷新中…", "Refreshing…")
+    } else {
+        i.t("刷新", "Refresh")
+    };
+
+    let mut section = div().flex().flex_col().gap(px(12.0)).child(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(page_header(
+                &t,
+                i.t("Grok 插件", "Grok Plugins"),
+                i.t(
+                    "通过 grok plugin 管理原生插件",
+                    "Manage native plugins via grok plugin",
+                ),
+            ))
+            .child(button_l(
+                "grok-plugins-refresh-btn",
+                refresh_label,
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    ws.ui.grok_plugins = None;
+                    load_grok_plugins(ws, cx);
+                    cx.notify();
+                },
+            )),
+    );
+
+    let Some(cached) = &ws.ui.grok_plugins else {
+        return section
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .p(px(32.0))
+                    .rounded(px(8.0))
+                    .bg(t.card_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .text_size(px(13.0))
+                    .text_color(t.text_secondary)
+                    .child(i.t("正在查询 Grok 插件列表…", "Loading Grok plugins…")),
+            )
+            .into_any_element();
+    };
+
+    match cached {
+        Ok((installed, available)) => {
             section = section.child(section_title(
                 &t,
                 i.t("已安装", "Installed"),
                 Some(gpui::SharedString::from(format!(
                     "{} plugins",
-                    plugins.len()
+                    installed.len()
                 ))),
             ));
-            for plugin in plugins {
+            for plugin in installed {
                 let toggle_id = plugin.plugin_id.clone();
                 let uninstall_id = plugin.plugin_id.clone();
                 let update_id = plugin.plugin_id.clone();
@@ -2316,11 +2578,11 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 .text_color(t.text_primary)
                                 .child(format!("{}@{}", plugin.name, plugin.marketplace_name)),
                         )
-                        .children(plugin.description.map(|description| {
+                        .children(plugin.description.as_ref().map(|description| {
                             div()
                                 .text_size(px(11.0))
                                 .text_color(t.text_muted)
-                                .child(description)
+                                .child(description.clone())
                                 .into_any_element()
                         }))
                         .child(
@@ -2340,6 +2602,7 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     move |ws, _, _, cx| {
                                         let id = toggle_id.clone();
                                         spawn_tool_action(
+                                            Some(ToolId::Grok),
                                             ws,
                                             cx,
                                             "插件状态已更新".into(),
@@ -2361,6 +2624,7 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     move |ws, _, _, cx| {
                                         let id = update_id.clone();
                                         spawn_tool_action(
+                                            Some(ToolId::Grok),
                                             ws,
                                             cx,
                                             "插件已更新".into(),
@@ -2382,6 +2646,7 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     move |ws, _, _, cx| {
                                         let id = uninstall_id.clone();
                                         spawn_tool_action(
+                                            Some(ToolId::Grok),
                                             ws,
                                             cx,
                                             "插件已卸载".into(),
@@ -2397,70 +2662,77 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         ),
                 );
             }
+
+            let installed_ids: std::collections::HashSet<String> =
+                installed.iter().map(|plugin| plugin.plugin_id.clone()).collect();
+            let available_filtered: Vec<_> = available
+                .iter()
+                .filter(|plugin| !installed_ids.contains(&plugin.plugin_id))
+                .collect();
+            if !available_filtered.is_empty() {
+                section = section.child(section_title(&t, i.t("可安装", "Available"), None));
+                for plugin in available_filtered {
+                    let action_plugin = plugin.clone();
+                    section = section.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_start()
+                            .gap(px(6.0))
+                            .p(px(10.0))
+                            .rounded(px(8.0))
+                            .bg(t.card_bg)
+                            .border_1()
+                            .border_color(t.card_border)
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .text_color(t.text_primary)
+                                    .child(plugin.name.clone()),
+                            )
+                            .child(button_l(
+                                gpui::SharedString::from(format!("grok-install-{}", plugin.plugin_id)),
+                                i.t("安装并信任", "Install & Trust"),
+                                ButtonVariant::Primary,
+                                &t,
+                                cx,
+                                move |ws, _, _, cx| {
+                                    let plugin = action_plugin.clone();
+                                    spawn_tool_action(
+                                        Some(ToolId::Grok),
+                                        ws,
+                                        cx,
+                                        "插件已安装".into(),
+                                        "plugin installed".into(),
+                                        move |paths| {
+                                            aitoolplus_core::grok_plugins::install(&paths, &plugin)
+                                        },
+                                    );
+                                },
+                            )),
+                    );
+                }
+            }
         }
         Err(error) => {
-            section = section.child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(t.danger)
-                    .child(format!("installed plugins: {error}")),
-            )
-        }
-    }
-
-    if let Ok(plugins) = available {
-        let installed_ids: std::collections::HashSet<String> =
-            aitoolplus_core::grok_plugins::list_installed(&ws.paths)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|plugin| plugin.plugin_id)
-                .collect();
-        let plugins: Vec<_> = plugins
-            .into_iter()
-            .filter(|plugin| !installed_ids.contains(&plugin.plugin_id))
-            .collect();
-        if !plugins.is_empty() {
-            section = section.child(section_title(&t, i.t("可安装", "Available"), None));
-            for plugin in plugins {
-                let action_plugin = plugin.clone();
-                section = section.child(
+            section = section
+                .child(empty_state(
+                    &t,
+                    "\u{26a0}\u{fe0f}",
+                    i.t("Grok 插件列表获取失败", "Failed to list Grok plugins"),
+                    "",
+                ))
+                .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .items_start()
-                        .gap(px(6.0))
-                        .p(px(10.0))
+                        .p(px(12.0))
                         .rounded(px(8.0))
-                        .bg(t.card_bg)
+                        .bg(t.danger_subtle)
                         .border_1()
-                        .border_color(t.card_border)
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .text_color(t.text_primary)
-                                .child(plugin.name),
-                        )
-                        .child(button_l(
-                            gpui::SharedString::from(format!("grok-install-{}", plugin.plugin_id)),
-                            i.t("安装并信任", "Install & Trust"),
-                            ButtonVariant::Primary,
-                            &t,
-                            cx,
-                            move |ws, _, _, cx| {
-                                let plugin = action_plugin.clone();
-                                spawn_tool_action(
-                                    ws,
-                                    cx,
-                                    "插件已安装".into(),
-                                    "plugin installed".into(),
-                                    move |paths| {
-                                        aitoolplus_core::grok_plugins::install(&paths, &plugin)
-                                    },
-                                );
-                            },
-                        )),
+                        .border_color(t.danger)
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(error.clone()),
                 );
-            }
         }
     }
     section.into_any_element()
@@ -2604,21 +2876,22 @@ fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                                 {
                                     let name_for_update = name2.clone();
                                     move |ws, _, _, cx| {
-                                    let operation_name = name_for_update.clone();
-                                    spawn_tool_action(
-                                        ws,
-                                        cx,
-                                        "插件市场已更新".into(),
-                                        "marketplace updated".into(),
-                                        move |paths| {
-                                            aitoolplus_core::claude_plugins::update_marketplace(
-                                                &paths,
-                                                Some(&operation_name),
-                                            )
-                                            .map_err(|error| format!("update failed: {error}"))
-                                        },
-                                    );
-                                }
+                                        let operation_name = name_for_update.clone();
+                                        spawn_tool_action(
+                                            Some(ToolId::ClaudeCode),
+                                            ws,
+                                            cx,
+                                            "插件市场已更新".into(),
+                                            "marketplace updated".into(),
+                                            move |paths| {
+                                                aitoolplus_core::claude_plugins::update_marketplace(
+                                                    &paths,
+                                                    Some(&operation_name),
+                                                )
+                                                .map_err(|error| format!("update failed: {error}"))
+                                            },
+                                        );
+                                    }
                                 }
                             ))
                             .child(button_l(
@@ -2632,6 +2905,7 @@ fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                                     let success_en = format!("removed {name2}");
                                     let operation_name = name2_del.clone();
                                     spawn_tool_action(
+                                        Some(ToolId::ClaudeCode),
                                         ws,
                                         cx,
                                         success_zh,
@@ -2650,16 +2924,7 @@ fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                 }
             }
 
-            let add_input = cx.new(|cx| {
-                TextInput::new(
-                    i.t(
-                        "来源，如 anthropics/claude-code",
-                        "Source, e.g. anthropics/claude-code",
-                    ),
-                    cx,
-                )
-            });
-            let add_entity = add_input.clone();
+            let add_entity = ws.ui.claude_marketplaces_input.clone();
             card_inner = card_inner.child(
                 div()
                     .id("mkt-add-row")
@@ -2680,7 +2945,11 @@ fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                         cx,
                         move |ws, _, _, cx| {
                             let src: String =
-                                add_entity.update(cx, |inp, _| inp.text().trim().to_string());
+                                add_entity.update(cx, |inp, cx| {
+                                    let val = inp.text().trim().to_string();
+                                    inp.set_text("", cx);
+                                    val
+                                });
                             if src.is_empty() {
                                 let msg = ws.i18n.t("请输入来源", "source required").to_string();
                                 ws.ui.toast(msg, true);
@@ -2689,7 +2958,7 @@ fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                             }
                             let success_zh = format!("已添加 {src}");
                             let success_en = format!("added {src}");
-                            spawn_tool_action(ws, cx, success_zh, success_en, move |paths| {
+                            spawn_tool_action(Some(ToolId::ClaudeCode), ws, cx, success_zh, success_en, move |paths| {
                                 aitoolplus_core::claude_plugins::add_marketplace(&paths, &src)
                                     .map_err(|error| format!("add failed: {error}"))
                             });
@@ -2960,6 +3229,7 @@ fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                                     let success_en = format!("uninstalled {pid2}");
                                     let operation_id = pid2.clone();
                                     spawn_tool_action(
+                                        Some(ToolId::ClaudeCode),
                                         ws,
                                         cx,
                                         success_zh,
@@ -3259,33 +3529,51 @@ pub fn render_provider_dialog(
             .flex_col()
             .gap(px(6.0))
             .child(field_label(i.t("名称", "Name")))
-            .child(name.clone()),
+            .child(input_container(&t, name.clone())),
     );
 
     // API-key-only input when a preset is selected (cc-switch flow)
     if let Some(p_idx) = preset_index {
         let presets = aitoolplus_core::presets::presets_for(tool);
         if let Some(preset) = presets.get(p_idx) {
-            body = body.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.0))
-                    .child(field_label(
-                        i.t("API Key（填好即可保存）", "API Key (that's all you need)"),
-                    ))
-                    .child(api_key.clone())
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(t.text_muted)
-                            .child(format!(
-                                "{}: {}",
-                                i.t("获取 Key", "Get key"),
-                                preset.website_url
-                            )),
-                    ),
-            );
+            if !preset.api_key_field.is_empty() {
+                body = body.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .child(field_label(
+                            i.t("API Key（填好即可保存）", "API Key (that's all you need)"),
+                        ))
+                        .child(input_container(&t, api_key.clone()))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(t.text_muted)
+                                .child(format!(
+                                    "{}: {}",
+                                    i.t("获取 Key", "Get key"),
+                                    preset.website_url
+                                )),
+                        ),
+                );
+            } else {
+                body = body.child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(8.0))
+                        .rounded(px(6.0))
+                        .bg(t.input_bg)
+                        .border_1()
+                        .border_color(t.input_border)
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(i.t(
+                            "官方预设使用官方原生登录凭据，无需填写 API Key，保存后点击「应用」即可恢复官方直连。",
+                            "Official preset uses native login credentials, no API key required. Click Apply to restore official access.",
+                        )),
+                );
+            }
         }
     }
 
@@ -3348,15 +3636,7 @@ pub fn render_provider_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("配置 JSON", "Settings JSON")))
-                .child(
-                    div()
-                        .p(px(10.0))
-                        .rounded(px(8.0))
-                        .bg(t.input_bg)
-                        .border_1()
-                        .border_color(t.input_border)
-                        .child(settings.clone()),
-                ),
+                .child(textarea_container(&t, settings.clone())),
         )
         .child(
             div()
@@ -3364,7 +3644,7 @@ pub fn render_provider_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("备注", "Notes")))
-                .child(notes.clone()),
+                .child(input_container(&t, notes.clone())),
         )
         .child(
             div()
@@ -3372,7 +3652,7 @@ pub fn render_provider_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("网址", "Website")))
-                .child(website.clone()),
+                .child(input_container(&t, website.clone())),
         )
         .child(
             div()
@@ -3451,7 +3731,7 @@ fn save_provider(
             let presets = aitoolplus_core::presets::presets_for(tool);
             match presets.get(p_idx) {
                 Some(preset) => {
-                    if key_txt.trim().is_empty() {
+                    if !preset.api_key_field.is_empty() && key_txt.trim().is_empty() {
                         let msg = i
                             .t(
                                 "预设已选择，请填写 API Key",
@@ -3606,7 +3886,7 @@ pub fn render_prompt_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("名称", "Name")))
-                .child(name.clone()),
+                .child(input_container(&t, name.clone())),
         )
         .child(
             div()
@@ -3614,15 +3894,7 @@ pub fn render_prompt_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("内容（Markdown）", "Content (Markdown)")))
-                .child(
-                    div()
-                        .p(px(10.0))
-                        .rounded(px(8.0))
-                        .bg(t.input_bg)
-                        .border_1()
-                        .border_color(t.input_border)
-                        .child(content.clone()),
-                ),
+                .child(textarea_container(&t, content.clone())),
         )
         .child(
             div()

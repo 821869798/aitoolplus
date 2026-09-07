@@ -75,6 +75,20 @@ impl Workspace {
                 &mut db.tool_mut(ToolId::Grok).providers,
             );
 
+            // Ensure cc-switch parity official persistent providers.
+            for tool in [
+                ToolId::ClaudeCode,
+                ToolId::Codex,
+                ToolId::GeminiCli,
+                ToolId::Grok,
+                ToolId::ClaudeDesktop,
+            ] {
+                aitoolplus_core::providers::ensure_official_provider(
+                    tool,
+                    &mut db.tool_mut(tool).providers,
+                );
+            }
+
             // Runtime-native provider catalogs.
             let _ = aitoolplus_core::pi_runtime::import_runtime(
                 &paths,
@@ -98,7 +112,21 @@ impl Workspace {
             );
         });
         let _ = store.save();
-        let theme = Theme::for_mode(settings.theme_mode, system_prefers_dark());
+        let requested_theme = std::env::var("AITOOLPLUS_THEME_MODE")
+            .ok()
+            .and_then(|v| match v.to_lowercase().as_str() {
+                "dark" => Some(crate::theme::ThemeMode::Dark),
+                "light" => Some(crate::theme::ThemeMode::Light),
+                _ => None,
+            })
+            .unwrap_or(settings.theme_mode);
+        let theme = Theme::for_mode(requested_theme, system_prefers_dark());
+        let kit_mode = if theme.is_dark {
+            gpui_kit::component::ThemeMode::Dark
+        } else {
+            gpui_kit::component::ThemeMode::Light
+        };
+        gpui_kit::component::Theme::change(kit_mode, None, cx);
         let i18n = I18n::new(settings.language);
         let mut ui = pages::WorkspaceState::new(cx);
         if !settings.proxy_url.is_empty() {
@@ -200,6 +228,12 @@ impl Workspace {
 
     fn apply_theme(&mut self, cx: &mut Context<Self>) {
         self.theme = Theme::for_mode(self.settings.theme_mode, system_prefers_dark());
+        let kit_mode = if self.theme.is_dark {
+            gpui_kit::component::ThemeMode::Dark
+        } else {
+            gpui_kit::component::ThemeMode::Light
+        };
+        gpui_kit::component::Theme::change(kit_mode, None, cx);
         (self.callbacks.save_settings)(&self.settings);
         cx.notify();
     }
@@ -222,6 +256,8 @@ impl Workspace {
     pub(crate) fn page_content(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let mut pane = div()
             .id("page-scroll")
+            .flex()
+            .flex_col()
             .flex_1()
             .min_w(px(0.0))
             .overflow_x_hidden()
@@ -343,7 +379,7 @@ impl gpui::Focusable for Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let base = div()
             .size_full()
             .flex()
@@ -359,6 +395,12 @@ impl Render for Workspace {
                     .child(self.sidebar(cx))
                     .child(self.page_content(cx)),
             );
+
+        // Standard gpui-kit Root overlay layers: dialogs, sheets, notifications
+        let overlays = div()
+            .children(gpui_kit::component::Root::render_dialog_layer(window, cx))
+            .children(gpui_kit::component::Root::render_sheet_layer(window, cx))
+            .children(gpui_kit::component::Root::render_notification_layer(window, cx));
 
         // Modals render at the root as overlays (flyclip GPUI guideline #3).
         let modal_open = self.ui.modal_active();
@@ -392,9 +434,14 @@ impl Render for Workspace {
             vec![]
         };
         if modal_open {
-            div().relative().size_full().child(base).children(modals)
+            div()
+                .relative()
+                .size_full()
+                .child(base)
+                .children(modals)
+                .child(overlays)
         } else {
-            div().size_full().child(base)
+            div().relative().size_full().child(base).child(overlays)
         }
     }
 }

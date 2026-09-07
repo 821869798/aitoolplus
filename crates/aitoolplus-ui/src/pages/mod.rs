@@ -104,6 +104,27 @@ pub struct WorkspaceState {
     pub skill_git_url: gpui::Entity<TextInput>,
     pub proxy_url_input: gpui::Entity<TextInput>,
     pub cli_path_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
+    pub pi_extensions:
+        Option<Result<aitoolplus_core::pi_extensions::PiExtensionListResult, String>>,
+    pub pi_extensions_loading: bool,
+    pub pi_extension_input: gpui::Entity<TextInput>,
+    pub omp_extensions:
+        Option<Result<aitoolplus_core::pi_extensions::PiExtensionListResult, String>>,
+    pub omp_extensions_loading: bool,
+    pub omp_extension_input: gpui::Entity<TextInput>,
+    pub grok_plugins: Option<
+        Result<
+            (
+                Vec<aitoolplus_core::grok_plugins::GrokPlugin>,
+                Vec<aitoolplus_core::grok_plugins::GrokPlugin>,
+            ),
+            String,
+        >,
+    >,
+    pub grok_plugins_loading: bool,
+    pub claude_marketplaces_input: gpui::Entity<TextInput>,
+    pub pi_other_editor: Option<gpui::Entity<TextArea>>,
+    pub runtime_files_cache: Option<(ToolId, Vec<(String, std::path::PathBuf, bool, String)>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,6 +215,12 @@ impl WorkspaceState {
             cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
         let skill_git_url = cx.new(|cx| TextInput::new("https://github.com/owner/skill.git", cx));
         let proxy_url_input = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx));
+        let pi_extension_input =
+            cx.new(|cx| TextInput::new("来源，如 npm:pi-mcp-adapter", cx));
+        let omp_extension_input =
+            cx.new(|cx| TextInput::new("来源，如 npm:context-mode", cx));
+        let claude_marketplaces_input =
+            cx.new(|cx| TextInput::new("来源，如 anthropics/claude-code", cx));
         Self {
             tool_tab: ToolTab::Providers,
             common_editors: Default::default(),
@@ -228,7 +255,37 @@ impl WorkspaceState {
             skill_git_url,
             proxy_url_input,
             cli_path_inputs: Default::default(),
+            pi_extensions: None,
+            pi_extensions_loading: false,
+            pi_extension_input,
+            omp_extensions: None,
+            omp_extensions_loading: false,
+            omp_extension_input,
+            grok_plugins: None,
+            grok_plugins_loading: false,
+            claude_marketplaces_input,
+            pi_other_editor: None,
+            runtime_files_cache: None,
         }
+    }
+
+    pub fn pi_other_editor(
+        &mut self,
+        initial: &str,
+        cx: &mut Context<Workspace>,
+    ) -> gpui::Entity<TextArea> {
+        if let Some(editor) = &self.pi_other_editor {
+            return editor.clone();
+        }
+        let initial = initial.to_string();
+        let editor = cx.new(|cx| {
+            let mut ta = TextArea::new("{}", cx);
+            ta.set_text_silent(initial, cx);
+            ta.set_max_lines(10, cx);
+            ta
+        });
+        self.pi_other_editor = Some(editor.clone());
+        editor
     }
 
     pub fn addon_editor(
