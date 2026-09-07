@@ -37,14 +37,14 @@ pub fn render_tool_page(
             &t,
             i.t(tool.name_zh(), tool.name_en()),
             i.t(
-                "供应商、通用配置与全局 Prompt 管理",
-                "Providers, common config & global prompts",
+                "供应商与全局 Prompt 管理",
+                "Providers & global prompts",
             ),
         ))
         .child(tabs_bar(tool, ws, cx));
 
     match ws.ui.tool_tab {
-        ToolTab::Providers => {
+        ToolTab::Providers | ToolTab::Common => {
             if tool == ToolId::Pi {
                 col = col.child(pi_model_settings_section(ws, cx));
             }
@@ -53,7 +53,6 @@ pub fn render_tool_page(
                 col = col.child(pi_other_settings_section(ws, cx));
             }
         }
-        ToolTab::Common => col = col.child(common_section(tool, ws, cx)),
         ToolTab::Prompts => col = col.child(prompts_section(tool, ws, cx)),
         ToolTab::Runtime => col = col.child(runtime_section(tool, ws, cx)),
         ToolTab::Extensions => col = col.child(extensions_section(tool, ws, cx)),
@@ -76,7 +75,6 @@ fn tabs_bar(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
 
     let mut tabs = vec![
         (ToolTab::Providers, i.t("供应商", "Providers")),
-        (ToolTab::Common, i.t("通用配置", "Common Config")),
         (ToolTab::Prompts, i.t("全局 Prompt", "Prompts")),
         (ToolTab::Runtime, i.t("运行时文件", "Runtime Files")),
     ];
@@ -246,6 +244,86 @@ fn providers_section(
     section.into_any_element()
 }
 
+fn provider_icon_spec(p: &ProviderRecord) -> (&'static str, gpui::Rgba, gpui::Rgba) {
+    let lower_name = p.name.to_lowercase();
+    if p.category == "official" || lower_name.contains("official") || lower_name.contains("官方") {
+        ("✦", crate::rgba_const(0x3b82f6ff), crate::rgba_const(0x3b82f618))
+    } else if lower_name.contains("claude") || lower_name.contains("anthropic") {
+        ("C", crate::rgba_const(0xd97706ff), crate::rgba_const(0xd9770618))
+    } else if lower_name.contains("deepseek") {
+        ("D", crate::rgba_const(0x0284c7ff), crate::rgba_const(0x0284c718))
+    } else if lower_name.contains("openai") || lower_name.contains("codex") || lower_name.contains("chatgpt") {
+        ("O", crate::rgba_const(0x10b981ff), crate::rgba_const(0x10b98118))
+    } else if lower_name.contains("gemini") || lower_name.contains("google") {
+        ("G", crate::rgba_const(0x6366f1ff), crate::rgba_const(0x6366f118))
+    } else if lower_name.contains("kimi") || lower_name.contains("moonshot") {
+        ("K", crate::rgba_const(0x8b5cf6ff), crate::rgba_const(0x8b5cf618))
+    } else if lower_name.contains("grok") || lower_name.contains("xai") {
+        ("X", crate::rgba_const(0x64748bff), crate::rgba_const(0x64748b18))
+    } else {
+        ("⚡", crate::rgba_const(0x10b981ff), crate::rgba_const(0x10b98118))
+    }
+}
+
+fn extract_provider_subtitle(p: &ProviderRecord, i: &crate::i18n::I18n) -> String {
+    if p.category == "official" {
+        return i
+            .t("官方端点直连 (Official Direct)", "Official Direct Endpoint")
+            .to_string();
+    }
+    if let Some(ref w) = p.website_url {
+        let trimmed = w.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Ok(val) = serde_json::from_str::<Value>(&p.settings_config) {
+        if let Some(env) = val.get("env").and_then(Value::as_object) {
+            for key in [
+                "ANTHROPIC_BASE_URL",
+                "OPENAI_BASE_URL",
+                "GOOGLE_GEMINI_BASE_URL",
+                "BASE_URL",
+            ] {
+                if let Some(u) = env.get(key).and_then(Value::as_str) {
+                    let trimmed = u.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
+            }
+        }
+        for key in ["base_url", "baseUrl", "url", "endpoint"] {
+            if let Some(u) = val.get(key).and_then(Value::as_str) {
+                let trimmed = u.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+        if let Some(toml_str) = val.get("toml").and_then(Value::as_str) {
+            for line in toml_str.lines() {
+                let line_trim = line.trim();
+                if line_trim.starts_with("base_url") {
+                    if let Some((_, r)) = line_trim.split_once('=') {
+                        let cleaned = r.trim().trim_matches('"').trim_matches('\'');
+                        if !cleaned.is_empty() {
+                            return cleaned.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(ref n) = p.notes {
+        let trimmed = n.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    String::new()
+}
+
 fn provider_row(
     tool: ToolId,
     p: &ProviderRecord,
@@ -258,48 +336,61 @@ fn provider_row(
     let i = ws.i18n;
     let pid = p.id.clone();
     let pid2 = p.id.clone();
-    let pid3 = p.id.clone();
     let pid4 = p.id.clone();
     let pid_models = p.id.clone();
+    let pid_up = p.id.clone();
+    let pid_down = p.id.clone();
 
-    let status_badge = if p.is_applied && !p.is_disabled {
-        badge(&t, i.t("已应用", "Applied"), BadgeKind::Success)
-    } else if p.is_disabled {
-        badge(&t, i.t("已停用", "Disabled"), BadgeKind::Neutral)
-    } else {
-        badge(&t, i.t("未应用", "Idle"), BadgeKind::Neutral)
-    };
+    let (icon_sym, icon_color, icon_bg) = provider_icon_spec(p);
+    let subtitle = extract_provider_subtitle(p, &i);
 
     let test_badge = ws.ui.provider_test_results.get(&p.id).map(|result| {
-        badge(
-            &t,
-            if result.ok {
-                format!("{}ms · {} models", result.latency_ms, result.models_count)
-            } else {
-                format!("failed · {}", result.message)
-            },
-            if result.ok {
-                BadgeKind::Success
-            } else {
-                BadgeKind::Danger
-            },
-        )
+        let (label, kind) = if result.ok {
+            (
+                format!("{}ms · {} models", result.latency_ms, result.models_count),
+                BadgeKind::Success,
+            )
+        } else {
+            (
+                i.t("连通失败", "Failed").to_string(),
+                BadgeKind::Danger,
+            )
+        };
+        badge(&t, label, kind)
     });
 
-    let header = div()
+    let left = div()
         .flex()
-        .w_full()
-        .min_w(px(0.0))
-        .items_start()
-        .justify_between()
+        .items_center()
         .gap(px(12.0))
+        .min_w(px(0.0))
+        .flex_1()
+        .child(
+            div()
+                .size(px(38.0))
+                .flex_shrink_0()
+                .rounded(px(8.0))
+                .bg(icon_bg)
+                .border_1()
+                .border_color(crate::rgba_const(0xffffff15))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_size(px(15.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(icon_color)
+                        .child(icon_sym),
+                ),
+        )
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
-                .flex_1()
+                .gap(px(3.0))
                 .min_w(px(0.0))
+                .flex_1()
                 .child(
                     div()
                         .flex()
@@ -313,76 +404,69 @@ fn provider_row(
                                 .child(p.name.clone()),
                         )
                         .child(badge(&t, p.category.as_str(), BadgeKind::Accent))
-                        .child(status_badge),
+                        .children(p.is_disabled.then(|| {
+                            badge(&t, i.t("已停用", "Disabled"), BadgeKind::Neutral)
+                        })),
                 )
-                .children(p.notes.clone().map(|n| {
+                .children((!subtitle.is_empty()).then(|| {
                     div()
                         .text_size(px(12.0))
                         .text_color(t.text_muted)
-                        .child(n)
+                        .child(subtitle)
                         .into_any_element()
                 })),
-        )
-        .children(test_badge.map(|tb| div().flex_shrink_0().child(tb)));
+        );
 
-    let pid_up = p.id.clone();
-    let pid_down = p.id.clone();
-    let actions = div()
+    let mut actions = div()
         .flex()
-        .flex_wrap()
         .items_center()
-        .justify_start()
         .gap(px(6.0))
-        .children(
-            (aitoolplus_core::cli_launch::command_name(tool).is_some()).then(|| {
-                let launch_id = p.id.clone();
-                button_l(
-                    gpui::SharedString::from(format!("prov-launch-{launch_id}")),
-                    i.t("启动", "Launch"),
-                    ButtonVariant::Primary,
-                    &t,
-                    cx,
-                    move |ws, _, _, cx| {
-                        if !ws
-                            .store
-                            .store()
-                            .tool(tool)
-                            .providers
-                            .iter()
-                            .any(|provider| provider.id == launch_id && provider.is_applied)
-                        {
-                            ws.apply_provider(tool, &launch_id, cx);
-                        }
-                        match aitoolplus_core::cli_launch::launch(
-                            &ws.paths,
-                            tool,
-                            None,
-                            ws.settings.claude_cli_launch_full_access,
-                        ) {
-                            Ok(_) => ws
-                                .ui
-                                .toast(ws.i18n.t("CLI 已启动", "CLI launched").to_string(), false),
-                            Err(error) => ws.ui.toast(error, true),
-                        }
-                        cx.notify();
-                    },
-                )
-            }),
-        )
-        .children((!p.is_applied).then(|| {
-            button_l(
-                gpui::SharedString::from(format!("prov-apply-{pid}")),
-                i.t("应用", "Apply"),
-                ButtonVariant::Primary,
-                &t,
-                cx,
-                move |ws, _, _, cx| ws.apply_provider(tool, &pid, cx),
-            )
-        }))
-        .children((index > 0).then(|| {
-            button_l(
+        .flex_shrink_0();
+
+    if let Some(tb) = test_badge {
+        actions = actions.child(tb);
+    }
+
+    if aitoolplus_core::cli_launch::command_name(tool).is_some() {
+        let launch_id = p.id.clone();
+        actions = actions.child(button_l(
+            gpui::SharedString::from(format!("prov-launch-{launch_id}")),
+            i.t("启动", "Launch"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                if !ws
+                    .store
+                    .store()
+                    .tool(tool)
+                    .providers
+                    .iter()
+                    .any(|provider| provider.id == launch_id && provider.is_applied)
+                {
+                    ws.apply_provider(tool, &launch_id, cx);
+                }
+                match aitoolplus_core::cli_launch::launch(
+                    &ws.paths,
+                    tool,
+                    None,
+                    ws.settings.claude_cli_launch_full_access,
+                ) {
+                    Ok(_) => ws
+                        .ui
+                        .toast(ws.i18n.t("CLI 已启动", "CLI launched").to_string(), false),
+                    Err(error) => ws.ui.toast(error, true),
+                }
+                cx.notify();
+            },
+        ));
+    }
+
+    if total > 1 {
+        if index > 0 {
+            actions = actions.child(button_l(
                 gpui::SharedString::from(format!("prov-up-{pid_up}")),
-                i.t("上移", "Up"),
+                "▲",
                 ButtonVariant::Secondary,
                 &t,
                 cx,
@@ -396,12 +480,12 @@ fn provider_row(
                     ws.persist_store();
                     cx.notify();
                 },
-            )
-        }))
-        .children((index + 1 < total).then(|| {
-            button_l(
+            ));
+        }
+        if index + 1 < total {
+            actions = actions.child(button_l(
                 gpui::SharedString::from(format!("prov-down-{pid_down}")),
-                i.t("下移", "Down"),
+                "▼",
                 ButtonVariant::Secondary,
                 &t,
                 cx,
@@ -415,8 +499,11 @@ fn provider_row(
                     ws.persist_store();
                     cx.notify();
                 },
-            )
-        }))
+            ));
+        }
+    }
+
+    actions = actions
         .child(button_l(
             gpui::SharedString::from(format!("prov-models-{pid_models}")),
             i.t("模型", "Models"),
@@ -436,76 +523,96 @@ fn provider_row(
             move |ws, _, _, cx| {
                 open_provider_dialog(Some(pid2.clone()), tool, ws, cx);
             },
-        ))
-        .child(button_l(
-            gpui::SharedString::from(format!("prov-toggle-{pid3}")),
-            if p.is_disabled {
-                i.t("启用", "Enable")
-            } else {
-                i.t("停用", "Disable")
-            },
-            ButtonVariant::Secondary,
+        ));
+
+    if !aitoolplus_core::providers::is_official_provider(tool, &p.id) {
+        actions = actions.child(button_l(
+            gpui::SharedString::from(format!("prov-del-{pid4}")),
+            i.t("删除", "Delete"),
+            ButtonVariant::Danger,
             &t,
             cx,
             move |ws, _, _, cx| {
-                let _ = ws.store.update(|store| {
-                    let section = store.tool_mut(tool);
-                    aitoolplus_core::providers::toggle_disabled(&mut section.providers, &pid3);
+                ws.ui.confirm = Some(super::ConfirmState {
+                    title: ws.i18n.t("删除供应商", "Delete Provider").to_string(),
+                    message: ws
+                        .i18n
+                        .t("确定要删除这条供应商配置吗？", "Delete this provider?")
+                        .to_string(),
+                    action: super::ConfirmAction::DeleteProvider {
+                        tool,
+                        id: pid4.clone(),
+                    },
                 });
-                ws.persist_store();
                 cx.notify();
             },
-        ))
-        .children((!aitoolplus_core::providers::is_official_provider(tool, &p.id)).then(|| {
-            button_l(
-                gpui::SharedString::from(format!("prov-del-{pid4}")),
-                i.t("删除", "Delete"),
-                ButtonVariant::Danger,
-                &t,
-                cx,
-                move |ws, _, _, cx| {
-                    ws.ui.confirm = Some(super::ConfirmState {
-                        title: ws.i18n.t("删除供应商", "Delete Provider").to_string(),
-                        message: ws
-                            .i18n
-                            .t("确定要删除这条供应商配置吗？", "Delete this provider?")
-                            .to_string(),
-                        action: super::ConfirmAction::DeleteProvider {
-                            tool,
-                            id: pid4.clone(),
-                        },
-                    });
-                    cx.notify();
-                },
-            )
-        }));
+        ));
+    }
+
+    if p.is_applied {
+        actions = actions.child(
+            div()
+                .px(px(12.0))
+                .py(px(4.5))
+                .rounded(px(6.0))
+                .bg(crate::rgba_const(0x10b98118))
+                .border_1()
+                .border_color(crate::rgba_const(0x10b98144))
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(crate::rgba_const(0x10b981ff))
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child("✓")
+                .child(i.t("使用中", "In Use")),
+        );
+    } else {
+        actions = actions.child(button_l(
+            gpui::SharedString::from(format!("prov-apply-{pid}")),
+            i.t("应用", "Apply"),
+            ButtonVariant::Primary,
+            &t,
+            cx,
+            move |ws, _, _, cx| ws.apply_provider(tool, &pid, cx),
+        ));
+    }
 
     let border_color = if p.is_applied {
-        crate::rgba_const(0x10b98166)
+        crate::rgba_const(0x3b82f688)
     } else {
         t.card_border
     };
+    let bg_color = if p.is_applied {
+        crate::rgba_const(0x3b82f608)
+    } else {
+        t.card_bg
+    };
+
     div()
         .id(gpui::SharedString::from(format!("provider-card-{}", p.id)))
         .flex()
-        .flex_col()
+        .items_center()
+        .justify_between()
+        .flex_wrap()
         .w_full()
         .min_w(px(0.0))
-        .gap(px(10.0))
-        .p(px(14.0))
-        .rounded(px(8.0))
-        .bg(t.card_bg)
+        .gap(px(12.0))
+        .px(px(14.0))
+        .py(px(11.0))
+        .rounded(px(10.0))
+        .bg(bg_color)
         .border_1()
         .border_color(border_color)
         .shadow_xs()
         .hover(move |h| {
             h.bg(t.card_hover).border_color(if p.is_applied {
-                crate::rgba_const(0x10b981aa)
+                crate::rgba_const(0x3b82f6cc)
             } else {
                 t.card_border_hover
             })
         })
-        .child(header)
+        .child(left)
         .child(actions)
         .into_any_element()
 }
@@ -584,6 +691,7 @@ fn export_providers(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace
 // Common config tab
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn common_section(
     tool: ToolId,
     ws: &mut Workspace,
