@@ -349,17 +349,23 @@ pub fn ensure_official_provider(tool: ToolId, providers: &mut Vec<ProviderRecord
     let Some(id) = official_provider_id(tool) else {
         return false;
     };
+    // Deduplicate any stale official records with different ids (e.g. live:claude)
+    let had_duplicate = providers.iter().any(|p| p.category == "official" && p.id != id);
+    let duplicate_applied =
+        providers.iter().any(|p| p.category == "official" && p.id != id && p.is_applied);
+    providers.retain(|p| !(p.category == "official" && p.id != id));
+
     let any_applied = providers.iter().any(|p| p.is_applied);
     if let Some(existing) = providers.iter_mut().find(|p| p.id == id) {
-        if !any_applied {
+        if !any_applied || duplicate_applied {
             existing.is_applied = true;
         }
-        return false;
+        return had_duplicate;
     }
     let Some(mut official) = official_provider_record(tool) else {
         return false;
     };
-    if !any_applied {
+    if !any_applied || duplicate_applied {
         official.is_applied = true;
     }
     official.sort_index = 0;

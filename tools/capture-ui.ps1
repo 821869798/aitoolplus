@@ -20,6 +20,7 @@ public class NativeUi {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, UIntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
   public struct RECT { public int Left, Top, Right, Bottom; }
   public struct POINT { public int X, Y; }
@@ -52,6 +53,7 @@ public class NativeUi {
   }
 }
 '@
+try { [NativeUi]::SetProcessDpiAwarenessContext([IntPtr](-4)) } catch {}
 $proc = Get-Process aitoolplus -ErrorAction Stop | Select-Object -First 1
 $hwnd = [NativeUi]::FindMainWindow($proc.Id)
 if ($hwnd -eq [IntPtr]::Zero) { $hwnd = $proc.MainWindowHandle }
@@ -82,9 +84,6 @@ $g = [System.Drawing.Graphics]::FromImage($bmp)
 $hdc = $g.GetHdc()
 $printed = [NativeUi]::PrintWindow($hwnd, $hdc, 2)
 $g.ReleaseHdc($hdc)
-if (-not $printed) {
-  $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
-}
 $out = "D:\program\rust\aitoolplus\docs\screenshots\$Name.png"
 [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($out)) | Out-Null
 $bmp.Save($out)

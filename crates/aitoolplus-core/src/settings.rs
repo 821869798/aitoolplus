@@ -9,9 +9,9 @@ use crate::store::{load_or_default, save_json_atomic};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeMode {
     #[default]
-    System,
     Dark,
     Light,
+    System,
 }
 
 impl ThemeMode {

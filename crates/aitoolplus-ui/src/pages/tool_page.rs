@@ -213,10 +213,7 @@ fn providers_section(
         .child(section_title(
             &t,
             i.t("供应商列表", "Provider List"),
-            Some(i.t(
-                "选择一条记录一键写入真实配置文件",
-                "Pick an entry to write the real config file",
-            )),
+            None,
         ))
         .child(actions);
 
@@ -233,7 +230,7 @@ fn providers_section(
             ),
         ));
     } else {
-        let mut list = div().flex().flex_col().gap(px(6.0));
+        let mut list = div().flex().flex_col().gap(px(10.0));
         let total = providers.len();
         for (index, provider) in providers.iter().enumerate() {
             list = list.child(provider_row(tool, provider, index, total, ws, cx));
@@ -244,32 +241,75 @@ fn providers_section(
     section.into_any_element()
 }
 
+fn card_icon_btn(
+    id: impl Into<gpui::ElementId>,
+    icon: &'static str,
+    tooltip: impl Into<gpui::SharedString>,
+    is_danger: bool,
+    t: &crate::theme::Theme,
+    cx: &mut Context<Workspace>,
+    on_click: impl Fn(&mut Workspace, &gpui::MouseDownEvent, &mut gpui::Window, &mut Context<Workspace>) + 'static,
+) -> gpui::AnyElement {
+    let tooltip = tooltip.into();
+    let text_color = t.text_secondary;
+    let hover_text = t.text_primary;
+    let hover_bg = t.card_hover;
+    div()
+        .id(id.into())
+        .cursor_pointer()
+        .size(px(28.0))
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(13.0))
+        .text_color(text_color)
+        .hover(move |h| {
+            if is_danger {
+                h.bg(crate::rgba_const(0xef444422))
+                    .text_color(crate::rgba_const(0xef4444ff))
+            } else {
+                h.bg(hover_bg).text_color(hover_text)
+            }
+        })
+        .tooltip(move |_w, cx| {
+            let tip = tooltip.clone();
+            cx.new(|_| crate::components::Tooltip::new(tip)).into()
+        })
+        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, ev, w, cx| {
+            on_click(ws, ev, w, cx);
+        }))
+        .child(icon)
+        .into_any_element()
+}
+
 fn provider_icon_spec(p: &ProviderRecord) -> (&'static str, gpui::Rgba, gpui::Rgba) {
     let lower_name = p.name.to_lowercase();
-    if p.category == "official" || lower_name.contains("official") || lower_name.contains("官方") {
-        ("✦", crate::rgba_const(0x3b82f6ff), crate::rgba_const(0x3b82f618))
-    } else if lower_name.contains("claude") || lower_name.contains("anthropic") {
-        ("C", crate::rgba_const(0xd97706ff), crate::rgba_const(0xd9770618))
+    if p.category == "official"
+        || lower_name.contains("official")
+        || lower_name.contains("官方")
+        || lower_name.contains("claude")
+        || lower_name.contains("anthropic")
+    {
+        ("A\\", crate::rgba_const(0xe07a5fff), crate::rgba_const(0xe07a5f20))
     } else if lower_name.contains("deepseek") {
-        ("D", crate::rgba_const(0x0284c7ff), crate::rgba_const(0x0284c718))
+        ("🐋", crate::rgba_const(0x0284c7ff), crate::rgba_const(0x0284c720))
     } else if lower_name.contains("openai") || lower_name.contains("codex") || lower_name.contains("chatgpt") {
-        ("O", crate::rgba_const(0x10b981ff), crate::rgba_const(0x10b98118))
+        ("O", crate::rgba_const(0x10b981ff), crate::rgba_const(0x10b98120))
     } else if lower_name.contains("gemini") || lower_name.contains("google") {
-        ("G", crate::rgba_const(0x6366f1ff), crate::rgba_const(0x6366f118))
+        ("✦", crate::rgba_const(0x6366f1ff), crate::rgba_const(0x6366f120))
     } else if lower_name.contains("kimi") || lower_name.contains("moonshot") {
-        ("K", crate::rgba_const(0x8b5cf6ff), crate::rgba_const(0x8b5cf618))
+        ("K", crate::rgba_const(0x8b5cf6ff), crate::rgba_const(0x8b5cf620))
     } else if lower_name.contains("grok") || lower_name.contains("xai") {
-        ("X", crate::rgba_const(0x64748bff), crate::rgba_const(0x64748b18))
+        ("X", crate::rgba_const(0x94a3b8ff), crate::rgba_const(0x94a3b820))
     } else {
-        ("⚡", crate::rgba_const(0x10b981ff), crate::rgba_const(0x10b98118))
+        ("⚡", crate::rgba_const(0x9ca3afff), crate::rgba_const(0xffffff15))
     }
 }
 
-fn extract_provider_subtitle(p: &ProviderRecord, i: &crate::i18n::I18n) -> String {
+fn extract_provider_subtitle(p: &ProviderRecord, _i: &crate::i18n::I18n) -> String {
     if p.category == "official" {
-        return i
-            .t("官方端点直连 (Official Direct)", "Official Direct Endpoint")
-            .to_string();
+        return "https://www.anthropic.com/claude-code".to_string();
     }
     if let Some(ref w) = p.website_url {
         let trimmed = w.trim();
@@ -340,24 +380,37 @@ fn provider_row(
     let pid_models = p.id.clone();
     let pid_up = p.id.clone();
     let pid_down = p.id.clone();
+    let pid_test = p.id.clone();
 
     let (icon_sym, icon_color, icon_bg) = provider_icon_spec(p);
     let subtitle = extract_provider_subtitle(p, &i);
 
     let test_badge = ws.ui.provider_test_results.get(&p.id).map(|result| {
-        let (label, kind) = if result.ok {
-            (
-                format!("{}ms · {} models", result.latency_ms, result.models_count),
-                BadgeKind::Success,
-            )
+        if result.ok {
+            div()
+                .px(px(6.0))
+                .py(px(2.0))
+                .rounded(px(4.0))
+                .bg(crate::rgba_const(0x10b98115))
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(crate::rgba_const(0x10b981ff))
+                .child(format!("{}ms", result.latency_ms))
         } else {
-            (
-                i.t("连通失败", "Failed").to_string(),
-                BadgeKind::Danger,
-            )
-        };
-        badge(&t, label, kind)
+            div()
+                .px(px(6.0))
+                .py(px(2.0))
+                .rounded(px(4.0))
+                .bg(crate::rgba_const(0xef444415))
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(crate::rgba_const(0xef4444ff))
+                .child(i.t("连通失败", "Failed"))
+        }
     });
+
+    let is_official =
+        p.category == "official" || aitoolplus_core::providers::is_official_provider(tool, &p.id);
 
     let left = div()
         .flex()
@@ -367,18 +420,26 @@ fn provider_row(
         .flex_1()
         .child(
             div()
-                .size(px(38.0))
+                .text_size(px(14.0))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(crate::rgba_const(0xffffff24))
+                .cursor_grab()
+                .child("⋮⋮"),
+        )
+        .child(
+            div()
+                .size(px(36.0))
                 .flex_shrink_0()
-                .rounded(px(8.0))
+                .rounded_full()
                 .bg(icon_bg)
                 .border_1()
-                .border_color(crate::rgba_const(0xffffff15))
+                .border_color(crate::rgba_const(0xffffff18))
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(
                     div()
-                        .text_size(px(15.0))
+                        .text_size(px(13.5))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(icon_color)
                         .child(icon_sym),
@@ -388,7 +449,7 @@ fn provider_row(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(3.0))
+                .gap(px(2.5))
                 .min_w(px(0.0))
                 .flex_1()
                 .child(
@@ -398,20 +459,37 @@ fn provider_row(
                         .gap(px(8.0))
                         .child(
                             div()
-                                .text_size(px(14.0))
+                                .text_size(px(15.0))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
                                 .child(p.name.clone()),
                         )
-                        .child(badge(&t, p.category.as_str(), BadgeKind::Accent))
+                        .children(is_official.then(|| {
+                            div()
+                                .px(px(6.0))
+                                .py(px(1.5))
+                                .rounded(px(4.0))
+                                .bg(crate::rgba_const(0x23252eff))
+                                .text_size(px(11.0))
+                                .text_color(crate::rgba_const(0x9ca3afff))
+                                .child(i.t("官方直连", "Official"))
+                        }))
                         .children(p.is_disabled.then(|| {
-                            badge(&t, i.t("已停用", "Disabled"), BadgeKind::Neutral)
+                            div()
+                                .px(px(6.0))
+                                .py(px(1.5))
+                                .rounded(px(4.0))
+                                .bg(crate::rgba_const(0x23252eff))
+                                .text_size(px(11.0))
+                                .text_color(crate::rgba_const(0xef4444bb))
+                                .child(i.t("已停用", "Disabled"))
                         })),
                 )
                 .children((!subtitle.is_empty()).then(|| {
                     div()
-                        .text_size(px(12.0))
-                        .text_color(t.text_muted)
+                        .text_size(px(12.5))
+                        .text_color(crate::rgba_const(0x3b82f6ee))
+                        .cursor_pointer()
                         .child(subtitle)
                         .into_any_element()
                 })),
@@ -427,15 +505,95 @@ fn provider_row(
         actions = actions.child(tb);
     }
 
+    if p.is_applied {
+        actions = actions.child(
+            div()
+                .px(px(14.0))
+                .py(px(5.0))
+                .rounded(px(8.0))
+                .bg(crate::rgba_const(0x10b98118))
+                .border_1()
+                .border_color(crate::rgba_const(0x10b98144))
+                .text_size(px(12.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(crate::rgba_const(0x10b981ff))
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child("✓")
+                .child(i.t("使用中", "In Use")),
+        );
+    } else {
+        actions = actions.child(
+            div()
+                .id(gpui::SharedString::from(format!("prov-apply-{pid}")))
+                .cursor_pointer()
+                .px(px(14.0))
+                .py(px(5.0))
+                .rounded(px(8.0))
+                .bg(crate::rgba_const(0x2563ebff))
+                .hover(|h| h.bg(crate::rgba_const(0x1d4ed8ff)))
+                .text_size(px(12.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(crate::rgba_const(0xffffffff))
+                .shadow_xs()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .child("▷")
+                .child(i.t("启用", "Enable"))
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _ev, _w, cx| {
+                    ws.apply_provider(tool, &pid, cx);
+                })),
+        );
+    }
+
+    actions = actions.child(card_icon_btn(
+        format!("prov-edit-{pid2}"),
+        "✎",
+        i.t("编辑供应商", "Edit Provider"),
+        false,
+        &t,
+        cx,
+        move |ws, _ev, _w, cx| {
+            open_provider_dialog(Some(pid2.clone()), tool, ws, cx);
+        },
+    ));
+
+    actions = actions.child(card_icon_btn(
+        format!("prov-test-{pid_test}"),
+        "⚡",
+        i.t("连通测试", "Test Connection"),
+        false,
+        &t,
+        cx,
+        move |ws, _ev, _w, cx| {
+            test_single_provider_action(tool, pid_test.clone(), ws, cx);
+        },
+    ));
+
+    actions = actions.child(card_icon_btn(
+        format!("prov-models-{pid_models}"),
+        "📊",
+        i.t("拉取可用模型", "Fetch Models"),
+        false,
+        &t,
+        cx,
+        move |ws, _ev, _w, cx| {
+            fetch_models_action(tool, pid_models.clone(), ws, cx);
+        },
+    ));
+
     if aitoolplus_core::cli_launch::command_name(tool).is_some() {
         let launch_id = p.id.clone();
-        actions = actions.child(button_l(
-            gpui::SharedString::from(format!("prov-launch-{launch_id}")),
-            i.t("启动", "Launch"),
-            ButtonVariant::Secondary,
+        actions = actions.child(card_icon_btn(
+            format!("prov-launch-{launch_id}"),
+            ">_",
+            i.t("启动 CLI 终端", "Launch CLI"),
+            false,
             &t,
             cx,
-            move |ws, _, _, cx| {
+            move |ws, _ev, _w, cx| {
                 if !ws
                     .store
                     .store()
@@ -464,13 +622,14 @@ fn provider_row(
 
     if total > 1 {
         if index > 0 {
-            actions = actions.child(button_l(
-                gpui::SharedString::from(format!("prov-up-{pid_up}")),
+            actions = actions.child(card_icon_btn(
+                format!("prov-up-{pid_up}"),
                 "▲",
-                ButtonVariant::Secondary,
+                i.t("上移", "Move Up"),
+                false,
                 &t,
                 cx,
-                move |ws, _, _, cx| {
+                move |ws, _ev, _w, cx| {
                     let _ = ws.store.update(|store| {
                         let providers = &mut store.tool_mut(tool).providers;
                         if let Some(from) = providers.iter().position(|p| p.id == pid_up) {
@@ -483,13 +642,14 @@ fn provider_row(
             ));
         }
         if index + 1 < total {
-            actions = actions.child(button_l(
-                gpui::SharedString::from(format!("prov-down-{pid_down}")),
+            actions = actions.child(card_icon_btn(
+                format!("prov-down-{pid_down}"),
                 "▼",
-                ButtonVariant::Secondary,
+                i.t("下移", "Move Down"),
+                false,
                 &t,
                 cx,
-                move |ws, _, _, cx| {
+                move |ws, _ev, _w, cx| {
                     let _ = ws.store.update(|store| {
                         let providers = &mut store.tool_mut(tool).providers;
                         if let Some(from) = providers.iter().position(|p| p.id == pid_down) {
@@ -503,36 +663,15 @@ fn provider_row(
         }
     }
 
-    actions = actions
-        .child(button_l(
-            gpui::SharedString::from(format!("prov-models-{pid_models}")),
-            i.t("模型", "Models"),
-            ButtonVariant::Secondary,
+    if !is_official {
+        actions = actions.child(card_icon_btn(
+            format!("prov-del-{pid4}"),
+            "🗑",
+            i.t("删除供应商", "Delete Provider"),
+            true,
             &t,
             cx,
-            move |ws, _, _, cx| {
-                fetch_models_action(tool, pid_models.clone(), ws, cx);
-            },
-        ))
-        .child(button_l(
-            gpui::SharedString::from(format!("prov-edit-{pid2}")),
-            i.t("编辑", "Edit"),
-            ButtonVariant::Secondary,
-            &t,
-            cx,
-            move |ws, _, _, cx| {
-                open_provider_dialog(Some(pid2.clone()), tool, ws, cx);
-            },
-        ));
-
-    if !aitoolplus_core::providers::is_official_provider(tool, &p.id) {
-        actions = actions.child(button_l(
-            gpui::SharedString::from(format!("prov-del-{pid4}")),
-            i.t("删除", "Delete"),
-            ButtonVariant::Danger,
-            &t,
-            cx,
-            move |ws, _, _, cx| {
+            move |ws, _ev, _w, cx| {
                 ws.ui.confirm = Some(super::ConfirmState {
                     title: ws.i18n.t("删除供应商", "Delete Provider").to_string(),
                     message: ws
@@ -549,44 +688,29 @@ fn provider_row(
         ));
     }
 
-    if p.is_applied {
-        actions = actions.child(
-            div()
-                .px(px(12.0))
-                .py(px(4.5))
-                .rounded(px(6.0))
-                .bg(crate::rgba_const(0x10b98118))
-                .border_1()
-                .border_color(crate::rgba_const(0x10b98144))
-                .text_size(px(12.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(crate::rgba_const(0x10b981ff))
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child("✓")
-                .child(i.t("使用中", "In Use")),
-        );
-    } else {
-        actions = actions.child(button_l(
-            gpui::SharedString::from(format!("prov-apply-{pid}")),
-            i.t("应用", "Apply"),
-            ButtonVariant::Primary,
-            &t,
-            cx,
-            move |ws, _, _, cx| ws.apply_provider(tool, &pid, cx),
-        ));
-    }
-
     let border_color = if p.is_applied {
-        crate::rgba_const(0x3b82f688)
+        t.accent
     } else {
         t.card_border
     };
     let bg_color = if p.is_applied {
-        crate::rgba_const(0x3b82f608)
+        if t.is_dark {
+            crate::rgba_const(0x181a24ff)
+        } else {
+            crate::rgba_const(0xf0f7ffff)
+        }
     } else {
         t.card_bg
+    };
+    let hover_bg = if t.is_dark {
+        crate::rgba_const(0x1c1e28ff)
+    } else {
+        t.card_hover
+    };
+    let hover_border = if p.is_applied {
+        t.accent_hover
+    } else {
+        t.card_border_hover
     };
 
     div()
@@ -594,23 +718,18 @@ fn provider_row(
         .flex()
         .items_center()
         .justify_between()
-        .flex_wrap()
         .w_full()
         .min_w(px(0.0))
-        .gap(px(12.0))
-        .px(px(14.0))
-        .py(px(11.0))
-        .rounded(px(10.0))
+        .gap(px(14.0))
+        .px(px(18.0))
+        .py(px(14.0))
+        .rounded(px(12.0))
         .bg(bg_color)
         .border_1()
         .border_color(border_color)
         .shadow_xs()
         .hover(move |h| {
-            h.bg(t.card_hover).border_color(if p.is_applied {
-                crate::rgba_const(0x3b82f6cc)
-            } else {
-                t.card_border_hover
-            })
+            h.bg(hover_bg).border_color(hover_border)
         })
         .child(left)
         .child(actions)
@@ -2122,6 +2241,44 @@ fn extensions_section(
     }
 
     section.into_any_element()
+}
+
+fn test_single_provider_action(
+    tool: ToolId,
+    provider_id: String,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) {
+    let settings = ws
+        .store
+        .store()
+        .tool(tool)
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .map(|p| p.settings())
+        .unwrap_or_default();
+
+    let pid = provider_id.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let result = cx
+            .background_spawn(async move {
+                aitoolplus_core::api_hub::test_connectivity(&settings)
+            })
+            .await;
+        let _ = weak.update(cx, |ws, cx| {
+            let msg = if result.ok {
+                format!("连接成功 ({}ms)", result.latency_ms)
+            } else {
+                format!("连接失败: {}", result.message)
+            };
+            ws.ui.toast(msg, !result.ok);
+            ws.ui.provider_test_results.insert(pid, result);
+            cx.notify();
+        });
+    })
+    .detach();
 }
 
 /// Fetch this provider's live model list (API Hub) and toast the result.
