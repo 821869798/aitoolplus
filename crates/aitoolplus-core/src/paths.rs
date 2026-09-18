@@ -77,6 +77,17 @@ impl Paths {
         self
     }
 
+    /// Whether this Paths instance is running in portable mode.
+    pub fn is_portable(&self) -> bool {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+            && (dir.join(".portable").exists() || self.app_data == dir.join("data"))
+        {
+            return true;
+        }
+        false
+    }
+
     /// The tool's config root dir: override > platform default.
     pub fn tool_root(&self, tool: ToolId) -> PathBuf {
         if let Some(root) = self.tool_roots.get(&tool) {

@@ -10,7 +10,7 @@ use gpui::{Context, IntoElement, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::components::{
-    BadgeKind, ButtonVariant, badge, button_l, empty_state, input_container, page_header,
+    BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l, input_container,
     section_title,
 };
 use crate::text_input::TextInput;
@@ -26,6 +26,92 @@ fn mcp_tools() -> Vec<ToolId> {
         .filter(|t| mcp_format(*t).is_some())
         .collect()
 }
+
+#[derive(Clone)]
+pub struct McpPreset {
+    pub name: &'static str,
+    pub server_type: McpServerType,
+    pub command: &'static str,
+    pub args: &'static str,
+    pub env: &'static str,
+    pub url: &'static str,
+    pub desc: &'static str,
+}
+
+pub const BUILTIN_MCP_PRESETS: &[McpPreset] = &[
+    McpPreset {
+        name: "Filesystem",
+        server_type: McpServerType::Stdio,
+        command: "npx",
+        args: "-y @modelcontextprotocol/server-filesystem D:\\",
+        env: "",
+        url: "",
+        desc: "本地文件读写",
+    },
+    McpPreset {
+        name: "GitHub",
+        server_type: McpServerType::Stdio,
+        command: "npx",
+        args: "-y @modelcontextprotocol/server-github",
+        env: "{\"GITHUB_PERSONAL_ACCESS_TOKEN\":\"\"}",
+        url: "",
+        desc: "GitHub 仓库管理",
+    },
+    McpPreset {
+        name: "Fetch",
+        server_type: McpServerType::Stdio,
+        command: "uvx",
+        args: "mcp-server-fetch",
+        env: "",
+        url: "",
+        desc: "网页抓取与解析",
+    },
+    McpPreset {
+        name: "SQLite",
+        server_type: McpServerType::Stdio,
+        command: "uvx",
+        args: "mcp-server-sqlite --db-path ./data.db",
+        env: "",
+        url: "",
+        desc: "SQLite 数据库查询",
+    },
+    McpPreset {
+        name: "PostgreSQL",
+        server_type: McpServerType::Stdio,
+        command: "npx",
+        args: "-y @modelcontextprotocol/server-postgres postgresql://localhost/mydb",
+        env: "",
+        url: "",
+        desc: "Postgres 数据库",
+    },
+    McpPreset {
+        name: "Memory Graph",
+        server_type: McpServerType::Stdio,
+        command: "npx",
+        args: "-y @modelcontextprotocol/server-memory",
+        env: "",
+        url: "",
+        desc: "知识图谱持久记忆",
+    },
+    McpPreset {
+        name: "Puppeteer",
+        server_type: McpServerType::Stdio,
+        command: "npx",
+        args: "-y @modelcontextprotocol/server-puppeteer",
+        env: "",
+        url: "",
+        desc: "无头浏览器截图抓取",
+    },
+    McpPreset {
+        name: "Brave Search",
+        server_type: McpServerType::Stdio,
+        command: "npx",
+        args: "-y @modelcontextprotocol/server-brave-search",
+        env: "{\"BRAVE_API_KEY\":\"\"}",
+        url: "",
+        desc: "Brave 互联网搜索",
+    },
+];
 
 pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
@@ -68,20 +154,51 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
     let add_label = i.t("新增服务器", "Add Server");
     let sync_label = i.t("全部同步", "Sync All");
 
+    // Presets bar
+    let mut rec_bar = div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .flex_wrap()
+        .child(
+            div()
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(t.text_secondary)
+                .child(i.t("常用模板预设：", "Quick Presets:")),
+        );
+
+    for preset in BUILTIN_MCP_PRESETS {
+        let p_name = preset.name;
+        let p_desc = i.t(preset.desc, preset.desc);
+        let preset_clone = preset.clone();
+        let label = format!("{p_name} ({p_desc})");
+        rec_bar = rec_bar.child(button_with_icon_l(
+            gpui::SharedString::from(format!("mcp-pre-{}", preset.name)),
+            crate::icons::PLUS_SVG,
+            label,
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, window, cx| {
+                open_mcp_dialog(None, Some(&preset_clone), ws, cx);
+                if let Some(dlg) = &ws.ui.mcp_dialog {
+                    dlg.name.update(cx, |name, cx| {
+                        name.focus_handle.focus(window, cx);
+                        name.start_blink(cx);
+                    });
+                }
+            },
+        ));
+    }
+
     let mut section = div()
         .flex()
         .flex_col()
         .w_full()
         .min_w(px(0.0))
         .gap(px(12.0))
-        .child(page_header(
-            &t,
-            i.t("MCP 服务器", "MCP Servers"),
-            i.t(
-                "集中管理 MCP 定义，按工具启停并同步到各 CLI 配置",
-                "Central MCP definitions; toggle per tool and sync to CLI configs",
-            ),
-        ))
+        .child(rec_bar)
         .child(section_title(
             &t,
             i.t("服务器列表", "Server List"),
@@ -94,39 +211,80 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
             div()
                 .flex()
                 .items_center()
-                .justify_start()
+                .justify_between()
                 .gap(px(8.0))
-                .child(button_l(
-                    "mcp-sync",
-                    sync_label,
-                    ButtonVariant::Primary,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| sync_all_action(ws, cx),
-                ))
-                .child(button_l(
-                    "mcp-add",
-                    add_label,
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| open_mcp_dialog(None, ws, cx),
-                )),
+                .flex_wrap()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(button_l(
+                            "mcp-sync",
+                            sync_label,
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| sync_all_action(ws, cx),
+                        ))
+                        .child(button_l(
+                            "mcp-add",
+                            add_label,
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, window, cx| {
+                                open_mcp_dialog(None, None, ws, cx);
+                                if let Some(dlg) = &ws.ui.mcp_dialog {
+                                    dlg.name.update(cx, |name, cx| {
+                                        name.focus_handle.focus(window, cx);
+                                        name.start_blink(cx);
+                                    });
+                                }
+                            },
+                        )),
+                )
+                .child(
+                    div()
+                        .w(px(280.0))
+                        .child(input_container(&t, ws.ui.mcp_search.clone())),
+                ),
         );
 
-    if servers.is_empty() {
-        section = section.child(empty_state(
+    let query = ws.ui.mcp_search.read(cx).text().to_lowercase();
+    let filtered_servers: Vec<_> = servers
+        .into_iter()
+        .filter(|s| {
+            if query.is_empty() {
+                return true;
+            }
+            s.name.to_lowercase().contains(&query)
+                || s.user_group.as_deref().is_some_and(|g| g.to_lowercase().contains(&query))
+                || s.server_config.to_string().to_lowercase().contains(&query)
+        })
+        .collect();
+
+    if filtered_servers.is_empty() {
+        section = section.child(crate::components::empty_state_svg(
             &t,
-            "⬡",
-            i.t("还没有 MCP 服务器", "No MCP servers yet"),
-            i.t(
-                "已安装工具的现有配置会在首次打开时自动导入",
-                "Existing configs from installed tools are imported on first open",
-            ),
+            crate::icons::MCP_SVG,
+            if query.is_empty() {
+                i.t("还没有 MCP 服务器", "No MCP servers yet")
+            } else {
+                i.t("没有找到匹配的 MCP 服务器", "No matching MCP servers")
+            },
+            if query.is_empty() {
+                i.t(
+                    "点击上方模板快速添加，或等待已安装工具的配置自动导入",
+                    "Click a preset above or add a server to get started",
+                )
+            } else {
+                i.t("尝试更换搜索关键词", "Try a different search keyword")
+            },
         ));
     } else {
         let mut list = div().flex().flex_col().gap(px(6.0));
-        for s in &servers {
+        for s in &filtered_servers {
             list = list.child(server_row(s, ws, cx));
         }
         section = section.child(list);
@@ -255,6 +413,11 @@ fn server_row(s: &McpServer, ws: &mut Workspace, cx: &mut Context<Workspace>) ->
             .children(sync_badge),
     );
 
+    let dup_id = s.id.clone();
+    let copy_id = s.id.clone();
+    let del_id = s.id.clone();
+    let del_name = s.name.clone();
+
     row = row.child(
         div()
             .flex()
@@ -284,7 +447,75 @@ fn server_row(s: &McpServer, ws: &mut Workspace, cx: &mut Context<Workspace>) ->
                 ButtonVariant::Secondary,
                 &t,
                 cx,
-                move |ws, _, _, cx| open_mcp_dialog(Some(id.clone()), ws, cx),
+                move |ws, _, window, cx| {
+                    open_mcp_dialog(Some(id.clone()), None, ws, cx);
+                    if let Some(dlg) = &ws.ui.mcp_dialog {
+                        dlg.name.update(cx, |name, cx| {
+                            name.focus_handle.focus(window, cx);
+                            name.start_blink(cx);
+                        });
+                    }
+                },
+            ))
+            .child(button_l(
+                gpui::SharedString::from(format!("mcp-dup-{dup_id}")),
+                i.t("克隆", "Duplicate"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    let mut cloned = false;
+                    let _ = ws.store.update(|db| {
+                        if let Some(existing) = db.mcp.servers.iter().find(|s| s.id == dup_id) {
+                            let mut c = existing.clone();
+                            c.id = uuid::Uuid::new_v4().to_string();
+                            c.name = format!("{} (副本)", existing.name);
+                            c.sync_details = None;
+                            db.mcp.servers.push(c);
+                            cloned = true;
+                        }
+                    });
+                    if cloned {
+                        ws.persist_store();
+                        let msg = ws.i18n.t("已克隆 MCP 服务器", "MCP server duplicated").to_string();
+                        ws.ui.toast(msg, false);
+                        cx.notify();
+                    }
+                },
+            ))
+            .child(button_l(
+                gpui::SharedString::from(format!("mcp-copy-{copy_id}")),
+                i.t("复制配置", "Copy Config"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    if let Some(srv) = ws.store.store().mcp.servers.iter().find(|x| x.id == copy_id) {
+                        let json = serde_json::to_string_pretty(srv).unwrap_or_default();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
+                        let msg = ws.i18n.t("已复制 MCP 配置到剪贴板", "Copied MCP config to clipboard").to_string();
+                        ws.ui.toast(msg, false);
+                        cx.notify();
+                    }
+                },
+            ))
+            .child(button_l(
+                gpui::SharedString::from(format!("mcp-del-{del_id}")),
+                i.t("删除", "Delete"),
+                ButtonVariant::Danger,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    ws.ui.confirm = Some(super::ConfirmState {
+                        title: ws.i18n.t("删除 MCP 服务器", "Delete MCP Server").to_string(),
+                        message: ws.i18n.t(
+                            &format!("确定要删除 MCP 服务器“{}”吗？", del_name),
+                            &format!("Are you sure you want to delete MCP server '{}'?", del_name),
+                        ).to_string(),
+                        action: super::ConfirmAction::DeleteMcp { id: del_id.clone() },
+                    });
+                    cx.notify();
+                },
             )),
     );
 
@@ -295,38 +526,24 @@ fn server_row(s: &McpServer, ws: &mut Workspace, cx: &mut Context<Workspace>) ->
         let label = i.t(tool.name_zh(), tool.name_en());
         let key = format!("mcp-tool-{}-{}", s.id, tool.key());
         let sid = s.id.clone();
-        let t2 = t.clone();
-        tools_row = tools_row.child(
-            div()
-                .id(gpui::SharedString::from(key))
-                .cursor_pointer()
-                .flex()
-                .items_center()
-                .h(px(24.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .text_size(px(11.5))
-                .when(is_on, |st| {
-                    st.bg(t2.accent_subtle)
-                        .border_1()
-                        .border_color(t2.accent)
-                        .text_color(t2.accent)
-                })
-                .when(!is_on, |st| {
-                    st.bg(t2.input_bg)
-                        .border_1()
-                        .border_color(t2.input_border)
-                        .text_color(t2.text_secondary)
-                })
-                .on_click(cx.listener(move |ws, _ev: &gpui::ClickEvent, _w, cx| {
-                    let _ = ws.store.update(|db| {
-                        aitoolplus_core::mcp::toggle_tool(&mut db.mcp, &sid, tool);
-                    });
-                    ws.persist_store();
-                    cx.notify();
-                }))
-                .child(label),
-        );
+        tools_row = tools_row.child(button_l(
+            gpui::SharedString::from(key),
+            label,
+            if is_on {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Secondary
+            },
+            &t,
+            cx,
+            move |ws, _ev, _w, cx| {
+                let _ = ws.store.update(|db| {
+                    aitoolplus_core::mcp::toggle_tool(&mut db.mcp, &sid, tool);
+                });
+                ws.persist_store();
+                cx.notify();
+            },
+        ));
     }
     row = row.child(tools_row);
     row.into_any_element()
@@ -366,7 +583,12 @@ fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     cx.notify();
 }
 
-fn open_mcp_dialog(editing_id: Option<String>, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+fn open_mcp_dialog(
+    editing_id: Option<String>,
+    preset: Option<&McpPreset>,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) {
     let i = ws.i18n;
     let existing = editing_id.as_ref().and_then(|id| {
         ws.store
@@ -378,57 +600,88 @@ fn open_mcp_dialog(editing_id: Option<String>, ws: &mut Workspace, cx: &mut Cont
             .cloned()
     });
 
+    let default_name = existing
+        .as_ref()
+        .map(|s| s.name.clone())
+        .or_else(|| preset.map(|p| p.name.to_string()))
+        .unwrap_or_default();
     let name = cx.new(|cx| {
         let mut input = TextInput::new(i.t("名称", "Name"), cx);
-        if let Some(s) = &existing {
-            input.set_text_silent(s.name.clone(), cx);
-        }
+        input.set_text_silent(default_name, cx);
         input
     });
+
+    let default_cmd = existing
+        .as_ref()
+        .and_then(|s| {
+            s.server_config
+                .get("command")
+                .and_then(Value::as_str)
+                .map(|c| c.to_string())
+        })
+        .or_else(|| preset.map(|p| p.command.to_string()))
+        .unwrap_or_default();
     let command = cx.new(|cx| {
         let mut input = TextInput::new(i.t("命令（stdio）", "Command (stdio)"), cx);
-        if let Some(s) = &existing
-            && let Some(c) = s.server_config.get("command").and_then(Value::as_str)
-        {
-            input.set_text_silent(c.to_string(), cx);
-        }
+        input.set_text_silent(default_cmd, cx);
         input
     });
+
+    let default_args = existing
+        .as_ref()
+        .and_then(|s| {
+            s.server_config
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+        })
+        .or_else(|| preset.map(|p| p.args.to_string()))
+        .unwrap_or_default();
     let args = cx.new(|cx| {
         let mut input = TextInput::new(i.t("参数（空格分隔）", "Args (space separated)"), cx);
-        if let Some(s) = &existing
-            && let Some(a) = s.server_config.get("args").and_then(Value::as_array)
-        {
-            let text = a
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" ");
-            input.set_text_silent(text, cx);
-        }
+        input.set_text_silent(default_args, cx);
         input
     });
+
+    let default_env = existing
+        .as_ref()
+        .and_then(|s| {
+            s.server_config
+                .get("env")
+                .map(|e| serde_json::to_string(e).unwrap_or_default())
+        })
+        .or_else(|| preset.map(|p| p.env.to_string()))
+        .unwrap_or_default();
     let environment = cx.new(|cx| {
         let mut input = TextInput::new(
             i.t("环境变量 JSON，如 {\"KEY\":\"value\"}", "Environment JSON"),
             cx,
         );
-        if let Some(server) = &existing
-            && let Some(env) = server.server_config.get("env")
-        {
-            input.set_text_silent(serde_json::to_string(env).unwrap_or_default(), cx);
-        }
+        input.set_text_silent(default_env, cx);
         input
     });
+
+    let default_url = existing
+        .as_ref()
+        .and_then(|s| {
+            s.server_config
+                .get("url")
+                .and_then(Value::as_str)
+                .map(|u| u.to_string())
+        })
+        .or_else(|| preset.map(|p| p.url.to_string()))
+        .unwrap_or_default();
     let url = cx.new(|cx| {
         let mut input = TextInput::new(i.t("URL（http/sse）", "URL (http/sse)"), cx);
-        if let Some(s) = &existing
-            && let Some(u) = s.server_config.get("url").and_then(Value::as_str)
-        {
-            input.set_text_silent(u.to_string(), cx);
-        }
+        input.set_text_silent(default_url, cx);
         input
     });
+
     let headers = cx.new(|cx| {
         let mut input = TextInput::new(
             i.t(
@@ -444,6 +697,7 @@ fn open_mcp_dialog(editing_id: Option<String>, ws: &mut Workspace, cx: &mut Cont
         }
         input
     });
+
     let timeout_seconds = cx.new(|cx| {
         let mut input = TextInput::new(
             i.t("工具超时秒数（可选）", "Tool timeout seconds (optional)"),
@@ -456,6 +710,7 @@ fn open_mcp_dialog(editing_id: Option<String>, ws: &mut Workspace, cx: &mut Cont
         }
         input
     });
+
     let group = cx.new(|cx| {
         let mut input = TextInput::new(i.t("分组（可选）", "Group (optional)"), cx);
         if let Some(s) = &existing {
@@ -467,7 +722,18 @@ fn open_mcp_dialog(editing_id: Option<String>, ws: &mut Workspace, cx: &mut Cont
     let server_type = existing
         .as_ref()
         .map(|s| s.server_type)
+        .or_else(|| preset.map(|p| p.server_type))
         .unwrap_or(McpServerType::Stdio);
+
+    let enabled_tools = existing
+        .as_ref()
+        .map(|s| {
+            s.enabled_tools
+                .iter()
+                .filter_map(|k| ToolId::from_key(k))
+                .collect()
+        })
+        .unwrap_or_else(mcp_tools);
 
     ws.ui.mcp_dialog = Some(McpDialogState {
         editing_id,
@@ -480,6 +746,7 @@ fn open_mcp_dialog(editing_id: Option<String>, ws: &mut Workspace, cx: &mut Cont
         headers,
         timeout_seconds,
         group,
+        enabled_tools,
     });
     cx.notify();
 }
@@ -502,6 +769,7 @@ pub fn render_mcp_dialog(
         headers,
         timeout_seconds,
         group,
+        enabled_tools,
     } = state;
 
     let title = if editing_id.is_some() {
@@ -519,10 +787,90 @@ pub fn render_mcp_dialog(
             .into_any_element()
     };
 
+    let mut dialog_preset_bar = div()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .flex_wrap()
+        .child(
+            div()
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(t.text_secondary)
+                .child(i.t("填充预设：", "Fill Preset:")),
+        );
+
+    for preset in BUILTIN_MCP_PRESETS {
+        let name_val = preset.name.to_string();
+        let cmd_val = preset.command.to_string();
+        let args_val = preset.args.to_string();
+        let env_val = preset.env.to_string();
+        let p_type = preset.server_type;
+        let p_name = preset.name;
+        let name_inp = name.clone();
+        let cmd_inp = command.clone();
+        let args_inp = args.clone();
+        let env_inp = environment.clone();
+
+        dialog_preset_bar = dialog_preset_bar.child(button_l(
+            gpui::SharedString::from(format!("dlg-pre-{}", preset.name)),
+            p_name,
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                name_inp.update(cx, |inp, cx| inp.set_text_silent(name_val.clone(), cx));
+                cmd_inp.update(cx, |inp, cx| inp.set_text_silent(cmd_val.clone(), cx));
+                args_inp.update(cx, |inp, cx| inp.set_text_silent(args_val.clone(), cx));
+                env_inp.update(cx, |inp, cx| inp.set_text_silent(env_val.clone(), cx));
+                if let Some(d) = ws.ui.mcp_dialog.as_mut() {
+                    d.server_type = p_type;
+                }
+                cx.notify();
+            },
+        ));
+    }
+
+    let tools_picker = div()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(field_label(i.t("应用到目标工具", "Target Tools")))
+        .child({
+            let mut row = div().flex().gap(px(6.0)).flex_wrap();
+            for tool in mcp_tools() {
+                let is_on = enabled_tools.contains(&tool);
+                let label = i.t(tool.name_zh(), tool.name_en());
+                row = row.child(button_l(
+                    gpui::SharedString::from(format!("dlg-tool-{}", tool.key())),
+                    label,
+                    if is_on {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Secondary
+                    },
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        if let Some(d) = ws.ui.mcp_dialog.as_mut() {
+                            if let Some(pos) = d.enabled_tools.iter().position(|x| *x == tool) {
+                                d.enabled_tools.remove(pos);
+                            } else {
+                                d.enabled_tools.push(tool);
+                            }
+                        }
+                        cx.notify();
+                    },
+                ));
+            }
+            row
+        });
+
     let body = div()
         .flex()
         .flex_col()
         .gap(px(12.0))
+        .child(dialog_preset_bar)
         .child(
             div()
                 .flex()
@@ -531,6 +879,7 @@ pub fn render_mcp_dialog(
                 .child(field_label(i.t("名称", "Name")))
                 .child(input_container(&t, name.clone())),
         )
+        .child(tools_picker)
         .child(
             div().flex().gap(px(8.0)).child(
                 div()
@@ -548,39 +897,23 @@ pub fn render_mcp_dialog(
                             (McpServerType::Sse, i.t("SSE", "SSE")),
                         ] {
                             let is_on = ty == server_type;
-                            let t2 = t.clone();
-                            row = row.child(
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "mcp-type-{}",
-                                        ty.as_str()
-                                    )))
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .h(px(24.0))
-                                    .px(px(10.0))
-                                    .rounded(px(6.0))
-                                    .when(is_on, |st| {
-                                        st.bg(t2.accent_subtle)
-                                            .border_1()
-                                            .border_color(t2.accent)
-                                            .text_color(t2.accent)
-                                    })
-                                    .when(!is_on, |st| {
-                                        st.bg(t2.input_bg)
-                                            .border_1()
-                                            .border_color(t2.input_border)
-                                            .text_color(t2.text_secondary)
-                                    })
-                                    .on_click(cx.listener(move |ws, _ev, _w, cx| {
-                                        if let Some(d) = ws.ui.mcp_dialog.as_mut() {
-                                            d.server_type = ty;
-                                        }
-                                        cx.notify();
-                                    }))
-                                    .child(label),
-                            );
+                            row = row.child(button_l(
+                                gpui::SharedString::from(format!("mcp-type-{}", ty.as_str())),
+                                label,
+                                if is_on {
+                                    ButtonVariant::Primary
+                                } else {
+                                    ButtonVariant::Secondary
+                                },
+                                &t,
+                                cx,
+                                move |ws, _ev, _w, cx| {
+                                    if let Some(d) = ws.ui.mcp_dialog.as_mut() {
+                                        d.server_type = ty;
+                                    }
+                                    cx.notify();
+                                },
+                            ));
                         }
                         row
                     }),
@@ -775,6 +1108,10 @@ pub fn render_mcp_dialog(
                             } else {
                                 Some(group_txt.trim().to_string())
                             };
+                            server.enabled_tools = enabled_tools
+                                .iter()
+                                .map(|t| t.key().to_string())
+                                .collect();
                             server
                         };
 

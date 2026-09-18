@@ -1,7 +1,12 @@
 param(
   [string]$Name = "screen",
   [Nullable[int]]$ClickX = $null,
-  [Nullable[int]]$ClickY = $null
+  [Nullable[int]]$ClickY = $null,
+  [Nullable[int]]$HoverX = $null,
+  [Nullable[int]]$HoverY = $null,
+  [Nullable[int]]$ScrollX = $null,
+  [Nullable[int]]$ScrollY = $null,
+  [int]$ScrollDelta = 0
 )
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
@@ -31,6 +36,12 @@ public class NativeUi {
     PostMessage(h, 0x0200, UIntPtr.Zero, new IntPtr(packed));
     PostMessage(h, 0x0201, new UIntPtr(1), new IntPtr(packed));
     PostMessage(h, 0x0202, UIntPtr.Zero, new IntPtr(packed));
+  }
+  public static void MouseWheel(IntPtr h, int screenX, int screenY, int delta) {
+    mouse_event(0x0800, 0, 0, unchecked((uint)delta), UIntPtr.Zero);
+    int wparam = delta << 16;
+    int lparam = (screenY << 16) | (screenX & 0xffff);
+    PostMessage(h, 0x020A, new UIntPtr(unchecked((uint)wparam)), new IntPtr(lparam));
   }
   public static IntPtr FindMainWindow(uint targetPid) {
     IntPtr best = IntPtr.Zero;
@@ -63,6 +74,9 @@ if ($hwnd -eq [IntPtr]::Zero) { throw "aitoolplus window handle is zero" }
 [NativeUi]::SetForegroundWindow($hwnd) | Out-Null
 Start-Sleep -Milliseconds 900
 $rect = New-Object NativeUi+RECT
+[NativeUi]::ShowWindow($hwnd, 9) | Out-Null
+[NativeUi]::SetForegroundWindow($hwnd) | Out-Null
+[NativeUi]::BringWindowToTop($hwnd) | Out-Null
 [NativeUi]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
 if ($ClickX -ne $null -and $ClickY -ne $null) {
   $sx = $rect.Left + $ClickX
@@ -75,6 +89,15 @@ if ($ClickX -ne $null -and $ClickY -ne $null) {
   # Also post a client-coordinate click; this is reliable with GPUI/DirectComposition.
   [NativeUi]::ClickClientFromScreen($hwnd, $sx, $sy)
   Start-Sleep -Milliseconds 1200
+  [NativeUi]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
+}
+if ($ScrollDelta -ne 0 -and $ScrollX -ne $null -and $ScrollY -ne $null) {
+  $sx = $rect.Left + $ScrollX
+  $sy = $rect.Top + $ScrollY
+  [NativeUi]::SetCursorPos($sx, $sy) | Out-Null
+  Start-Sleep -Milliseconds 250
+  [NativeUi]::MouseWheel($hwnd, $sx, $sy, $ScrollDelta)
+  Start-Sleep -Milliseconds 600
   [NativeUi]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
 }
 $w = $rect.Right - $rect.Left

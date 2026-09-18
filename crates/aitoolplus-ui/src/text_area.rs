@@ -8,10 +8,11 @@ use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IntoElement, LayoutId, PaintQuad,
-    Pixels, Point, SharedString, Style, TextRun, UTF16Selection, Window, fill, hsla, point, px,
-    relative, rgba, size,
+    App, Bounds, ClipboardItem, Context, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IntoElement, KeyDownEvent,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    ShapedLine, SharedString, Style, TextRun, UTF16Selection, Window, div, fill, hsla, point,
+    prelude::*, px, relative, rgba, size,
 };
 use unicode_segmentation::*;
 
@@ -40,14 +41,36 @@ fn line_end_of(content: &str, offset: usize) -> usize {
         .unwrap_or(content.len())
 }
 
+pub fn word_bounds_at(content: &str, offset: usize) -> Range<usize> {
+    if content.is_empty() {
+        return 0..0;
+    }
+    let o = offset.min(content.len());
+    let mut best_range = 0..content.len();
+    for (idx, word) in content.split_word_bound_indices() {
+        let word_end = idx + word.len();
+        if idx <= o && o <= word_end {
+            best_range = idx..word_end;
+            break;
+        }
+    }
+    best_range
+}
+
 pub struct TextArea {
     pub focus_handle: FocusHandle,
     pub content: String,
     pub placeholder: String,
     pub selected_range: Range<usize>,
+    pub selection_reversed: bool,
     pub marked_range: Option<Range<usize>>,
     pub cursor_visible: bool,
     pub max_lines: usize,
+    pub last_bounds: Option<Bounds<Pixels>>,
+    pub line_height: Option<Pixels>,
+    pub last_layouts: Vec<ShapedLine>,
+    pub drag_anchor: Option<usize>,
+    pub read_only: bool,
     _blink_task: Option<gpui::Task<()>>,
 }
 
@@ -60,9 +83,15 @@ impl TextArea {
             content: String::new(),
             placeholder: placeholder.into(),
             selected_range: 0..0,
+            selection_reversed: false,
             marked_range: None,
             cursor_visible: false,
             max_lines: 14,
+            last_bounds: None,
+            line_height: None,
+            last_layouts: Vec::new(),
+            drag_anchor: None,
+            read_only: false,
             _blink_task: None,
         }
     }
@@ -91,7 +120,12 @@ impl TextArea {
         cx.notify();
     }
 
-    fn start_blink(&mut self, cx: &mut Context<Self>) {
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        self.read_only = read_only;
+        cx.notify();
+    }
+
+    pub fn start_blink(&mut self, cx: &mut Context<Self>) {
         if self._blink_task.is_some() {
             return;
         }
@@ -113,7 +147,7 @@ impl TextArea {
         cx.notify();
     }
 
-    fn stop_blink(&mut self, cx: &mut Context<Self>) {
+    pub fn stop_blink(&mut self, cx: &mut Context<Self>) {
         self.cursor_visible = false;
         self._blink_task = None;
         cx.notify();
@@ -131,6 +165,38 @@ impl TextArea {
         cx: &mut Context<Self>,
     ) {
         let key = event.keystroke.key.as_str();
+
+        if self.read_only {
+            if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
+                match key {
+                    "a" | "A" => {
+                        self.selected_range = 0..self.content.len();
+                        self.selection_reversed = false;
+                        cx.notify();
+                        return;
+                    }
+                    "c" | "C" => {
+                        if !self.selected_range.is_empty() {
+                            let text = self.content[self.selected_range.clone()].to_string();
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            match key {
+                "left" => self.move_cursor(self.prev_grapheme(self.cursor()), cx),
+                "right" => self.move_cursor(self.next_grapheme(self.cursor()), cx),
+                "up" => self.move_cursor(self.prev_line_start(self.cursor()), cx),
+                "down" => self.move_cursor(self.next_line_start(self.cursor()), cx),
+                "home" => self.move_cursor(self.line_start(self.cursor()), cx),
+                "end" => self.move_cursor(self.line_end(self.cursor()), cx),
+                "escape" => cx.emit(TextAreaEvent::Escape),
+                _ => {}
+            }
+            return;
+        }
 
         if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
             match key {
@@ -165,6 +231,12 @@ impl TextArea {
         }
 
         match key {
+            "enter" => {
+                self.replace_text_in_range(None, "\n", window, cx);
+            }
+            "tab" => {
+                self.replace_text_in_range(None, "  ", window, cx);
+            }
             "left" => self.move_cursor(self.prev_grapheme(self.cursor()), cx),
             "right" => self.move_cursor(self.next_grapheme(self.cursor()), cx),
             "up" => self.move_cursor(self.prev_line_start(self.cursor()), cx),
@@ -190,13 +262,138 @@ impl TextArea {
         }
     }
 
+    pub fn on_mouse_down(
+        &mut self,
+        position: Point<Pixels>,
+        click_count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.content.is_empty() {
+            self.selected_range = 0..0;
+            self.selection_reversed = false;
+            self.drag_anchor = Some(0);
+            self.reset_blink(cx);
+            return;
+        }
+
+        let offset = self.index_for_mouse_position(position);
+
+        match click_count {
+            1 => {
+                self.selected_range = offset..offset;
+                self.selection_reversed = false;
+                self.drag_anchor = Some(offset);
+            }
+            2 => {
+                let range = word_bounds_at(&self.content, offset);
+                self.selected_range = range.clone();
+                self.selection_reversed = false;
+                self.drag_anchor = Some(range.start);
+            }
+            _ => {
+                let start = self.line_start(offset);
+                let end = (self.line_end(offset) + 1).min(self.content.len());
+                self.selected_range = start..end;
+                self.selection_reversed = false;
+                self.drag_anchor = Some(start);
+            }
+        }
+        self.reset_blink(cx);
+    }
+
+    pub fn on_mouse_move(
+        &mut self,
+        position: Point<Pixels>,
+        is_left_down: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !is_left_down {
+            self.drag_anchor = None;
+            return;
+        }
+        let Some(anchor) = self.drag_anchor else {
+            return;
+        };
+        let curr = self.index_for_mouse_position(position);
+        if curr >= anchor {
+            self.selected_range = anchor..curr;
+            self.selection_reversed = false;
+        } else {
+            self.selected_range = curr..anchor;
+            self.selection_reversed = true;
+        }
+        self.reset_blink(cx);
+        cx.notify();
+    }
+
+    pub fn on_mouse_up(&mut self, _position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.drag_anchor = None;
+        cx.notify();
+    }
+
+    fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        if self.content.is_empty() {
+            return 0;
+        }
+        let Some(bounds) = self.last_bounds.as_ref() else {
+            return 0;
+        };
+        if position.y <= bounds.top() {
+            return 0;
+        }
+        if position.y >= bounds.bottom() {
+            return self.content.len();
+        }
+        let lines: Vec<&str> = self.content.split(NL_CH).collect();
+        if lines.is_empty() {
+            return 0;
+        }
+        let total_lines = lines.len();
+        let line_h = self.line_height.unwrap_or_else(|| {
+            (bounds.bottom() - bounds.top()).max(px(1.0)) / total_lines as f32
+        });
+        let line_idx = if line_h > px(0.0) {
+            (((position.y - bounds.top()) / line_h).floor() as usize)
+                .min(total_lines.saturating_sub(1))
+        } else {
+            0
+        };
+        let mut offset = 0;
+        for l in lines.iter().take(line_idx) {
+            offset += l.len() + 1;
+        }
+        let line_str = lines[line_idx];
+        if line_str.is_empty() {
+            return offset;
+        }
+        if let Some(layout) = self.last_layouts.get(line_idx) {
+            let x = (position.x - bounds.left()).max(px(0.0));
+            let char_idx = layout.closest_index_for_x(x).min(line_str.len());
+            (offset + char_idx).min(self.content.len())
+        } else {
+            let char_w = px(7.5);
+            let col = ((position.x - bounds.left()).max(px(0.0)) / char_w).round() as usize;
+            let col = col.min(line_str.chars().count());
+            let mut char_bytes = 0;
+            for ch in line_str.chars().take(col) {
+                char_bytes += ch.len_utf8();
+            }
+            (offset + char_bytes).min(self.content.len())
+        }
+    }
+
     fn cursor(&self) -> usize {
-        self.selected_range.end
+        if self.selection_reversed {
+            self.selected_range.start
+        } else {
+            self.selected_range.end
+        }
     }
 
     fn move_cursor(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = offset.min(self.content.len());
         self.selected_range = offset..offset;
+        self.selection_reversed = false;
         self.reset_blink(cx);
         cx.notify();
     }
@@ -305,7 +502,7 @@ impl EntityInputHandler for TextArea {
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
             range: self.range_to_utf16(&self.selected_range),
-            reversed: false,
+            reversed: self.selection_reversed,
         })
     }
 
@@ -328,6 +525,9 @@ impl EntityInputHandler for TextArea {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|r| self.range_from_utf16(r))
@@ -343,6 +543,7 @@ impl EntityInputHandler for TextArea {
         );
         let cursor = start + new_text.len();
         self.selected_range = cursor..cursor;
+        self.selection_reversed = false;
         self.marked_range = None;
         self.reset_blink(cx);
         cx.emit(TextAreaEvent::Change(self.content.clone()));
@@ -357,6 +558,9 @@ impl EntityInputHandler for TextArea {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         self.replace_text_in_range(range_utf16, new_text, _window, cx);
     }
 
@@ -381,9 +585,43 @@ impl EntityInputHandler for TextArea {
 }
 
 impl gpui::Render for TextArea {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        TextAreaElement { input: entity }
+        let is_focused = self.focus_handle.is_focused(window);
+        div()
+            .id(("text_area_field", entity.entity_id()))
+            .key_context("TextArea")
+            .track_focus(&self.focus_handle)
+            .cursor_text()
+            .w_full()
+            .p(px(10.0))
+            .rounded(px(6.0))
+            .when(is_focused, |d| {
+                d.border_1().border_color(rgba(0x3b82f6cc))
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.focus_handle.focus(window, cx);
+                    this.start_blink(cx);
+                    this.on_mouse_down(event.position, event.click_count, cx);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                let is_left_down = event.pressed_button == Some(MouseButton::Left);
+                this.on_mouse_move(event.position, is_left_down, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.on_mouse_up(event.position, cx);
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key_down(event, window, cx);
+            }))
+            .child(TextAreaElement { input: entity })
     }
 }
 
@@ -424,7 +662,7 @@ impl Element for TextAreaElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let ta = self.input.read(cx);
-        let line_count = ta.content.lines().count().max(1).min(ta.max_lines.max(1));
+        let line_count = ta.content.split(NL_CH).count().max(1).min(ta.max_lines.max(1));
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         let line_height = window.line_height();
@@ -451,8 +689,8 @@ impl Element for TextAreaElement {
         let content = ta.content.clone();
         let placeholder = ta.placeholder.clone();
         let selected = ta.selected_range.clone();
-        let cursor_visible = ta.cursor_visible && is_focused;
-        let cursor = ta.selected_range.end;
+        let cursor_visible = ta.cursor_visible && is_focused && !ta.read_only;
+        let cursor = ta.cursor();
 
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -562,7 +800,7 @@ impl Element for TextAreaElement {
         }
 
         let line_height = window.line_height();
-        for (idx, line) in prepaint.lines.drain(..).enumerate() {
+        for (idx, line) in prepaint.lines.iter().enumerate() {
             let top = bounds.top() + line_height * idx as f32;
             let _ = line.paint(
                 point(bounds.left(), top),
@@ -577,6 +815,13 @@ impl Element for TextAreaElement {
         if let Some(cursor) = prepaint.cursor.take() {
             window.paint_quad(cursor);
         }
+
+        let painted_lines = std::mem::take(&mut prepaint.lines);
+        self.input.update(cx, |input, _| {
+            input.last_bounds = Some(bounds);
+            input.line_height = Some(line_height);
+            input.last_layouts = painted_lines;
+        });
     }
 }
 
@@ -600,5 +845,27 @@ mod tests {
         assert_eq!(line_start_of(&content, 8), 0);
         // end of buffer
         assert_eq!(line_end_of(&content, 18), content.len());
+    }
+
+    #[test]
+    fn test_multiline_split_and_line_count() {
+        let empty = "";
+        assert_eq!(empty.split(NL_CH).count().max(1), 1);
+
+        let one_line = "hello";
+        assert_eq!(one_line.split(NL_CH).count(), 1);
+
+        let trailing_newline = "hello\n";
+        assert_eq!(trailing_newline.split(NL_CH).count(), 2);
+
+        let two_empty_lines = "\n\n";
+        assert_eq!(two_empty_lines.split(NL_CH).count(), 3);
+    }
+
+    #[test]
+    fn test_word_bounds_selection() {
+        let text = "hello world\nmultiline text";
+        assert_eq!(word_bounds_at(text, 2), 0..5);
+        assert_eq!(word_bounds_at(text, 14), 12..21);
     }
 }

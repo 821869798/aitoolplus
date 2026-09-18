@@ -3,7 +3,7 @@
 //! listeners via `cx.listener`; state lives in the hosting view (GPUI rules
 //! from flyclip's guidelines).
 
-use gpui::{Context, IntoElement, MouseButton, Rgba, SharedString, Window, div, prelude::*, px};
+use gpui::{ClickEvent, Context, IntoElement, Rgba, SharedString, Window, div, prelude::*, px};
 
 use crate::theme::Theme;
 
@@ -29,89 +29,220 @@ pub fn button_l<V: 'static>(
     variant: ButtonVariant,
     theme: &Theme,
     cx: &mut Context<V>,
-    on_click: impl Fn(&mut V, &gpui::MouseDownEvent, &mut Window, &mut Context<V>) + 'static,
+    on_click: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
 ) -> gpui::AnyElement {
     let t = theme.clone();
     let label: SharedString = label.into();
+    let id = id.into();
+    let on_click = std::rc::Rc::new(on_click);
 
-    let (bg, bg_hover, fg, border, has_shadow) = match variant {
-        ButtonVariant::Primary => (
-            t.accent,
-            t.accent_hover,
-            WHITE,
-            Some(crate::rgba_const(0xffffff26)),
-            true,
-        ),
-        ButtonVariant::Secondary => (
-            t.card_bg,
-            t.card_hover,
-            t.text_primary,
-            Some(t.card_border),
-            true,
-        ),
-        ButtonVariant::Danger => (
-            t.danger_subtle,
-            t.danger,
-            t.danger,
-            Some(crate::rgba_const(0xf8717140)),
-            false,
-        ),
-        ButtonVariant::Ghost => (
-            crate::rgba_const(0x00000000),
-            t.row_hover,
-            t.text_secondary,
-            None,
-            false,
-        ),
-        ButtonVariant::Outline => (
-            crate::rgba_const(0x00000000),
-            t.row_hover,
-            t.text_primary,
-            Some(t.card_border),
-            false,
-        ),
-    };
-
-    let is_danger = variant == ButtonVariant::Danger;
-    let is_ghost = variant == ButtonVariant::Ghost;
-
-    div()
-        .id(id.into())
+    let base = div()
+        .id(id)
         .cursor_pointer()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .h(px(28.0))
+        .h(px(30.0))
         .px(px(12.0))
         .rounded(px(6.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .gap(px(6.0))
         .text_size(px(12.5))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .bg(bg)
-        .text_color(fg)
-        .when_some(border, |s, b| s.border_1().border_color(b))
-        .when(has_shadow, |s| s.shadow_xs())
-        .hover(move |h| {
-            let mut h = h.bg(bg_hover);
-            if is_danger {
-                h = h
-                    .text_color(WHITE)
-                    .border_color(t.danger)
-                    .shadow_xs();
-            } else if is_ghost {
-                h = h.text_color(t.text_primary);
-            } else if variant == ButtonVariant::Secondary || variant == ButtonVariant::Outline {
-                h = h.border_color(t.card_border_hover);
-            }
-            h
-        })
-        .active(move |a| a.opacity(0.85))
-        .on_mouse_down(MouseButton::Left, cx.listener(on_click))
+        .whitespace_nowrap();
+
+    let styled = match variant {
+        ButtonVariant::Primary => base
+            .bg(t.accent)
+            .text_color(WHITE)
+            .shadow_xs()
+            .hover(move |h| h.bg(t.accent_hover))
+            .active(move |a| a.opacity(0.88)),
+        ButtonVariant::Secondary => base
+            .bg(t.tab_active_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .text_color(t.text_primary)
+            .hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
+            .active(move |a| a.bg(t.row_hover)),
+        ButtonVariant::Ghost => base
+            .text_color(t.text_secondary)
+            .hover(move |h| h.bg(t.card_hover).text_color(t.text_primary))
+            .active(move |a| a.bg(t.row_hover)),
+        ButtonVariant::Outline => base
+            .border_1()
+            .border_color(t.card_border)
+            .text_color(t.text_primary)
+            .hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
+            .active(move |a| a.bg(t.row_hover)),
+        ButtonVariant::Danger => base
+            .bg(t.danger_subtle)
+            .border_1()
+            .border_color(t.danger_subtle)
+            .text_color(t.danger)
+            .hover(move |h| h.bg(t.danger).text_color(WHITE).border_color(t.danger))
+            .active(move |a| a.opacity(0.88)),
+    };
+
+    styled
         .child(label)
+        .on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
+            on_click(view, ev, window, cx);
+        }))
         .into_any_element()
 }
 
-/// Small square icon/emoji button (28px).
+pub fn button_with_icon_l<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    icon_svg: &'static [u8],
+    label: impl Into<SharedString>,
+    variant: ButtonVariant,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_click: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
+) -> gpui::AnyElement {
+    button_with_icon_loading_l(id, icon_svg, label, variant, false, theme, cx, on_click)
+}
+
+pub fn button_with_icon_loading_l<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    icon_svg: &'static [u8],
+    label: impl Into<SharedString>,
+    variant: ButtonVariant,
+    loading: bool,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_click: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let label: SharedString = label.into();
+    let id = id.into();
+    let on_click = std::rc::Rc::new(on_click);
+
+    let icon_fg = match variant {
+        ButtonVariant::Primary => WHITE,
+        ButtonVariant::Danger => t.danger,
+        _ => t.text_secondary,
+    };
+
+    let base = div()
+        .id(id)
+        .cursor_pointer()
+        .h(px(30.0))
+        .px(px(12.0))
+        .rounded(px(6.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .gap(px(6.0))
+        .text_size(px(12.5))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .whitespace_nowrap();
+
+    let styled = match variant {
+        ButtonVariant::Primary => base
+            .bg(t.accent)
+            .text_color(WHITE)
+            .shadow_xs()
+            .hover(move |h| h.bg(t.accent_hover))
+            .active(move |a| a.opacity(0.88)),
+        ButtonVariant::Secondary => base
+            .bg(t.tab_active_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .text_color(t.text_primary)
+            .hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
+            .active(move |a| a.bg(t.row_hover)),
+        ButtonVariant::Ghost => base
+            .text_color(t.text_secondary)
+            .hover(move |h| h.bg(t.card_hover).text_color(t.text_primary))
+            .active(move |a| a.bg(t.row_hover)),
+        ButtonVariant::Outline => base
+            .border_1()
+            .border_color(t.card_border)
+            .text_color(t.text_primary)
+            .hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
+            .active(move |a| a.bg(t.row_hover)),
+        ButtonVariant::Danger => base
+            .bg(t.danger_subtle)
+            .border_1()
+            .border_color(t.danger_subtle)
+            .text_color(t.danger)
+            .hover(move |h| h.bg(t.danger).text_color(WHITE).border_color(t.danger))
+            .active(move |a| a.opacity(0.88)),
+    };
+
+    styled
+        .when(!loading, |this| {
+            this.child(
+                gpui::svg()
+                    .data(icon_svg)
+                    .size(px(14.0))
+                    .text_color(icon_fg),
+            )
+        })
+        .when(loading, |this| {
+            this.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(icon_fg)
+                    .child("⟳"),
+            )
+        })
+        .child(label)
+        .on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
+            on_click(view, ev, window, cx);
+        }))
+        .into_any_element()
+}
+
+pub fn icon_button_svg<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    svg_data: &'static [u8],
+    title: impl Into<SharedString>,
+    danger: bool,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_click: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let id = id.into();
+    let on_click = std::rc::Rc::new(on_click);
+    let title: SharedString = title.into();
+    let fg = if danger { t.danger } else { t.text_secondary };
+
+    div()
+        .id(id)
+        .cursor_pointer()
+        .size(px(28.0))
+        .rounded(px(6.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .text_color(fg)
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(title.clone())).into())
+        .when(danger, |this| {
+            this.hover(move |h| h.bg(t.danger_subtle).text_color(t.danger))
+                .active(move |a| a.opacity(0.8))
+        })
+        .when(!danger, |this| {
+            this.hover(move |h| h.bg(t.card_hover).text_color(t.text_primary))
+                .active(move |a| a.bg(t.row_hover))
+        })
+        .child(
+            gpui::svg()
+                .data(svg_data)
+                .size(px(14.5))
+                .text_color(fg),
+        )
+        .on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
+            on_click(view, ev, window, cx);
+        }))
+        .into_any_element()
+}
+
 pub fn icon_button_l<V: 'static>(
     id: impl Into<gpui::ElementId>,
     icon: impl Into<SharedString>,
@@ -119,34 +250,39 @@ pub fn icon_button_l<V: 'static>(
     danger: bool,
     theme: &Theme,
     cx: &mut Context<V>,
-    on_click: impl Fn(&mut V, &gpui::MouseDownEvent, &mut Window, &mut Context<V>) + 'static,
+    on_click: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
 ) -> gpui::AnyElement {
     let t = theme.clone();
-    let icon: SharedString = icon.into();
+    let id = id.into();
+    let on_click = std::rc::Rc::new(on_click);
     let title: SharedString = title.into();
-    let hover_bg = if danger { t.danger_subtle } else { t.row_hover };
-    let text_color = if danger { t.danger } else { t.text_muted };
-    let hover_text = if danger { t.danger } else { t.text_primary };
+    let icon: SharedString = icon.into();
+    let fg = if danger { t.danger } else { t.text_secondary };
 
     div()
-        .id(id.into())
+        .id(id)
         .cursor_pointer()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
         .size(px(28.0))
         .rounded(px(6.0))
-        .text_size(px(13.5))
-        .text_color(text_color)
-        .hover(move |h| h.bg(hover_bg).text_color(hover_text))
-        .active(|a| a.opacity(0.8))
-        .tooltip(move |_window, cx| {
-            let tip = title.clone();
-            cx.new(|_| Tooltip::new(tip)).into()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .text_size(px(13.0))
+        .text_color(fg)
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(title.clone())).into())
+        .when(danger, |this| {
+            this.hover(move |h| h.bg(t.danger_subtle).text_color(t.danger))
+                .active(move |a| a.opacity(0.8))
         })
-        .on_mouse_down(MouseButton::Left, cx.listener(on_click))
+        .when(!danger, |this| {
+            this.hover(move |h| h.bg(t.card_hover).text_color(t.text_primary))
+                .active(move |a| a.bg(t.row_hover))
+        })
         .child(icon)
+        .on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
+            on_click(view, ev, window, cx);
+        }))
         .into_any_element()
 }
 
@@ -192,39 +328,37 @@ pub fn toggle<V: 'static>(
     on: bool,
     theme: &Theme,
     cx: &mut Context<V>,
-    on_toggle: impl Fn(&mut V, &gpui::MouseDownEvent, &mut Window, &mut Context<V>) + 'static,
+    on_toggle: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
 ) -> gpui::AnyElement {
     let t = theme.clone();
-    let (track_bg, track_border) = if on {
-        (t.accent, crate::rgba_const(0xffffff22))
-    } else {
-        (t.track_off, t.card_border)
-    };
-    let knob_left = if on { px(18.0) } else { px(2.0) };
+    let id = id.into();
+    let on_toggle = std::rc::Rc::new(on_toggle);
 
     div()
-        .id(id.into())
+        .id(id)
         .cursor_pointer()
-        .relative()
-        .flex_shrink_0()
-        .h(px(20.0))
-        .w(px(36.0))
-        .rounded(px(10.0))
-        .bg(track_bg)
-        .border_1()
-        .border_color(track_border)
-        .hover(|h| h.opacity(0.92))
+        .w(px(38.0))
+        .h(px(22.0))
+        .p(px(2.5))
+        .rounded_full()
+        .flex()
+        .flex_none()
+        .items_center()
+        .bg(if on { t.track_on } else { t.track_off })
+        .hover(move |h| h.opacity(0.92))
+        .active(move |a| a.opacity(0.85))
+        .when(on, |s| s.justify_end())
+        .when(!on, |s| s.justify_start())
         .child(
             div()
-                .absolute()
-                .top(px(1.0))
-                .left(knob_left)
-                .size(px(16.0))
-                .rounded(px(8.0))
-                .bg(WHITE)
-                .shadow_xs(),
+                .size(px(17.0))
+                .rounded_full()
+                .bg(t.thumb)
+                .shadow_sm(),
         )
-        .on_mouse_down(MouseButton::Left, cx.listener(on_toggle))
+        .on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
+            on_toggle(view, ev, window, cx);
+        }))
         .into_any_element()
 }
 
@@ -238,8 +372,8 @@ pub fn card(theme: &Theme, children: Vec<gpui::AnyElement>) -> gpui::AnyElement 
         .flex()
         .flex_col()
         .w_full()
-        .p(px(14.0))
-        .rounded(px(8.0))
+        .p(px(16.0))
+        .rounded(px(10.0))
         .bg(t.card_bg)
         .border_1()
         .border_color(t.card_border)
@@ -247,11 +381,8 @@ pub fn card(theme: &Theme, children: Vec<gpui::AnyElement>) -> gpui::AnyElement 
     for (idx, row) in children.into_iter().enumerate() {
         if idx > 0 {
             builder = builder.child(
-                div()
-                    .my(px(8.0))
-                    .h(px(1.0))
-                    .w_full()
-                    .bg(t.card_border)
+                gpui_kit::component::separator::Separator::horizontal()
+                    .my(px(10.0))
                     .into_any_element(),
             );
         }
@@ -273,7 +404,7 @@ pub fn section_title(
         .gap(px(2.0))
         .child(
             div()
-                .text_size(px(14.0))
+                .text_size(px(14.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
                 .child(title),
@@ -300,21 +431,284 @@ pub fn page_header(
     div()
         .flex()
         .flex_col()
-        .gap(px(3.0))
+        .gap(px(4.0))
         .child(
             div()
-                .text_size(px(18.0))
+                .text_size(px(20.0))
                 .font_weight(gpui::FontWeight::BOLD)
                 .text_color(t.text_primary)
                 .child(title),
         )
         .child(
             div()
-                .text_size(px(12.5))
+                .text_size(px(13.0))
                 .text_color(t.text_secondary)
                 .child(subtitle),
         )
         .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// Segmented Pill Selector & Settings Card Components
+// ---------------------------------------------------------------------------
+
+/// A modern segmented pill selector that supports optional SVG icons and high-contrast active state.
+pub fn segmented_pill_selector<V: 'static, T: PartialEq + Copy + 'static>(
+    id_prefix: &'static str,
+    items: Vec<(T, Option<&'static [u8]>, SharedString)>,
+    active_val: T,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_select: impl Fn(&mut V, T, &mut Window, &mut Context<V>) + 'static + Copy,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+
+    let mut row = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(3.0))
+        .p(px(3.0))
+        .rounded(px(8.0))
+        .bg(t.tab_bar_bg)
+        .border_1()
+        .border_color(t.card_border);
+
+    for (item_val, icon_svg, label) in items {
+        let is_active = item_val == active_val;
+        let tab_theme = t.clone();
+
+        let mut pill = div()
+            .id(gpui::ElementId::Name(format!("{}-pill-{}", id_prefix, label).into()))
+            .cursor_pointer()
+            .h(px(28.0))
+            .px(px(12.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.0))
+            .text_size(px(12.0))
+            .when(is_active, |s| {
+                s.bg(tab_theme.tab_active_bg)
+                    .border_1()
+                    .border_color(if tab_theme.is_dark {
+                        tab_theme.card_border_hover
+                    } else {
+                        tab_theme.card_border
+                    })
+                    .text_color(tab_theme.text_primary)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .shadow_xs()
+            })
+            .when(!is_active, |s| {
+                s.border_1()
+                    .border_color(gpui::transparent_black())
+                    .text_color(tab_theme.text_secondary)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .hover(move |h| {
+                        h.text_color(tab_theme.text_primary)
+                            .bg(tab_theme.card_hover)
+                    })
+            });
+
+        if let Some(svg_data) = icon_svg {
+            let icon_color = if is_active {
+                tab_theme.accent
+            } else {
+                tab_theme.text_muted
+            };
+            pill = pill.child(
+                gpui::svg()
+                    .data(svg_data)
+                    .size(px(13.0))
+                    .text_color(icon_color),
+            );
+        }
+
+        pill = pill.child(label).on_click(cx.listener(move |view, _ev: &gpui::ClickEvent, window, cx| {
+            on_select(view, item_val, window, cx);
+        }));
+
+        row = row.child(pill);
+    }
+
+    row.into_any_element()
+}
+
+/// Settings section card with Sonora / pure-clash design language.
+pub fn settings_card(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    subtitle: Option<SharedString>,
+    rows: Vec<gpui::AnyElement>,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let title: SharedString = title.into();
+
+    let mut card_box = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .rounded(px(10.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .shadow_xs();
+
+    for (idx, row) in rows.into_iter().enumerate() {
+        if idx > 0 {
+            card_box = card_box.child(
+                div()
+                    .w_full()
+                    .h(px(1.0))
+                    .bg(t.card_border),
+            );
+        }
+        card_box = card_box.child(row);
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .w_full()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .px(px(4.0))
+                .child(
+                    div()
+                        .text_size(px(13.5))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child(title),
+                )
+                .when_some(subtitle, |s, sub| {
+                    s.child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(t.text_muted)
+                            .child(sub),
+                    )
+                }),
+        )
+        .child(card_box)
+        .into_any_element()
+}
+
+/// Settings row: left title + subtitle, right interactive control.
+pub fn settings_row(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    subtitle: Option<SharedString>,
+    control: gpui::AnyElement,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let title: SharedString = title.into();
+
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .w_full()
+        .min_h(px(52.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .gap(px(16.0))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .flex_1()
+                .min_w(px(0.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.text_primary)
+                        .child(title),
+                )
+                .when_some(subtitle, |s, sub| {
+                    s.child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(t.text_muted)
+                            .child(sub),
+                    )
+                }),
+        )
+        .child(control)
+        .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// Segmented Tab Bar
+// ---------------------------------------------------------------------------
+
+/// A modern segmented pill tab bar that fits its content (like Sonora TabBar / Linear / Raycast).
+pub fn segmented_tab_bar<V: 'static, T: PartialEq + Copy + 'static>(
+    id_prefix: &'static str,
+    tabs: Vec<(T, SharedString)>,
+    active_tab: T,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_select: impl Fn(&mut V, T, &mut Window, &mut Context<V>) + 'static + Copy,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+
+    let mut row = div()
+        .flex()
+        .flex_none()
+        .self_start()
+        .items_center()
+        .gap(px(3.0))
+        .p(px(3.0))
+        .rounded(px(8.0))
+        .bg(t.tab_bar_bg)
+        .border_1()
+        .border_color(t.card_border);
+
+    for (tab_val, label) in tabs {
+        let is_active = tab_val == active_tab;
+        let tab_theme = t.clone();
+
+        let tab_btn = div()
+            .id(gpui::ElementId::Name(format!("{}-tab-{}", id_prefix, label).into()))
+            .cursor_pointer()
+            .h(px(28.0))
+            .px(px(14.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(12.5))
+            .when(is_active, |s| {
+                s.bg(tab_theme.tab_active_bg)
+                    .text_color(tab_theme.text_primary)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .shadow_xs()
+            })
+            .when(!is_active, |s| {
+                s.text_color(tab_theme.text_secondary)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .hover(move |h| {
+                        h.text_color(tab_theme.text_primary)
+                            .bg(tab_theme.card_hover)
+                    })
+            })
+            .child(label)
+            .on_click(cx.listener(move |view, _ev: &gpui::ClickEvent, window, cx| {
+                on_select(view, tab_val, window, cx);
+            }));
+
+        row = row.child(tab_btn);
+    }
+
+    row.into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -330,42 +724,15 @@ pub enum BadgeKind {
     Accent,
 }
 
-pub fn badge(theme: &Theme, text: impl Into<SharedString>, kind: BadgeKind) -> gpui::AnyElement {
-    let t = theme.clone();
-    let (fg, bg, border) = match kind {
-        BadgeKind::Success => (t.success, t.success_subtle, crate::rgba_const(0x34d39940)),
-        BadgeKind::Warning => (t.warning, t.warning_subtle, crate::rgba_const(0xfbbf2440)),
-        BadgeKind::Danger => (t.danger, t.danger_subtle, crate::rgba_const(0xf8717140)),
-        BadgeKind::Neutral => (t.text_secondary, t.hover_overlay, t.card_border),
-        BadgeKind::Accent => (t.accent, t.accent_subtle, crate::rgba_const(0x4c8dff40)),
+pub fn badge(_theme: &Theme, text: impl Into<SharedString>, kind: BadgeKind) -> gpui::AnyElement {
+    let tag = match kind {
+        BadgeKind::Success => gpui_kit::component::tag::Tag::success(),
+        BadgeKind::Warning => gpui_kit::component::tag::Tag::warning(),
+        BadgeKind::Danger => gpui_kit::component::tag::Tag::danger(),
+        BadgeKind::Neutral => gpui_kit::component::tag::Tag::secondary(),
+        BadgeKind::Accent => gpui_kit::component::tag::Tag::primary(),
     };
-    let text: SharedString = text.into();
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(5.0))
-        .px(px(8.0))
-        .h(px(20.0))
-        .rounded(px(10.0))
-        .bg(bg)
-        .border_1()
-        .border_color(border)
-        .child(
-            div()
-                .size(px(5.0))
-                .rounded(px(2.5))
-                .bg(fg)
-                .into_any_element(),
-        )
-        .child(
-            div()
-                .text_size(px(11.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(fg)
-                .child(text),
-        )
-        .into_any_element()
+    tag.child(text.into()).into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +778,45 @@ pub fn empty_state(
         .into_any_element()
 }
 
+pub fn empty_state_svg(
+    theme: &Theme,
+    svg_data: &'static [u8],
+    title: impl Into<SharedString>,
+    hint: impl Into<SharedString>,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let title: SharedString = title.into();
+    let hint: SharedString = hint.into();
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(12.0))
+        .py(px(48.0))
+        .child(
+            gpui::svg()
+                .data(svg_data)
+                .size(px(40.0))
+                .text_color(crate::rgba_const(0xffffff28))
+                .flex_none(),
+        )
+        .child(
+            div()
+                .text_size(px(14.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(t.text_secondary)
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(t.text_muted)
+                .child(hint),
+        )
+        .into_any_element()
+}
+
 // ---------------------------------------------------------------------------
 // Input & TextArea Containers
 // ---------------------------------------------------------------------------
@@ -420,7 +826,6 @@ pub fn input_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
     div()
         .w_full()
         .h(px(32.0))
-        .px(px(10.0))
         .flex()
         .items_center()
         .rounded(px(6.0))
@@ -428,6 +833,7 @@ pub fn input_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
         .border_1()
         .border_color(t.input_border)
         .shadow_xs()
+        .cursor_text()
         .hover(move |h| h.border_color(t.card_border_hover))
         .child(child)
 }
@@ -436,12 +842,12 @@ pub fn textarea_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
     let t = theme.clone();
     div()
         .w_full()
-        .p(px(10.0))
         .rounded(px(6.0))
         .bg(t.input_bg)
         .border_1()
         .border_color(t.input_border)
         .shadow_xs()
+        .cursor_text()
         .hover(move |h| h.border_color(t.card_border_hover))
         .child(child)
 }

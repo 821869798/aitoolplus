@@ -424,12 +424,198 @@ pub fn gemini_presets() -> Vec<ProviderPreset> {
     ]
 }
 
+/// Pi / Oh My Pi presets (cc-switch parity).
+pub fn pi_presets() -> Vec<ProviderPreset> {
+    vec![
+        ProviderPreset {
+            name: "DeepSeek (深度求索)",
+            category: "official",
+            website_url: "https://platform.deepseek.com",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "name": "DeepSeek",
+                "baseUrl": "https://api.deepseek.com/v1",
+                "api": "openai-completions",
+                "apiKey": "",
+                "models": [
+                    {
+                        "id": "deepseek-chat",
+                        "name": "DeepSeek V3",
+                        "reasoning": false,
+                        "input": ["text"],
+                        "contextWindow": 65536,
+                        "maxTokens": 8192
+                    },
+                    {
+                        "id": "deepseek-reasoner",
+                        "name": "DeepSeek R1",
+                        "reasoning": true,
+                        "input": ["text"],
+                        "contextWindow": 65536,
+                        "maxTokens": 8192
+                    }
+                ]
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
+            name: "Kimi (Moonshot)",
+            category: "official",
+            website_url: "https://platform.moonshot.cn",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "name": "Kimi",
+                "baseUrl": "https://api.moonshot.cn/v1",
+                "api": "openai-completions",
+                "apiKey": "",
+                "models": [
+                    {
+                        "id": "moonshot-v1-8k",
+                        "name": "Moonshot v1 8K",
+                        "reasoning": false,
+                        "input": ["text"],
+                        "contextWindow": 8192,
+                        "maxTokens": 4096
+                    },
+                    {
+                        "id": "moonshot-v1-32k",
+                        "name": "Moonshot v1 32K",
+                        "reasoning": false,
+                        "input": ["text"],
+                        "contextWindow": 32768,
+                        "maxTokens": 4096
+                    },
+                    {
+                        "id": "moonshot-v1-128k",
+                        "name": "Moonshot v1 128K",
+                        "reasoning": false,
+                        "input": ["text"],
+                        "contextWindow": 131072,
+                        "maxTokens": 4096
+                    }
+                ]
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
+            name: "智谱 GLM",
+            category: "official",
+            website_url: "https://open.bigmodel.cn",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "name": "ZhiPu GLM",
+                "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+                "api": "openai-completions",
+                "apiKey": "",
+                "models": [
+                    {
+                        "id": "glm-4-plus",
+                        "name": "GLM-4-Plus",
+                        "reasoning": false,
+                        "input": ["text"],
+                        "contextWindow": 131072,
+                        "maxTokens": 4096
+                    },
+                    {
+                        "id": "glm-4-flash",
+                        "name": "GLM-4-Flash",
+                        "reasoning": false,
+                        "input": ["text"],
+                        "contextWindow": 131072,
+                        "maxTokens": 4096
+                    }
+                ]
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
+            name: "OpenAI 官方",
+            category: "official",
+            website_url: "https://platform.openai.com",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "name": "OpenAI",
+                "baseUrl": "https://api.openai.com/v1",
+                "api": "openai-completions",
+                "apiKey": "",
+                "models": [
+                    {
+                        "id": "gpt-4o",
+                        "name": "GPT-4o",
+                        "reasoning": false,
+                        "input": ["text", "image"],
+                        "contextWindow": 128000,
+                        "maxTokens": 4096
+                    },
+                    {
+                        "id": "gpt-4o-mini",
+                        "name": "GPT-4o mini",
+                        "reasoning": false,
+                        "input": ["text", "image"],
+                        "contextWindow": 128000,
+                        "maxTokens": 4096
+                    },
+                    {
+                        "id": "o1-preview",
+                        "name": "o1 Preview",
+                        "reasoning": true,
+                        "input": ["text"],
+                        "contextWindow": 128000,
+                        "maxTokens": 32768
+                    }
+                ]
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
+            name: "Anthropic 官方",
+            category: "official",
+            website_url: "https://console.anthropic.com",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "name": "Anthropic",
+                "baseUrl": "https://api.anthropic.com",
+                "api": "anthropic-messages",
+                "apiKey": "",
+                "models": [
+                    {
+                        "id": "claude-3-7-sonnet-20250219",
+                        "name": "Claude 3.7 Sonnet",
+                        "reasoning": true,
+                        "input": ["text", "image"],
+                        "contextWindow": 200000,
+                        "maxTokens": 8192
+                    },
+                    {
+                        "id": "claude-3-5-sonnet-20241022",
+                        "name": "Claude 3.5 Sonnet",
+                        "reasoning": false,
+                        "input": ["text", "image"],
+                        "contextWindow": 200000,
+                        "maxTokens": 8192
+                    },
+                    {
+                        "id": "claude-3-5-haiku-20241022",
+                        "name": "Claude 3.5 Haiku",
+                        "reasoning": false,
+                        "input": ["text", "image"],
+                        "contextWindow": 200000,
+                        "maxTokens": 8192
+                    }
+                ]
+            }),
+            extra_env: &[],
+        },
+    ]
+}
+
 /// All presets for a tool.
 pub fn presets_for(tool: ToolId) -> Vec<ProviderPreset> {
     match tool {
         ToolId::ClaudeCode => claude_code_presets(),
         ToolId::Codex => codex_presets(),
         ToolId::GeminiCli => gemini_presets(),
+        ToolId::Pi | ToolId::OhMyPi => pi_presets(),
         _ => vec![],
     }
 }
@@ -515,9 +701,7 @@ mod tests {
         assert!(!presets_for(ToolId::ClaudeCode).is_empty());
         assert!(!presets_for(ToolId::Codex).is_empty());
         assert_eq!(presets_for(ToolId::GeminiCli).len(), 2);
-        assert!(
-            presets_for(ToolId::Pi).is_empty(),
-            "Pi discovers from runtime instead"
-        );
+        assert!(!presets_for(ToolId::Pi).is_empty());
+        assert!(!presets_for(ToolId::OhMyPi).is_empty());
     }
 }

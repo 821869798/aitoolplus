@@ -41,7 +41,7 @@ pub const PROVIDER_MODEL_NAME_ENV_FIELDS: [&str; 4] = [
 ];
 
 /// Env keys this app manages when applying a provider.
-pub const KNOWN_ENV_FIELDS: [&str; 13] = [
+pub const KNOWN_ENV_FIELDS: [&str; 19] = [
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
@@ -55,6 +55,12 @@ pub const KNOWN_ENV_FIELDS: [&str; 13] = [
     "ANTHROPIC_DEFAULT_FABLE_MODEL",
     "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
     "ANTHROPIC_REASONING_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    "CUSTOM_HEADERS",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "USER_AGENT",
+    "ANTHROPIC_USER_AGENT",
+    "API_FORMAT",
 ];
 
 fn is_provider_model_field(key: &str) -> bool {

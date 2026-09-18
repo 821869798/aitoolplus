@@ -30,8 +30,41 @@ pub struct ProviderRecord {
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub website_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Provider-level extended metadata, compatible with cc-switch and ai-toolbox.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProviderMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "customUserAgent")]
+    pub custom_user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "customHeaders")]
+    pub custom_headers: Option<Vec<CustomHeaderItem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "billingEnabled")]
+    pub billing_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "costMultiplier")]
+    pub cost_multiplier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "pricingModelSource")]
+    pub pricing_model_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "modelRewrites")]
+    pub model_rewrites: Option<Vec<ModelRewriteRule>>,
+}
+
+/// Custom HTTP header item.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CustomHeaderItem {
+    pub name: String,
+    pub value: String,
+}
+
+/// Exact model rewrite rule: rewrite requested model `from` to `to`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ModelRewriteRule {
+    pub from: String,
+    pub to: String,
 }
 
 fn default_category() -> String {
@@ -54,6 +87,7 @@ impl ProviderRecord {
             sort_index: 0,
             notes: None,
             website_url: None,
+            meta: None,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -66,6 +100,25 @@ impl ProviderRecord {
 
     pub fn set_settings(&mut self, v: &Value) {
         self.settings_config = serde_json::to_string_pretty(v).unwrap_or_default();
+        self.touch();
+    }
+
+    /// Parse structured metadata (User-Agent, headers, pricing, rewrites),
+    /// tolerant of partial or legacy formats from cc-switch / ai-toolbox.
+    pub fn parsed_meta(&self) -> ProviderMeta {
+        let Some(meta_val) = &self.meta else {
+            return ProviderMeta::default();
+        };
+        serde_json::from_value(meta_val.clone()).unwrap_or_default()
+    }
+
+    /// Update structured metadata.
+    pub fn set_meta(&mut self, meta: &ProviderMeta) {
+        if meta == &ProviderMeta::default() {
+            self.meta = None;
+        } else {
+            self.meta = serde_json::to_value(meta).ok();
+        }
         self.touch();
     }
 
@@ -605,5 +658,50 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("model_provider = \"openai\""));
+    }
+
+    #[test]
+    fn provider_meta_roundtrip_and_compatibility() {
+        let mut record = ProviderRecord::new("Test Provider", "custom");
+        assert_eq!(record.parsed_meta(), ProviderMeta::default());
+
+        let meta = ProviderMeta {
+            custom_user_agent: Some("claude-cli/2.1.237 (external, cli)".into()),
+            custom_headers: Some(vec![
+                CustomHeaderItem {
+                    name: "X-Title".into(),
+                    value: "MyProject".into(),
+                },
+            ]),
+            billing_enabled: Some(true),
+            cost_multiplier: Some("1.5".into()),
+            pricing_model_source: Some("request".into()),
+            model_rewrites: Some(vec![
+                ModelRewriteRule {
+                    from: "claude-3-5-haiku-20241022".into(),
+                    to: "deepseek-chat".into(),
+                },
+            ]),
+        };
+        record.set_meta(&meta);
+        assert!(record.meta.is_some());
+        assert_eq!(record.parsed_meta(), meta);
+
+        // Test compatibility with camelCase json (from ai-toolbox / cc-switch)
+        let camel_json = serde_json::json!({
+            "customUserAgent": "Kilo-Code/1.0",
+            "customHeaders": [{"name": "HTTP-Referer", "value": "https://example.com"}],
+            "costMultiplier": "0.7",
+            "pricingModelSource": "response",
+            "modelRewrites": [{"from": "gpt-4o-mini", "to": "deepseek-chat"}]
+        });
+        record.meta = Some(camel_json);
+        let parsed = record.parsed_meta();
+        assert_eq!(parsed.custom_user_agent.as_deref(), Some("Kilo-Code/1.0"));
+        assert_eq!(parsed.cost_multiplier.as_deref(), Some("0.7"));
+        assert_eq!(parsed.pricing_model_source.as_deref(), Some("response"));
+        assert_eq!(parsed.custom_headers.as_ref().unwrap().len(), 1);
+        assert_eq!(parsed.custom_headers.as_ref().unwrap()[0].name, "HTTP-Referer");
+        assert_eq!(parsed.model_rewrites.as_ref().unwrap()[0].from, "gpt-4o-mini");
     }
 }

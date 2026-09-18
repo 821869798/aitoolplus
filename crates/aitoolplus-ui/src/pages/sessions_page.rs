@@ -6,7 +6,7 @@ use gpui::{Context, IntoElement, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::components::{
-    BadgeKind, ButtonVariant, badge, button_l, empty_state, input_container, page_header,
+    BadgeKind, ButtonVariant, badge, button_l, input_container,
 };
 use crate::text_input::TextInput;
 use crate::workspace::Workspace;
@@ -27,42 +27,23 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         let is_on = candidate == tool;
         let label = i.t(candidate.name_zh(), candidate.name_en());
         let key = candidate;
-        tools_row = tools_row.child(
-            div()
-                .id(gpui::SharedString::from(format!(
-                    "sess-tool-{}",
-                    candidate.key()
-                )))
-                .cursor_pointer()
-                .flex()
-                .items_center()
-                .h(px(26.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .text_size(px(12.5))
-                .when(is_on, |s| {
-                    s.bg(t.card_bg)
-                        .border_1()
-                        .border_color(t.accent)
-                        .text_color(t.accent)
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .shadow_xs()
-                })
-                .when(!is_on, |s| {
-                    s.bg(t.input_bg)
-                        .border_1()
-                        .border_color(t.card_border)
-                        .text_color(t.text_secondary)
-                        .hover(|h| h.bg(t.card_hover).text_color(t.text_primary))
-                })
-                .on_click(cx.listener(move |ws, _ev: &gpui::ClickEvent, _w, cx| {
-                    ws.ui.sessions_tool = key;
-                    ws.ui.open_session = None;
-                    session::invalidate_cache();
-                    cx.notify();
-                }))
-                .child(label),
-        );
+        tools_row = tools_row.child(button_l(
+            gpui::SharedString::from(format!("sess-tool-{}", candidate.key())),
+            label,
+            if is_on {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Secondary
+            },
+            &t,
+            cx,
+            move |ws, _ev, _w, cx| {
+                ws.ui.sessions_tool = key;
+                ws.ui.open_session = None;
+                session::invalidate_cache();
+                cx.notify();
+            },
+        ));
     }
 
     let filter = ws.settings.session_filters.clone();
@@ -124,17 +105,8 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         .flex()
         .flex_col()
         .w_full()
-        .max_w(px(860.0))
         .min_w(px(0.0))
         .gap(px(12.0))
-        .child(page_header(
-            &t,
-            i.t("会话管理", "Sessions"),
-            i.t(
-                "浏览、重命名、导出与删除各 CLI 的会话历史（15 秒缓存）",
-                "Browse, rename, export and delete CLI sessions (15s cache)",
-            ),
-        ))
         .child(tools_row)
         .child(filter_row)
         .child(
@@ -144,9 +116,9 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         );
 
     if filtered.is_empty() {
-        section = section.child(empty_state(
+        section = section.child(crate::components::empty_state_svg(
             &t,
-            "🗂",
+            crate::icons::FOLDER_SVG,
             i.t("没有找到会话", "No sessions found"),
             i.t(
                 "该工具的会话目录可能为空或不存在",
@@ -250,7 +222,8 @@ fn session_row(
             div()
                 .flex()
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(6.0))
+                .flex_wrap()
                 .child(button_l(
                     gpui::SharedString::from(format!("sess-view-{}", sid)),
                     if is_open {
@@ -282,13 +255,15 @@ fn session_row(
                     cx,
                     {
                         let meta_for_rename = meta.clone();
-                        move |ws, _, _, cx| {
+                        move |ws, _, window, cx| {
                             let current = session::sidecar_title(&meta_for_rename)
                                 .or_else(|| meta_for_rename.title.clone())
                                 .unwrap_or_default();
                             let input = cx.new(|cx| {
                                 let mut inp = TextInput::new(i18n_placeholder(), cx);
                                 inp.set_text_silent(current, cx);
+                                inp.focus_handle.focus(window, cx);
+                                inp.start_blink(cx);
                                 inp
                             });
                             ws.ui.rename_dialog = Some((meta_for_rename.clone(), input));
@@ -297,8 +272,8 @@ fn session_row(
                     },
                 ))
                 .child(button_l(
-                    gpui::SharedString::from(format!("sess-export-{}", sid)),
-                    i.t("导出", "Export"),
+                    gpui::SharedString::from(format!("sess-export-json-{}", sid)),
+                    i.t("导出 JSON", "Export JSON"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -316,8 +291,8 @@ fn session_row(
                                             let msg = ws
                                                 .i18n
                                                 .t(
-                                                    &format!("已导出到 {}", out.display()),
-                                                    &format!("exported to {}", out.display()),
+                                                    &format!("已导出 JSON 到 {}", out.display()),
+                                                    &format!("exported JSON to {}", out.display()),
                                                 )
                                                 .to_string();
                                             ws.ui.toast(msg, false);
@@ -333,6 +308,86 @@ fn session_row(
                                     ws.ui.toast(msg, true);
                                 }
                             }
+                            cx.notify();
+                        }
+                    },
+                ))
+                .child(button_l(
+                    gpui::SharedString::from(format!("sess-export-md-{}", sid)),
+                    i.t("导出 MD", "Export MD"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    {
+                        let meta_for_export = meta.clone();
+                        move |ws, _, _, cx| {
+                            match session::export_session_markdown(&ws.paths, &meta_for_export) {
+                                Ok(md) => {
+                                    let out = ws.paths.app_data.join(format!(
+                                        "session-{}.md",
+                                        meta_for_export.session_id
+                                    ));
+                                    match std::fs::write(&out, md) {
+                                        Ok(()) => {
+                                            let msg = ws
+                                                .i18n
+                                                .t(
+                                                    &format!("已导出 Markdown 到 {}", out.display()),
+                                                    &format!("exported Markdown to {}", out.display()),
+                                                )
+                                                .to_string();
+                                            ws.ui.toast(msg, false);
+                                        }
+                                        Err(e) => {
+                                            let msg = format!("export failed: {e}");
+                                            ws.ui.toast(msg, true);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let msg = format!("export failed: {e}");
+                                    ws.ui.toast(msg, true);
+                                }
+                            }
+                            cx.notify();
+                        }
+                    },
+                ))
+                .child(button_l(
+                    gpui::SharedString::from(format!("sess-reveal-{}", sid)),
+                    i.t("定位", "Reveal"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    {
+                        let path_for_reveal = source_path.clone();
+                        move |ws, _, _, cx| {
+                            let path = std::path::PathBuf::from(&path_for_reveal);
+                            if path.exists() {
+                                let _ = std::process::Command::new("explorer")
+                                    .arg(format!("/select,{}", path.display()))
+                                    .spawn();
+                            } else {
+                                ws.ui.toast(
+                                    ws.i18n.t("源文件路径不存在", "source file not found").to_string(),
+                                    true,
+                                );
+                                cx.notify();
+                            }
+                        }
+                    },
+                ))
+                .child(button_l(
+                    gpui::SharedString::from(format!("sess-copy-id-{}", sid)),
+                    i.t("复制 ID", "Copy ID"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    {
+                        let sid_copy = sid.clone();
+                        move |ws, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(sid_copy.clone()));
+                            ws.ui.toast(ws.i18n.t("已复制会话 ID", "Copied session ID").to_string(), false);
                             cx.notify();
                         }
                     },
@@ -372,20 +427,22 @@ fn session_row(
 fn expanded_messages(
     s: &SessionMeta,
     ws: &mut Workspace,
-    _cx: &mut Context<Workspace>,
+    cx: &mut Context<Workspace>,
 ) -> gpui::AnyElement {
     let t = ws.theme.clone();
+    let i = ws.i18n;
     let messages = session::load_messages(&ws.paths, s).unwrap_or_default();
     let mut msgs = div()
         .flex()
         .flex_col()
-        .gap(px(4.0))
-        .pl(px(40.0))
-        .pt(px(2.0))
-        .pb(px(6.0));
+        .gap(px(8.0))
+        .pl(px(20.0))
+        .pr(px(6.0))
+        .pt(px(4.0))
+        .pb(px(8.0));
     let filters = &ws.settings.session_filters;
-    for m in messages
-        .iter()
+    let filtered_msgs: Vec<_> = messages
+        .into_iter()
         .filter(|message| {
             (message.role != "user" || filters.user)
                 && (message.role != "assistant" || filters.assistant)
@@ -395,30 +452,113 @@ fn expanded_messages(
                 && (!message.blocks.is_empty() || filters.text)
         })
         .take(200)
-    {
-        let is_user = m.role == "user";
+        .collect();
+
+    if filtered_msgs.is_empty() {
         msgs = msgs.child(
             div()
+                .p(px(12.0))
+                .rounded(px(6.0))
+                .bg(t.input_bg)
+                .text_size(px(12.0))
+                .text_color(t.text_muted)
+                .child(i.t("（当前过滤条件下无消息）", "(No messages match the current filters)")),
+        );
+    } else {
+        for (idx, m) in filtered_msgs.into_iter().enumerate() {
+            let is_user = m.role == "user";
+            let is_thinking = m.message_type.as_deref() == Some("thinking");
+            let is_tool = m.message_type.as_deref() == Some("tool_call");
+            let is_command = m.message_type.as_deref() == Some("command");
+            let role_display = if is_user {
+                i.t("👤 用户", "👤 User")
+            } else if is_thinking {
+                i.t("🧠 思考", "🧠 Thinking")
+            } else if is_tool {
+                i.t("🔧 工具", "🔧 Tool")
+            } else if is_command {
+                i.t("💻 终端", "💻 Command")
+            } else {
+                i.t("🤖 助手", "🤖 Assistant")
+            };
+
+            let content_text = m.content.clone();
+            let mut bubble = div()
+                .id(gpui::SharedString::from(format!("msg-{}-{}", s.session_id, idx)))
                 .flex()
                 .flex_col()
-                .gap(px(1.0))
-                .p(px(8.0))
-                .rounded(px(6.0))
-                .bg(if is_user { t.accent_subtle } else { t.input_bg })
+                .gap(px(4.0))
+                .p(px(10.0))
+                .rounded(px(8.0))
+                .border_1()
+                .when(is_user, |b| {
+                    b.bg(t.accent_subtle).border_color(t.accent)
+                })
+                .when(is_thinking, |b| {
+                    b.bg(t.card_bg).border_color(crate::rgba_const(0x8b5cf666))
+                })
+                .when(is_tool || is_command, |b| {
+                    b.bg(t.card_bg).border_color(crate::rgba_const(0x3b82f666))
+                })
+                .when(!is_user && !is_thinking && !is_tool && !is_command, |b| {
+                    b.bg(t.card_bg).border_color(t.card_border)
+                });
+
+            let header = div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(6.0))
                 .child(
                     div()
-                        .text_size(px(10.5))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(if is_user { t.accent } else { t.text_secondary })
-                        .child(m.role.clone()),
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(badge(
+                            &t,
+                            role_display,
+                            if is_user {
+                                BadgeKind::Accent
+                            } else {
+                                BadgeKind::Neutral
+                            },
+                        ))
+                        .children(m.model.map(|mod_name| badge(&t, mod_name, BadgeKind::Neutral)))
+                        .children(m.ts.map(|ts| {
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(t.text_muted)
+                                .child(fmt_time(Some(ts)))
+                        })),
                 )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(t.text_primary)
-                        .child(m.content.chars().take(600).collect::<String>()),
-                ),
-        );
+                .child(button_l(
+                    gpui::SharedString::from(format!("msg-copy-{}-{}", s.session_id, idx)),
+                    i.t("复制", "Copy"),
+                    ButtonVariant::Ghost,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(content_text.clone()));
+                        ws.ui.toast(
+                            ws.i18n.t("已复制消息内容", "Copied message content").to_string(),
+                            false,
+                        );
+                        cx.notify();
+                    },
+                ));
+
+            bubble = bubble.child(header);
+
+            bubble = bubble.child(
+                div()
+                    .text_size(px(12.0))
+                    .line_height(px(18.0))
+                    .text_color(t.text_primary)
+                    .child(m.content.chars().take(1200).collect::<String>()),
+            );
+
+            msgs = msgs.child(bubble);
+        }
     }
     msgs.into_any_element()
 }

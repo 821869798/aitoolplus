@@ -3,7 +3,8 @@
 use gpui::{Context, IntoElement, div, prelude::*, px};
 
 use crate::components::{
-    ButtonVariant, button_l, card, input_container, page_header, section_title, toggle,
+    ButtonVariant, button_l, button_with_icon_l, card, input_container, section_title,
+    segmented_pill_selector, settings_card, settings_row, toggle,
 };
 use crate::workspace::Workspace;
 
@@ -19,42 +20,18 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         (SettingsTab::About, i.t("关于", "About")),
     ];
 
-    let mut tab_bar = div()
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .p(px(3.0))
-        .rounded(px(8.0))
-        .bg(t.sidebar_bg)
-        .border_1()
-        .border_color(t.card_border);
-    for (tab, label) in tabs {
-        let is_on = ws.ui.settings_tab == tab;
-        tab_bar = tab_bar.child(
-            div()
-                .id(gpui::SharedString::from(format!("settings-tab-{:?}", tab)))
-                .cursor_pointer()
-                .px(px(12.0))
-                .py(px(4.5))
-                .rounded(px(6.0))
-                .text_size(px(12.5))
-                .when(is_on, |s| {
-                    s.bg(t.card_bg)
-                        .text_color(t.text_primary)
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .shadow_xs()
-                })
-                .when(!is_on, |s| {
-                    s.text_color(t.text_secondary)
-                        .hover(|h| h.text_color(t.text_primary).bg(t.card_hover))
-                })
-                .on_click(cx.listener(move |ws, _ev: &gpui::ClickEvent, _w, cx| {
-                    ws.ui.settings_tab = tab;
-                    cx.notify();
-                }))
-                .child(label),
-        );
-    }
+    let current_tab = ws.ui.settings_tab;
+    let tab_bar = crate::components::segmented_tab_bar(
+        "settings",
+        tabs.to_vec(),
+        current_tab,
+        &t,
+        cx,
+        |ws, tab, _window, cx| {
+            ws.ui.settings_tab = tab;
+            cx.notify();
+        },
+    );
 
     let body = match ws.ui.settings_tab {
         SettingsTab::General => general_tab(ws, cx),
@@ -66,14 +43,9 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         .flex()
         .flex_col()
         .w_full()
-        .max_w(px(760.0))
+        .max_w(px(880.0))
         .min_w(px(0.0))
         .gap(px(16.0))
-        .child(page_header(
-            &t,
-            i.t("设置", "Settings"),
-            i.t("应用偏好、数据备份与关于", "Preferences, backups & about"),
-        ))
         .child(tab_bar)
         .child(body)
         .into_any_element()
@@ -83,398 +55,381 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    // language picker
-    let mut lang_row = div().flex().gap(px(6.0));
-    for (lang, label) in [
-        (
-            aitoolplus_core::settings::Language::System,
-            i.t("跟随系统", "System"),
-        ),
-        (aitoolplus_core::settings::Language::Zh, i.t("中文", "中文")),
-        (
-            aitoolplus_core::settings::Language::En,
-            i.t("英文", "English"),
-        ),
-    ] {
-        let is_on = ws.settings.language == lang;
-        lang_row = lang_row.child(
-            div()
-                .id(gpui::SharedString::from(format!("lang-{}", lang.as_u8())))
-                .cursor_pointer()
-                .flex()
-                .items_center()
-                .h(px(26.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .text_size(px(12.5))
-                .when(is_on, |s| {
-                    s.bg(t.accent_subtle)
-                        .border_1()
-                        .border_color(t.accent)
-                        .text_color(t.accent)
-                })
-                .when(!is_on, |s| {
-                    s.bg(t.input_bg)
-                        .border_1()
-                        .border_color(t.input_border)
-                        .text_color(t.text_secondary)
-                })
-                .on_click(cx.listener(move |ws, _ev: &gpui::ClickEvent, _w, cx| {
-                    ws.settings.language = lang;
-                    ws.i18n = crate::i18n::I18n::new(lang);
-                    (ws.callbacks.save_settings)(&ws.settings);
-                    cx.notify();
-                }))
-                .child(label),
-        );
-    }
+    // 1. Appearance Card (Theme & Language)
+    let theme_mode = ws.settings.theme_mode;
+    let theme_selector = segmented_pill_selector(
+        "theme-mode",
+        vec![
+            (
+                aitoolplus_core::settings::ThemeMode::System,
+                Some(crate::icons::SUN_MOON_SVG),
+                i.t("跟随系统", "System"),
+            ),
+            (
+                aitoolplus_core::settings::ThemeMode::Dark,
+                Some(crate::icons::MOON_SVG),
+                i.t("暗色模式", "Dark"),
+            ),
+            (
+                aitoolplus_core::settings::ThemeMode::Light,
+                Some(crate::icons::SUN_SVG),
+                i.t("亮色模式", "Light"),
+            ),
+        ],
+        theme_mode,
+        &t,
+        cx,
+        |ws, mode, _, cx| {
+            ws.settings.theme_mode = mode;
+            ws.theme = crate::theme::Theme::for_mode(mode, system_prefers_dark());
+            (ws.callbacks.save_settings)(&ws.settings);
+            cx.notify();
+        },
+    );
 
-    // theme picker
-    let mut theme_row = div().flex().gap(px(6.0));
-    for (mode, label) in [
-        (
-            aitoolplus_core::settings::ThemeMode::System,
-            i.t("跟随系统", "System"),
-        ),
-        (
-            aitoolplus_core::settings::ThemeMode::Dark,
-            i.t("暗色", "Dark"),
-        ),
-        (
-            aitoolplus_core::settings::ThemeMode::Light,
-            i.t("亮色", "Light"),
-        ),
-    ] {
-        let is_on = ws.settings.theme_mode == mode;
-        theme_row = theme_row.child(
-            div()
-                .id(gpui::SharedString::from(format!("theme-{}", mode.as_u8())))
-                .cursor_pointer()
-                .flex()
-                .items_center()
-                .h(px(26.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .text_size(px(12.5))
-                .when(is_on, |s| {
-                    s.bg(t.accent_subtle)
-                        .border_1()
-                        .border_color(t.accent)
-                        .text_color(t.accent)
-                })
-                .when(!is_on, |s| {
-                    s.bg(t.input_bg)
-                        .border_1()
-                        .border_color(t.input_border)
-                        .text_color(t.text_secondary)
-                })
-                .on_click(cx.listener(move |ws, _ev: &gpui::ClickEvent, _w, cx| {
-                    ws.settings.theme_mode = mode;
-                    ws.theme = crate::theme::Theme::for_mode(mode, system_prefers_dark());
-                    (ws.callbacks.save_settings)(&ws.settings);
-                    cx.notify();
-                }))
-                .child(label),
-        );
-    }
+    let lang_val = ws.settings.language;
+    let lang_selector = segmented_pill_selector(
+        "lang-choice",
+        vec![
+            (
+                aitoolplus_core::settings::Language::System,
+                Some(crate::icons::GLOBE_SVG),
+                i.t("跟随系统", "System"),
+            ),
+            (
+                aitoolplus_core::settings::Language::Zh,
+                None,
+                i.t("简体中文", "中文"),
+            ),
+            (
+                aitoolplus_core::settings::Language::En,
+                None,
+                i.t("English", "EN"),
+            ),
+        ],
+        lang_val,
+        &t,
+        cx,
+        |ws, lang, _, cx| {
+            ws.settings.language = lang;
+            ws.i18n = crate::i18n::I18n::new(lang);
+            (ws.callbacks.save_settings)(&ws.settings);
+            cx.notify();
+        },
+    );
 
-    // lifecycle
+    let appearance_card = settings_card(
+        &t,
+        i.t("外观与语言", "Appearance & Language"),
+        Some(i.t(
+            "选择工作台的色彩主题风格与界面文本显示语言",
+            "Choose workbench color theme and interface language",
+        )),
+        vec![
+            settings_row(
+                &t,
+                i.t("界面主题", "Theme Mode"),
+                Some(i.t(
+                    "暗色、亮色或自动同步操作系统的深浅色偏好",
+                    "Dark, light or automatically sync with OS preference",
+                )),
+                theme_selector,
+            ),
+            settings_row(
+                &t,
+                i.t("界面语言", "Interface Language"),
+                Some(i.t(
+                    "切换应用内所有界面文案、提示与状态标签的语言",
+                    "Select language for UI labels, notifications and buttons",
+                )),
+                lang_selector,
+            ),
+        ],
+    );
+
+    // 2. System & Launch Behavior Card
     let autostart_on = ws.settings.start_with_system;
-    let autostart_row = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .w_full()
-        .gap(px(16.0))
-        .child(section_title(
-            &t,
-            i.t("开机自启", "Launch at Login"),
-            Some(i.t(
-                "登录 Windows 后自动启动 AI ToolPlus",
-                "Start AI ToolPlus after Windows sign-in",
-            )),
-        ))
-        .child(toggle(
-            "autostart-toggle",
-            autostart_on,
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.start_with_system = !ws.settings.start_with_system;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ));
-
     let minimize_on_close = ws.settings.minimize_to_tray_on_close;
-    let minimize_row = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .w_full()
-        .gap(px(16.0))
-        .child(section_title(
-            &t,
-            i.t("关闭时最小化到托盘", "Minimize to Tray on Close"),
-            Some(i.t(
-                "点击关闭按钮时保留后台托盘，可从托盘重新打开",
-                "Keep the tray running when the close button is clicked",
-            )),
-        ))
-        .child(toggle(
-            "minimize-on-close-toggle",
-            minimize_on_close,
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.minimize_to_tray_on_close = !ws.settings.minimize_to_tray_on_close;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ));
-
     let start_minimized = ws.settings.start_minimized;
-    let start_minimized_row = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .w_full()
-        .gap(px(16.0))
-        .child(section_title(
-            &t,
-            i.t("启动时最小化", "Start Minimized"),
-            Some(i.t("应用启动后直接进入托盘", "Start directly in the tray")),
-        ))
-        .child(toggle(
-            "start-minimized-toggle",
-            start_minimized,
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.start_minimized = !ws.settings.start_minimized;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ));
 
+    let behavior_card = settings_card(
+        &t,
+        i.t("系统与启动行为", "System & Launch Behavior"),
+        Some(i.t(
+            "配置开机自启、关闭窗口策略与托盘驻留行为",
+            "Configure startup, window close, and background tray actions",
+        )),
+        vec![
+            settings_row(
+                &t,
+                i.t("开机自动启动", "Launch at Login"),
+                Some(i.t(
+                    "登录 Windows 后在后台自动启动 AI ToolPlus 守护服务",
+                    "Start AI ToolPlus in background after Windows user login",
+                )),
+                toggle(
+                    "autostart-toggle",
+                    autostart_on,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.start_with_system = !ws.settings.start_with_system;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                &t,
+                i.t("关闭时最小化到托盘", "Minimize to Tray on Close"),
+                Some(i.t(
+                    "点击主窗口关闭按钮时保留后台托盘运行，避免中断会话",
+                    "Keep running in system tray when window is closed",
+                )),
+                toggle(
+                    "minimize-on-close-toggle",
+                    minimize_on_close,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.minimize_to_tray_on_close =
+                            !ws.settings.minimize_to_tray_on_close;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                &t,
+                i.t("启动时直接最小化", "Start Minimized"),
+                Some(i.t(
+                    "应用启动后静默进入系统托盘，不主动弹出主窗口",
+                    "Launch directly into tray without showing main window",
+                )),
+                toggle(
+                    "start-minimized-toggle",
+                    start_minimized,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.start_minimized = !ws.settings.start_minimized;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+        ],
+    );
+
+    // 3. Network & Proxy Card
     let proxy_mode = ws.settings.proxy_mode;
     let proxy_input = ws.ui.proxy_url_input.clone();
     let proxy_save = proxy_input.clone();
-    let proxy_panel = div()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(8.0))
-        .child(section_title(
-            &t,
-            i.t("网络代理", "Network Proxy"),
-            Some(i.t(
-                "用于更新、模型、WebDAV 和包版本请求",
-                "Used by update, models, WebDAV and package requests",
-            )),
-        ))
-        .child(
-            div()
-                .flex()
-                .gap(px(8.0))
-                .child(button_l(
-                    "proxy-system",
-                    i.t("系统", "System"),
-                    if proxy_mode == aitoolplus_core::settings::ProxyMode::System {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Secondary
-                    },
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.proxy_mode = aitoolplus_core::settings::ProxyMode::System;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ))
-                .child(button_l(
-                    "proxy-direct",
-                    i.t("直连", "Direct"),
-                    if proxy_mode == aitoolplus_core::settings::ProxyMode::Direct {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Secondary
-                    },
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.proxy_mode = aitoolplus_core::settings::ProxyMode::Direct;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ))
-                .child(button_l(
-                    "proxy-custom",
-                    i.t("自定义", "Custom"),
-                    if proxy_mode == aitoolplus_core::settings::ProxyMode::Custom {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Secondary
-                    },
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.proxy_mode = aitoolplus_core::settings::ProxyMode::Custom;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                )),
-        )
-        .child(input_container(&t, proxy_input))
-        .child(button_l(
-            "proxy-save",
-            i.t("保存代理 URL", "Save Proxy URL"),
-            ButtonVariant::Secondary,
-            &t,
-            cx,
-            move |ws, _, _, cx| {
-                ws.settings.proxy_url =
-                    proxy_save.update(cx, |input, _| input.text().trim().to_string());
-                (ws.callbacks.save_settings)(&ws.settings);
-                ws.ui.toast(
-                    ws.i18n
-                        .t("已保存；重启后生效", "saved; applies after restart")
-                        .to_string(),
-                    false,
-                );
-                cx.notify();
-            },
-        ));
 
-    let cli_policy_panel = div()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(8.0))
-        .child(section_title(
-            &t,
-            i.t("CLI 启动与认证策略", "CLI Launch & Auth Policies"),
-            None,
-        ))
-        .child(button_l(
-            "claude-full-access",
-            if ws.settings.claude_cli_launch_full_access {
-                i.t("Claude 全权限启动：开", "Claude full-access launch: on")
-            } else {
-                i.t("Claude 全权限启动：关", "Claude full-access launch: off")
-            },
-            if ws.settings.claude_cli_launch_full_access {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.claude_cli_launch_full_access =
-                    !ws.settings.claude_cli_launch_full_access;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ))
-        .child(button_l(
-            "codex-preserve-auth",
-            if ws.settings.codex_preserve_official_auth_on_switch {
-                i.t("Codex 保留官方认证：开", "Preserve Codex official auth: on")
-            } else {
-                i.t(
-                    "Codex 保留官方认证：关",
-                    "Preserve Codex official auth: off",
-                )
-            },
-            if ws.settings.codex_preserve_official_auth_on_switch {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.codex_preserve_official_auth_on_switch =
-                    !ws.settings.codex_preserve_official_auth_on_switch;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ))
-        .child(button_l(
-            "omo-legacy-config",
-            if ws.settings.opencode_use_legacy_oh_my_config {
-                i.t("OpenAgent Legacy 文件：开", "OpenAgent legacy file: on")
-            } else {
-                i.t(
-                    "OpenAgent 统一 ~/.omo 配置",
-                    "OpenAgent unified ~/.omo config",
-                )
-            },
-            if ws.settings.opencode_use_legacy_oh_my_config {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.opencode_use_legacy_oh_my_config =
-                    !ws.settings.opencode_use_legacy_oh_my_config;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ))
-        .child(button_l(
-            "omo-clear-policy",
-            if ws.settings.opencode_allow_clear_applied_oh_my_config {
-                i.t("允许清除 OMO/OMOS：开", "Allow clear OMO/OMOS: on")
-            } else {
-                i.t("允许清除 OMO/OMOS：关", "Allow clear OMO/OMOS: off")
-            },
-            if ws.settings.opencode_allow_clear_applied_oh_my_config {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.opencode_allow_clear_applied_oh_my_config =
-                    !ws.settings.opencode_allow_clear_applied_oh_my_config;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ))
-        .child(button_l(
-            "omo-dual-reasoning",
-            if ws.settings.opencode_dual_write_reasoning_variant {
-                i.t("双写 reasoning/variant：开", "Dual reasoning/variant: on")
-            } else {
-                i.t("双写 reasoning/variant：关", "Dual reasoning/variant: off")
-            },
-            if ws.settings.opencode_dual_write_reasoning_variant {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.opencode_dual_write_reasoning_variant =
-                    !ws.settings.opencode_dual_write_reasoning_variant;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ));
-
-    let mut visibility_panel = div().flex().flex_col().gap(px(8.0)).child(section_title(
+    let proxy_selector = segmented_pill_selector(
+        "proxy-mode",
+        vec![
+            (
+                aitoolplus_core::settings::ProxyMode::System,
+                None,
+                i.t("跟随系统代理", "System"),
+            ),
+            (
+                aitoolplus_core::settings::ProxyMode::Direct,
+                None,
+                i.t("直连模式", "Direct"),
+            ),
+            (
+                aitoolplus_core::settings::ProxyMode::Custom,
+                None,
+                i.t("自定义代理", "Custom"),
+            ),
+        ],
+        proxy_mode,
         &t,
-        i.t("可见工具", "Visible Tools"),
-        Some(i.t("隐藏不使用的工具标签", "Hide tools you do not use")),
-    ));
-    let mut visibility_buttons = div().flex().flex_wrap().gap(px(6.0));
+        cx,
+        |ws, mode, _, cx| {
+            ws.settings.proxy_mode = mode;
+            (ws.callbacks.save_settings)(&ws.settings);
+            cx.notify();
+        },
+    );
+
+    let mut proxy_rows = vec![
+        settings_row(
+            &t,
+            i.t("网络代理策略", "Network Proxy Policy"),
+            Some(i.t(
+                "用于上游模型拉取、客户端版本检查及云端同步请求",
+                "Used by upstream model fetch, updater, and cloud sync requests",
+            )),
+            proxy_selector,
+        ),
+    ];
+
+    if proxy_mode == aitoolplus_core::settings::ProxyMode::Custom {
+        let custom_url_row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .min_h(px(52.0))
+            .px(px(16.0))
+            .py(px(12.0))
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .child(input_container(&t, proxy_input)),
+            )
+            .child(button_l(
+                "proxy-save",
+                i.t("保存代理", "Save Proxy"),
+                ButtonVariant::Primary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    ws.settings.proxy_url =
+                        proxy_save.update(cx, |input, _| input.text().trim().to_string());
+                    (ws.callbacks.save_settings)(&ws.settings);
+                    ws.ui.toast(
+                        ws.i18n
+                            .t("代理设置已保存；重启后生效", "Proxy saved; applies after restart")
+                            .to_string(),
+                        false,
+                    );
+                    cx.notify();
+                },
+            ))
+            .into_any_element();
+        proxy_rows.push(custom_url_row);
+    }
+
+    let network_card = settings_card(
+        &t,
+        i.t("网络与代理", "Network & Proxy"),
+        Some(i.t(
+            "配置工作台发起网络请求时使用的代理方式与出口地址",
+            "Configure outbound proxy URL and connection behavior",
+        )),
+        proxy_rows,
+    );
+
+    // 4. CLI Launch & Auth Policies Card
+    let cli_policies_card = settings_card(
+        &t,
+        i.t("CLI 运行与认证策略", "CLI Launch & Auth Policies"),
+        Some(i.t(
+            "针对各命令行工具的环境变量与运行时配置写入安全策略",
+            "Security, auth preservation, and runtime policies for CLI tools",
+        )),
+        vec![
+            settings_row(
+                &t,
+                i.t("Claude 全权限启动 (--dangerously-skip-permissions)", "Claude Full-Access Launch"),
+                Some(i.t(
+                    "启动 Claude Code 时自动附加全权限参数，跳过频繁的危险确认提示",
+                    "Pass --dangerously-skip-permissions on Claude Code startup",
+                )),
+                toggle(
+                    "claude-full-access",
+                    ws.settings.claude_cli_launch_full_access,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.claude_cli_launch_full_access =
+                            !ws.settings.claude_cli_launch_full_access;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                &t,
+                i.t("Codex 保留官方登录态", "Preserve Codex Official Auth"),
+                Some(i.t(
+                    "切换第三方供应商时保留 ~/.codex 的官方登录凭据与会话",
+                    "Keep official login session in ~/.codex on provider switch",
+                )),
+                toggle(
+                    "codex-preserve-auth",
+                    ws.settings.codex_preserve_official_auth_on_switch,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.codex_preserve_official_auth_on_switch =
+                            !ws.settings.codex_preserve_official_auth_on_switch;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                &t,
+                i.t("OpenAgent 统一 ~/.omo 配置", "OpenAgent Unified ~/.omo Config"),
+                Some(i.t(
+                    "使用现代统一的 ~/.omo 目录而非旧版分散配置文件",
+                    "Write unified config to ~/.omo instead of legacy files",
+                )),
+                toggle(
+                    "omo-legacy-config",
+                    ws.settings.opencode_use_legacy_oh_my_config,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.opencode_use_legacy_oh_my_config =
+                            !ws.settings.opencode_use_legacy_oh_my_config;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                &t,
+                i.t("允许清除 OMO/OMOS 运行配置", "Allow Clearing OMO/OMOS Config"),
+                Some(i.t(
+                    "在重置或切换供应商时允许清空已应用的运行时配置",
+                    "Allow wiping runtime config when resetting or switching",
+                )),
+                toggle(
+                    "omo-clear-policy",
+                    ws.settings.opencode_allow_clear_applied_oh_my_config,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.opencode_allow_clear_applied_oh_my_config =
+                            !ws.settings.opencode_allow_clear_applied_oh_my_config;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                &t,
+                i.t("双写 reasoning/variant 兼容模式", "Dual Reasoning/Variant Write"),
+                Some(i.t(
+                    "同时写入推理模型参数以兼容旧版 OpenCode 插件",
+                    "Write dual parameters for compatibility with older OpenCode",
+                )),
+                toggle(
+                    "omo-dual-reasoning",
+                    ws.settings.opencode_dual_write_reasoning_variant,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.opencode_dual_write_reasoning_variant =
+                            !ws.settings.opencode_dual_write_reasoning_variant;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+        ],
+    );
+
+    // 5. Visible Tools Card (Sidebar Tool Chips)
+    let mut visibility_chips = div().flex().flex_wrap().gap(px(8.0)).p(px(16.0));
     for tool in aitoolplus_core::ToolId::ALL {
         let visible = ws.settings.visible_tools.is_empty()
             || ws
@@ -482,51 +437,94 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
                 .visible_tools
                 .iter()
                 .any(|key| key == tool.key());
-        visibility_buttons = visibility_buttons.child(button_l(
-            gpui::SharedString::from(format!("visible-tool-{}", tool.key())),
-            tool.name_en(),
-            if visible {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            move |ws, _, _, cx| {
+        let chip_theme = t.clone();
+        let chip = div()
+            .id(gpui::ElementId::Name(format!("visible-tool-{}", tool.key()).into()))
+            .cursor_pointer()
+            .h(px(32.0))
+            .px(px(14.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .text_size(px(12.5))
+            .when(visible, |s| {
+                s.bg(chip_theme.tab_active_bg)
+                    .border_1()
+                    .border_color(chip_theme.accent)
+                    .text_color(chip_theme.text_primary)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(
+                        gpui::svg()
+                            .data(crate::icons::CHECK_SVG)
+                            .size(px(13.0))
+                            .text_color(chip_theme.accent),
+                    )
+            })
+            .when(!visible, |s| {
+                s.bg(chip_theme.input_bg)
+                    .border_1()
+                    .border_color(chip_theme.card_border)
+                    .text_color(chip_theme.text_muted)
+                    .hover(move |h| {
+                        h.border_color(chip_theme.card_border_hover)
+                            .text_color(chip_theme.text_secondary)
+                    })
+            })
+            .child(tool.name_en())
+            .on_click(cx.listener(move |ws, _, _, cx| {
                 if ws.settings.visible_tools.is_empty() {
                     ws.settings.visible_tools = aitoolplus_core::ToolId::ALL
                         .into_iter()
                         .map(|tool| tool.key().to_string())
                         .collect();
                 }
-                if ws
-                    .settings
-                    .visible_tools
-                    .iter()
-                    .any(|key| key == tool.key())
-                {
+                if ws.settings.visible_tools.iter().any(|key| key == tool.key()) {
                     ws.settings.visible_tools.retain(|key| key != tool.key());
                 } else {
                     ws.settings.visible_tools.push(tool.key().to_string());
                 }
                 (ws.callbacks.save_settings)(&ws.settings);
                 cx.notify();
-            },
-        ));
+            }));
+        visibility_chips = visibility_chips.child(chip);
     }
-    visibility_panel = visibility_panel.child(visibility_buttons);
 
-    // data dir row
-    let data_dir = ws.paths.app_data.display().to_string();
-
-    let mut roots_panel = div().flex().flex_col().gap(px(8.0)).child(section_title(
+    let visibility_card = settings_card(
         &t,
-        i.t("CLI 配置根目录", "CLI Config Roots"),
+        i.t("侧边栏可见工具", "Visible Sidebar Tools"),
         Some(i.t(
-            "空值使用自动探测；自定义路径保存后下次启动生效",
-            "Blank uses auto-detection; custom paths apply on next launch",
+            "点击切换工具卡片，定制侧边栏中常驻显示的 AI 编码助手",
+            "Click tool chips to customize which AI coding tools appear in navigation",
         )),
-    ));
+        vec![visibility_chips.into_any_element()],
+    );
+
+    // 6. Storage & CLI Roots Card
+    let data_dir = ws.paths.app_data.display().to_string();
+    let storage_row = settings_row(
+        &t,
+        i.t("应用数据存储目录", "Application Data Directory"),
+        Some(gpui::SharedString::from(data_dir.clone())),
+        button_with_icon_l(
+            "open-data-dir",
+            crate::icons::FOLDER_SVG,
+            i.t("打开数据目录", "Open Folder"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                let _ = open_dir_in_explorer(&ws.paths.app_data);
+                cx.notify();
+            },
+        ),
+    );
+
+    let mut roots_rows = div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .p(px(16.0));
     for tool in aitoolplus_core::ToolId::ALL {
         let override_value = ws
             .settings
@@ -551,13 +549,13 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
         let cli_input = ws.ui.cli_path_input(command, &cli_value, cx);
         let save_cli_input = cli_input.clone();
         let resolved = ws.paths.tool_root(tool).display().to_string();
-        roots_panel = roots_panel.child(
+
+        roots_rows = roots_rows.child(
             div()
                 .flex()
                 .flex_col()
-                .items_start()
                 .gap(px(6.0))
-                .p(px(8.0))
+                .p(px(10.0))
                 .rounded(px(8.0))
                 .bg(t.input_bg)
                 .border_1()
@@ -572,7 +570,7 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
                 .child(input)
                 .child(button_l(
                     gpui::SharedString::from(format!("save-root-{}", tool.key())),
-                    i.t("保存路径覆盖", "Save Root Override"),
+                    i.t("保存根目录覆盖", "Save Root Override"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -605,7 +603,7 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
                 .child(cli_input)
                 .child(button_l(
                     gpui::SharedString::from(format!("save-cli-{command}")),
-                    i.t("保存 CLI 路径", "Save CLI Path"),
+                    i.t("保存 CLI 执行路径", "Save CLI Path"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -630,47 +628,32 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
         );
     }
 
-    card(
+    let storage_card = settings_card(
         &t,
+        i.t("数据存储与 CLI 路径覆盖", "Storage & CLI Paths"),
+        Some(i.t(
+            "查看核心配置存储路径，或自定义特定工具的配置文件与命令行程序位置",
+            "Inspect data directory or override config roots and CLI binary paths",
+        )),
         vec![
-            section_title(
-                &t,
-                i.t("语言 / Language", "Language"),
-                Some(i.t("界面显示语言", "Interface language")),
-            ),
-            lang_row.into_any_element(),
-            section_title(
-                &t,
-                i.t("主题", "Theme"),
-                Some(i.t("亮色或暗色工作台", "Light or dark workbench")),
-            ),
-            theme_row.into_any_element(),
-            autostart_row.into_any_element(),
-            minimize_row.into_any_element(),
-            start_minimized_row.into_any_element(),
-            proxy_panel.into_any_element(),
-            cli_policy_panel.into_any_element(),
-            visibility_panel.into_any_element(),
-            section_title(
-                &t,
-                i.t("数据目录", "Data Directory"),
-                Some(gpui::SharedString::from(data_dir.clone())),
-            ),
-            button_l(
-                "open-data-dir",
-                i.t("打开数据目录", "Open Data Directory"),
-                ButtonVariant::Secondary,
-                &t,
-                cx,
-                move |ws, _, _, cx| {
-                    let _ = open_dir_in_explorer(&ws.paths.app_data);
-                    cx.notify();
-                },
-            ),
-            roots_panel.into_any_element(),
+            storage_row,
+            roots_rows.into_any_element(),
         ],
-    )
-    .into_any_element()
+    );
+
+    // Combine all modular cards with ample vertical spacing
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap(px(20.0))
+        .child(appearance_card)
+        .child(behavior_card)
+        .child(network_card)
+        .child(cli_policies_card)
+        .child(visibility_card)
+        .child(storage_card)
+        .into_any_element()
 }
 
 fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
@@ -695,59 +678,34 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
     let custom_source = custom_inputs.source.clone();
     let custom_restore = custom_inputs.restore.clone();
 
-    let transport_row = div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .child(button_l(
-            "backup-type-local",
-            i.t("本地", "Local"),
-            if backup_type == aitoolplus_core::settings::BackupType::Local {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.backup_type = aitoolplus_core::settings::BackupType::Local;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ))
-        .child(button_l(
-            "backup-type-webdav",
-            "WebDAV",
-            if backup_type == aitoolplus_core::settings::BackupType::Webdav {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.backup_type = aitoolplus_core::settings::BackupType::Webdav;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ))
-        .child(button_l(
-            "backup-type-s3",
-            "S3",
-            if backup_type == aitoolplus_core::settings::BackupType::S3 {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            |ws, _, _, cx| {
-                ws.settings.backup_type = aitoolplus_core::settings::BackupType::S3;
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ))
-        .into_any_element();
+    let transport_row = segmented_pill_selector(
+        "backup-type",
+        vec![
+            (
+                aitoolplus_core::settings::BackupType::Local,
+                Some(crate::icons::FOLDER_SVG),
+                i.t("本地快照", "Local"),
+            ),
+            (
+                aitoolplus_core::settings::BackupType::Webdav,
+                Some(crate::icons::GLOBE_SVG),
+                i.t("WebDAV 云端", "WebDAV"),
+            ),
+            (
+                aitoolplus_core::settings::BackupType::S3,
+                Some(crate::icons::DOWNLOAD_SVG),
+                i.t("S3 兼容存储", "S3 Storage"),
+            ),
+        ],
+        backup_type,
+        &t,
+        cx,
+        |ws, b_type, _, cx| {
+            ws.settings.backup_type = b_type;
+            (ws.callbacks.save_settings)(&ws.settings);
+            cx.notify();
+        },
+    );
 
     let webdav_panel = (backup_type == aitoolplus_core::settings::BackupType::Webdav).then(|| {
         let list_url = dav_url.clone();
@@ -919,24 +877,32 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
             .child(
                 div()
                     .flex()
-                    .gap(px(8.0))
+                    .items_center()
+                    .gap(px(12.0))
                     .child(div().flex_1().child(s3_prefix.clone()))
-                    .child(button_l(
-                        "s3-path-style-toggle",
-                        if ws.settings.s3.path_style {
-                            i.t("路径模式: 开", "Path-Style: ON")
-                        } else {
-                            i.t("路径模式: 关", "Path-Style: OFF")
-                        },
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        |ws, _, _, cx| {
-                            ws.settings.s3.path_style = !ws.settings.s3.path_style;
-                            (ws.callbacks.save_settings)(&ws.settings);
-                            cx.notify();
-                        },
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .text_color(t.text_secondary)
+                                    .child(i.t("路径模式 (Path-Style)", "Path-Style")),
+                            )
+                            .child(toggle(
+                                "s3-path-style-toggle",
+                                ws.settings.s3.path_style,
+                                &t,
+                                cx,
+                                |ws, _, _, cx| {
+                                    ws.settings.s3.path_style = !ws.settings.s3.path_style;
+                                    (ws.callbacks.save_settings)(&ws.settings);
+                                    cx.notify();
+                                },
+                            )),
+                    ),
             )
             .child(
                 div()
@@ -1437,31 +1403,39 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                 cx.notify();
                             },
                         ))
-                        .child(button_l(
-                            "restore-custom-absolute-toggle",
-                            if ws.ui.restore_allow_custom_absolute {
-                                i.t("允许原绝对路径: 开", "Custom Absolute: ON")
-                            } else {
-                                i.t("沙箱隔离恢复: 关", "Sandbox Safe: OFF")
-                            },
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                ws.ui.restore_allow_custom_absolute =
-                                    !ws.ui.restore_allow_custom_absolute;
-                                cx.notify();
-                            },
-                        )),
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .text_color(t.text_secondary)
+                                        .child(i.t("允许原绝对路径", "Custom Absolute")),
+                                )
+                                .child(toggle(
+                                    "restore-custom-absolute-toggle",
+                                    ws.ui.restore_allow_custom_absolute,
+                                    &t,
+                                    cx,
+                                    |ws, _, _, cx| {
+                                        ws.ui.restore_allow_custom_absolute =
+                                            !ws.ui.restore_allow_custom_absolute;
+                                        cx.notify();
+                                    },
+                                )),
+                        ),
                 )
                 .into_any_element(),
             filter_panel.into_any_element(),
             custom_panel.into_any_element(),
             div()
                 .flex()
-                .flex_col()
-                .items_start()
-                .gap(px(8.0))
+                .items_center()
+                .justify_between()
+                .w_full()
+                .gap(px(16.0))
                 .child(section_title(
                     &t,
                     i.t("包含 CLI 配置", "Include CLI Configs"),
@@ -1470,18 +1444,9 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                         "Include tool configs, prompts, MCP and plugin state",
                     )),
                 ))
-                .child(button_l(
+                .child(toggle(
                     "backup-cli-toggle",
-                    if ws.settings.backup_cli_config_files_enabled {
-                        i.t("已包含", "Included")
-                    } else {
-                        i.t("未包含", "Excluded")
-                    },
-                    if ws.settings.backup_cli_config_files_enabled {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Secondary
-                    },
+                    ws.settings.backup_cli_config_files_enabled,
                     &t,
                     cx,
                     |ws, _, _, cx| {
@@ -1494,9 +1459,10 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                 .into_any_element(),
             div()
                 .flex()
-                .flex_col()
-                .items_start()
-                .gap(px(8.0))
+                .items_center()
+                .justify_between()
+                .w_full()
+                .gap(px(16.0))
                 .child(section_title(
                     &t,
                     i.t("自动备份", "Automatic Backup"),
@@ -1509,18 +1475,9 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                         ws.settings.auto_backup_max_keep
                     ))),
                 ))
-                .child(button_l(
+                .child(toggle(
                     "auto-backup-toggle",
-                    if ws.settings.auto_backup_enabled {
-                        i.t("已开启", "Enabled")
-                    } else {
-                        i.t("已关闭", "Disabled")
-                    },
-                    if ws.settings.auto_backup_enabled {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Secondary
-                    },
+                    ws.settings.auto_backup_enabled,
                     &t,
                     cx,
                     |ws, _, _, cx| {
@@ -1650,6 +1607,18 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                     .detach();
                 },
             ),
+            button_l(
+                "backup-open-folder",
+                i.t("打开备份目录", "Open Backup Directory"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                |ws, _, _, _| {
+                    let dir = ws.paths.app_data.join("backups");
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                },
+            ),
         ],
     )
     .into_any_element()
@@ -1678,16 +1647,94 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                     .text_size(px(12.0))
                     .text_color(t.text_secondary)
                     .child(i.t(
-                        "Rust + GPUI 原生桌面应用，对标 ai-toolbox",
-                        "Native Rust + GPUI desktop app, mirroring ai-toolbox",
+                        "Rust + GPUI 原生桌面应用，全面对标 cc-switch 与 ai-toolbox",
+                        "Native Rust + GPUI desktop app, matching cc-switch and ai-toolbox",
                     )),
             )
             .into_any_element(),
         div()
             .flex()
             .flex_col()
-            .items_start()
             .gap(px(8.0))
+            .p(px(10.0))
+            .rounded(px(8.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(t.text_primary)
+                            .child(i.t("数据存储模式：", "Data Storage Mode:")),
+                    )
+                    .child(if ws.paths.is_portable() {
+                        crate::components::badge(
+                            &t,
+                            i.t("便携模式：已激活（保存在应用同级 data/ 目录）", "Portable: Active (app data/ folder)"),
+                            crate::components::BadgeKind::Success,
+                        )
+                    } else {
+                        crate::components::badge(
+                            &t,
+                            i.t("系统模式（保存在用户 AppData）", "Standard Mode (%APPDATA%)"),
+                            crate::components::BadgeKind::Neutral,
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .flex_wrap()
+                    .child(button_l(
+                        "open-app-data-dir",
+                        i.t("打开应用数据目录", "Open AppData Dir"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, _| {
+                            let dir = &ws.paths.app_data;
+                            let _ = std::fs::create_dir_all(dir);
+                            let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                        },
+                    ))
+                    .child(button_l(
+                        "open-backups-dir",
+                        i.t("打开备份存储目录", "Open Backups Dir"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, _| {
+                            let dir = ws.paths.app_data.join("backups");
+                            let _ = std::fs::create_dir_all(&dir);
+                            let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                        },
+                    ))
+                    .child(button_l(
+                        "open-user-home-dir",
+                        i.t("打开配置根目录", "Open Config Root"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, _| {
+                            let _ = std::process::Command::new("explorer").arg(&ws.paths.home).spawn();
+                        },
+                    )),
+            )
+            .into_any_element(),
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .gap(px(16.0))
             .child(section_title(
                 &t,
                 i.t("自动检查更新", "Automatic Update Check"),
@@ -1696,18 +1743,9 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                     "Check GitHub Releases at startup; never installs silently",
                 )),
             ))
-            .child(button_l(
+            .child(toggle(
                 "auto-update-check-toggle",
-                if ws.settings.auto_update_check_enabled {
-                    i.t("已开启", "Enabled")
-                } else {
-                    i.t("已关闭", "Disabled")
-                },
-                if ws.settings.auto_update_check_enabled {
-                    ButtonVariant::Primary
-                } else {
-                    ButtonVariant::Secondary
-                },
+                ws.settings.auto_update_check_enabled,
                 &t,
                 cx,
                 |ws, _, _, cx| {

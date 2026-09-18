@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, PaintQuad, Pixels,
-    Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, fill,
-    hsla, point, prelude::*, px, relative, rgba, size,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style,
+    TextRun, UTF16Selection, UnderlineStyle, Window, div, fill, hsla, point, prelude::*, px,
+    relative, rgba, size,
 };
 use unicode_segmentation::*;
 
@@ -13,6 +14,7 @@ use unicode_segmentation::*;
 pub enum TextInputEvent {
     Change(String),
     Escape,
+    Enter,
 }
 
 pub struct TextInput {
@@ -25,7 +27,9 @@ pub struct TextInput {
     pub last_layout: Option<ShapedLine>,
     pub last_bounds: Option<Bounds<Pixels>>,
     pub is_secret: bool,
+    pub read_only: bool,
     pub cursor_visible: bool,
+    pub drag_anchor: Option<usize>,
     _blink_task: Option<gpui::Task<()>>,
 }
 
@@ -45,7 +49,9 @@ impl TextInput {
             last_layout: None,
             last_bounds: None,
             is_secret: false,
+            read_only: false,
             cursor_visible: false,
+            drag_anchor: None,
             _blink_task: None,
         }
     }
@@ -60,6 +66,11 @@ impl TextInput {
 
     pub fn set_secret(&mut self, is_secret: bool, cx: &mut Context<Self>) {
         self.is_secret = is_secret;
+        cx.notify();
+    }
+
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        self.read_only = read_only;
         cx.notify();
     }
 
@@ -176,6 +187,71 @@ impl TextInput {
     ) {
         let key = event.keystroke.key.as_str();
 
+        if self.read_only {
+            if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
+                match key {
+                    "a" | "A" => {
+                        self.selected_range = 0..self.content.len();
+                        self.selection_reversed = false;
+                        cx.notify();
+                        return;
+                    }
+                    "c" | "C" => {
+                        if !self.selected_range.is_empty() {
+                            let text = self.content[self.selected_range.clone()].to_string();
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            match key {
+                "left" => {
+                    if event.keystroke.modifiers.shift {
+                        let prev = self.previous_boundary(self.cursor_offset());
+                        self.select_to(prev, cx);
+                    } else if self.selected_range.is_empty() {
+                        let prev = self.previous_boundary(self.cursor_offset());
+                        self.move_to(prev, cx);
+                    } else {
+                        self.move_to(self.selected_range.start, cx);
+                    }
+                }
+                "right" => {
+                    if event.keystroke.modifiers.shift {
+                        let next = self.next_boundary(self.cursor_offset());
+                        self.select_to(next, cx);
+                    } else if self.selected_range.is_empty() {
+                        let next = self.next_boundary(self.cursor_offset());
+                        self.move_to(next, cx);
+                    } else {
+                        self.move_to(self.selected_range.end, cx);
+                    }
+                }
+                "home" => {
+                    if event.keystroke.modifiers.shift {
+                        self.select_to(0, cx);
+                    } else {
+                        self.move_to(0, cx);
+                    }
+                }
+                "end" => {
+                    let len = self.content.len();
+                    if event.keystroke.modifiers.shift {
+                        self.select_to(len, cx);
+                    } else {
+                        self.move_to(len, cx);
+                    }
+                }
+                "escape" => {
+                    cx.emit(TextInputEvent::Escape);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
             match key {
                 "a" | "A" => {
@@ -269,13 +345,68 @@ impl TextInput {
             "escape" => {
                 cx.emit(TextInputEvent::Escape);
             }
+            "enter" => {
+                cx.emit(TextInputEvent::Enter);
+            }
             _ => {}
         }
     }
 
-    pub fn on_mouse_down(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let idx = self.index_for_mouse_position(position);
-        self.move_to(idx, cx);
+    pub fn on_mouse_down(&mut self, position: Point<Pixels>, click_count: usize, cx: &mut Context<Self>) {
+        if self.content.is_empty() {
+            self.selected_range = 0..0;
+            self.selection_reversed = false;
+            self.drag_anchor = Some(0);
+            self.reset_blink(cx);
+            return;
+        }
+
+        let offset = self.index_for_mouse_position(position);
+
+        match click_count {
+            1 => {
+                self.selected_range = offset..offset;
+                self.selection_reversed = false;
+                self.drag_anchor = Some(offset);
+            }
+            2 => {
+                let range = word_bounds_at(&self.content, offset);
+                self.selected_range = range.clone();
+                self.selection_reversed = false;
+                self.drag_anchor = Some(range.start);
+            }
+            _ => {
+                self.selected_range = 0..self.content.len();
+                self.selection_reversed = false;
+                self.drag_anchor = Some(0);
+            }
+        }
+        self.reset_blink(cx);
+    }
+
+    pub fn on_mouse_move(&mut self, position: Point<Pixels>, is_left_down: bool, cx: &mut Context<Self>) {
+        if !is_left_down {
+            self.drag_anchor = None;
+            return;
+        }
+        let Some(anchor) = self.drag_anchor else {
+            return;
+        };
+        let curr = self.index_for_mouse_position(position);
+        if curr >= anchor {
+            self.selected_range = anchor..curr;
+            self.selection_reversed = false;
+        } else {
+            self.selected_range = curr..anchor;
+            self.selection_reversed = true;
+        }
+        self.reset_blink(cx);
+        cx.notify();
+    }
+
+    pub fn on_mouse_up(&mut self, _position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.drag_anchor = None;
+        cx.notify();
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
@@ -297,18 +428,11 @@ impl TextInput {
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .rev()
-            .find_map(|(idx, _)| (idx < offset).then_some(idx))
-            .unwrap_or(0)
+        previous_boundary_of(&self.content, offset)
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
-        self.content
-            .grapheme_indices(true)
-            .find_map(|(idx, _)| (idx > offset).then_some(idx))
-            .unwrap_or(self.content.len())
+        next_boundary_of(&self.content, offset)
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
@@ -344,6 +468,22 @@ impl TextInput {
     fn range_from_utf16(&self, range_utf16: &Range<usize>) -> Range<usize> {
         self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
     }
+}
+
+pub fn word_bounds_at(content: &str, offset: usize) -> Range<usize> {
+    if content.is_empty() {
+        return 0..0;
+    }
+    let o = offset.min(content.len());
+    let mut best_range = 0..content.len();
+    for (idx, word) in content.split_word_bound_indices() {
+        let word_end = idx + word.len();
+        if idx <= o && o <= word_end {
+            best_range = idx..word_end;
+            break;
+        }
+    }
+    best_range
 }
 
 impl Focusable for TextInput {
@@ -398,6 +538,9 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -428,6 +571,9 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -511,9 +657,45 @@ impl EntityInputHandler for TextInput {
 }
 
 impl gpui::Render for TextInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        TextInputElement { input: entity }
+        let is_focused = self.focus_handle.is_focused(window);
+        div()
+            .id(("text_input_field", entity.entity_id()))
+            .key_context("TextInput")
+            .track_focus(&self.focus_handle)
+            .cursor_text()
+            .size_full()
+            .px(px(10.0))
+            .flex()
+            .items_center()
+            .rounded(px(6.0))
+            .when(is_focused, |d| {
+                d.border_1().border_color(rgba(0x3b82f6cc))
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.focus_handle.focus(window, cx);
+                    this.start_blink(cx);
+                    this.on_mouse_down(event.position, event.click_count, cx);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                let is_left = event.pressed_button == Some(MouseButton::Left);
+                this.on_mouse_move(event.position, is_left, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.on_mouse_up(event.position, cx);
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key_down(event, window, cx);
+            }))
+            .child(TextInputElement { input: entity })
     }
 }
 
@@ -657,7 +839,7 @@ impl Element for TextInputElement {
                 )),
                 None,
             )
-        } else if is_focused && cursor_visible {
+        } else if is_focused && cursor_visible && !input.read_only {
             (
                 None,
                 Some(fill(
@@ -742,6 +924,21 @@ pub fn shaped_offset_to_content(content: &str, shaped_offset: usize, is_secret: 
         .map_or(content.len(), |(i, _)| i)
 }
 
+pub fn previous_boundary_of(content: &str, offset: usize) -> usize {
+    content
+        .grapheme_indices(true)
+        .rev()
+        .find_map(|(idx, _)| (idx < offset).then_some(idx))
+        .unwrap_or(0)
+}
+
+pub fn next_boundary_of(content: &str, offset: usize) -> usize {
+    content
+        .grapheme_indices(true)
+        .find_map(|(idx, _)| (idx > offset).then_some(idx))
+        .unwrap_or(content.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,5 +962,23 @@ mod tests {
         assert_eq!(shaped_offset_to_content(content, 9, true), 5);
         assert_eq!(shaped_offset_to_content(content, 12, true), 6);
         assert_eq!(shaped_offset_to_content(content, 15, true), 7);
+    }
+
+    #[test]
+    fn test_boundary_navigation() {
+        let text = "hello 世界 test";
+        // 'hello ' (0..6), '世界 ' (6..13), 'test' (13..17)
+        assert_eq!(previous_boundary_of(text, 6), 5);
+        assert_eq!(next_boundary_of(text, 0), 1);
+        assert_eq!(next_boundary_of(text, 6), 9); // '世' is 3 bytes, starts at 6, next is 9
+        assert_eq!(next_boundary_of(text, 9), 12); // '界' is 3 bytes, starts at 9, next is 12
+    }
+
+    #[test]
+    fn test_word_bounds_selection() {
+        let text = "hello world rust";
+        assert_eq!(word_bounds_at(text, 2), 0..5);
+        assert_eq!(word_bounds_at(text, 7), 6..11);
+        assert_eq!(word_bounds_at(text, 14), 12..16);
     }
 }

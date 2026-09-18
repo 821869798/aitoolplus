@@ -6,6 +6,7 @@ extern crate gpui_kit as gpui;
 
 pub mod components;
 pub mod i18n;
+pub mod icons;
 pub mod layout;
 pub mod pages;
 pub mod text_area;

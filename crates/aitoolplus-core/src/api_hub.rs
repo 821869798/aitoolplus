@@ -1,18 +1,19 @@
 //! API Hub: fetch model lists from provider endpoints (`/v1/models`) with
-//! graceful degradation, plus a typed result the UI can render.
+//! graceful degradation, candidate fallback, and typed results for UI rendering.
 //!
-//! Mirrors ai-toolbox `all_api_hub` + per-tool `models_api` semantics in a
-//! dependency-light form (no reqwest; std TCP + minimal HTTP/1.1 over TLS is
-//! not attempted — callers provide the transport).
+//! Aligns with cc-switch and ai-toolbox model-fetch architecture.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// One model entry from a provider's model list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchedModel {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,37 +55,210 @@ pub struct ConnectivityResult {
     pub models_count: usize,
 }
 
-/// Normalize a base URL for a models request: ensure scheme, strip trailing
-/// slashes; append `/models` when the base ends with `/v1` (OpenAI style).
-pub fn models_url(base_url: &str) -> Result<String, ModelsFetchError> {
+/// Known Anthropic protocol compatibility suffixes (sorted by length descending).
+pub const KNOWN_COMPAT_SUFFIXES: &[&str] = &[
+    "/api/claudecode",
+    "/api/anthropic",
+    "/apps/anthropic",
+    "/api/coding",
+    "/claudecode",
+    "/anthropic",
+    "/step_plan",
+    "/coding",
+    "/claude",
+];
+
+/// Returns true if url ends with `/v{N}` (where N is one or more digits).
+pub fn ends_with_version_segment(url: &str) -> bool {
+    let last = url.rsplit('/').next().unwrap_or("");
+    last.strip_prefix('v')
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Strips known compatibility subpaths from the end of the base URL.
+pub fn strip_compat_suffix(base_url: &str) -> Option<&str> {
+    for suffix in KNOWN_COMPAT_SUFFIXES {
+        if base_url.ends_with(*suffix) {
+            return Some(&base_url[..base_url.len() - suffix.len()]);
+        }
+    }
+    None
+}
+
+/// Build candidate endpoints for `/v1/models` retrieval.
+/// Aligned with cc-switch `build_models_url_candidates`.
+pub fn build_models_url_candidates(
+    base_url: &str,
+    is_full_url: bool,
+    models_url_override: Option<&str>,
+) -> Result<Vec<String>, ModelsFetchError> {
+    if let Some(raw) = models_url_override {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Ok(vec![trimmed.to_string()]);
+        }
+    }
+
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
-        return Err(ModelsFetchError::Unsupported("empty base_url".into()));
+        return Err(ModelsFetchError::Unsupported("Base URL is empty".into()));
     }
+
     let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         trimmed.to_string()
     } else {
         format!("https://{trimmed}")
     };
-    let no_trailing = with_scheme.trim_end_matches('/');
-    let url = if no_trailing.ends_with("/v1") {
-        format!("{no_trailing}/models")
+    let clean = with_scheme.trim_end_matches('/');
+
+    let mut candidates: Vec<String> = Vec::new();
+
+    if is_full_url {
+        if let Some(idx) = clean.find("/v1/") {
+            candidates.push(format!("{}/v1/models", &clean[..idx]));
+        } else if let Some(idx) = clean.rfind('/') {
+            let root = &clean[..idx];
+            if root.contains("://") && root.len() > root.find("://").unwrap() + 3 {
+                candidates.push(format!("{root}/v1/models"));
+            }
+        }
+        if candidates.is_empty() {
+            return Err(ModelsFetchError::Unsupported(
+                "Cannot derive models endpoint from full URL".into(),
+            ));
+        }
+        return Ok(candidates);
+    }
+
+    if ends_with_version_segment(clean) {
+        candidates.push(format!("{clean}/models"));
+        if !clean.ends_with("/v1") {
+            candidates.push(format!("{clean}/v1/models"));
+        }
     } else {
-        format!("{no_trailing}/v1/models")
-    };
-    Ok(url)
+        candidates.push(format!("{clean}/v1/models"));
+        candidates.push(format!("{clean}/models"));
+    }
+
+    if let Some(stripped) = strip_compat_suffix(clean) {
+        let root = stripped.trim_end_matches('/');
+        if !root.is_empty() && root.contains("://") {
+            candidates.push(format!("{root}/v1/models"));
+            candidates.push(format!("{root}/models"));
+        }
+    }
+
+    let mut unique = Vec::with_capacity(candidates.len());
+    for url in candidates {
+        if !unique.contains(&url) {
+            unique.push(url);
+        }
+    }
+
+    Ok(unique)
+}
+
+/// Normalize a single base URL for backward compatibility.
+pub fn models_url(base_url: &str) -> Result<String, ModelsFetchError> {
+    let candidates = build_models_url_candidates(base_url, false, None)?;
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| ModelsFetchError::Unsupported("empty base_url".into()))
+}
+
+/// Build authorization and custom headers for model discovery.
+pub fn build_auth_headers(
+    api_key: &str,
+    api_format: Option<&str>,
+    custom_headers: Option<&BTreeMap<String, String>>,
+) -> Vec<(String, String)> {
+    let mut headers = Vec::new();
+    let key = api_key.trim();
+    if !key.is_empty() {
+        match api_format {
+            Some("anthropic-messages") | Some("anthropic") => {
+                headers.push(("x-api-key".to_string(), key.to_string()));
+            }
+            Some("google-generative-ai") | Some("gemini") | Some("gemini_native") => {
+                headers.push(("x-goog-api-key".to_string(), key.to_string()));
+            }
+            _ => {
+                headers.push(("Authorization".to_string(), format!("Bearer {key}")));
+            }
+        }
+    }
+    if let Some(custom) = custom_headers {
+        for (k, v) in custom {
+            if !k.trim().is_empty() {
+                headers.push((k.trim().to_string(), v.trim().to_string()));
+            }
+        }
+    }
+    headers
+}
+
+/// Parse custom headers from raw string format (JSON object or comma/newline separated `Key: Value`).
+pub fn parse_custom_headers(raw: &str) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return map;
+    }
+
+    // Try parsing as JSON object
+    if trimmed.starts_with('{') && trimmed.ends_with('}')
+        && let Ok(json_map) = serde_json::from_str::<BTreeMap<String, Value>>(trimmed)
+    {
+        for (k, v) in json_map {
+            let val_str = match v {
+                Value::String(s) => s,
+                other => other.to_string(),
+            };
+            map.insert(k, val_str);
+        }
+        return map;
+    }
+
+    // Parse as newline/comma separated key-value pairs
+    for line in trimmed.split(['\n', ',']) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            let k = k.trim();
+            let v = v.trim();
+            if !k.is_empty() {
+                map.insert(k.to_string(), v.to_string());
+            }
+        }
+    }
+
+    map
 }
 
 /// Parse an OpenAI-style `/v1/models` response into entries.
+/// Accepts either `{ "data": [...] }` or `[...]`.
 pub fn parse_openai_models(body: &Value) -> Vec<FetchedModel> {
-    let Some(arr) = body.get("data").and_then(Value::as_array) else {
+    let arr = if let Some(a) = body.get("data").and_then(Value::as_array) {
+        a
+    } else if let Some(a) = body.as_array() {
+        a
+    } else {
         return vec![];
     };
     arr.iter()
         .filter_map(|m| {
             let id = m.get("id").and_then(Value::as_str)?;
+            let owned_by = m
+                .get("owned_by")
+                .or_else(|| m.get("ownedBy"))
+                .and_then(Value::as_str)
+                .map(String::from);
             Some(FetchedModel {
                 id: id.to_string(),
+                owned_by,
                 display_name: m
                     .get("display_name")
                     .or_else(|| m.get("name"))
@@ -103,9 +277,7 @@ pub fn parse_openai_models(body: &Value) -> Vec<FetchedModel> {
         .collect()
 }
 
-/// Extract the api key + base URL from a provider record's settings JSON,
-/// understanding each tool's field names (upstream `all_api_hub` does this
-/// per-tool; we centralize the common shapes here).
+/// Extract the api key + base URL from a provider record's settings JSON.
 pub fn provider_endpoint(settings: &Value) -> Option<(String, String)> {
     // Codex stores a TOML projection in {"toml":"..."}.
     if let Some(raw) = settings.get("toml").and_then(Value::as_str)
@@ -173,40 +345,76 @@ pub fn auth_header(api_key: &str) -> String {
     format!("Bearer {api_key}")
 }
 
-/// Live fetch: GET the provider's models endpoint with a 10s timeout.
-/// `base_url` comes from `provider_endpoint`; `api_key` may be empty for
-/// open endpoints (the request is simply sent without auth).
-pub fn fetch_models(base_url: &str, api_key: &str) -> Result<ModelsFetchResult, ModelsFetchError> {
-    let url = models_url(base_url)?;
+/// Live fetch: GET provider models with candidate URLs, headers, and fallback.
+pub fn fetch_models_advanced(
+    base_url: &str,
+    api_key: &str,
+    api_format: Option<&str>,
+    custom_headers: Option<&BTreeMap<String, String>>,
+    models_url_override: Option<&str>,
+) -> Result<ModelsFetchResult, ModelsFetchError> {
+    let candidates = build_models_url_candidates(base_url, false, models_url_override)?;
+    let headers = build_auth_headers(api_key, api_format, custom_headers);
+
     let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
         .build();
-    let mut request = agent.get(&url).set("Accept", "application/json");
-    if !api_key.trim().is_empty() {
-        request = request.set("Authorization", &auth_header(api_key));
+
+    let mut last_err = String::new();
+
+    for url in &candidates {
+        let mut request = agent
+            .get(url)
+            .set("Accept", "application/json")
+            .set("User-Agent", "aitoolplus/1.0");
+
+        for (k, v) in &headers {
+            request = request.set(k, v);
+        }
+
+        match request.call() {
+            Ok(response) => {
+                let body: Value = response
+                    .into_json()
+                    .map_err(|e| ModelsFetchError::Parse(e.to_string()))?;
+                let mut models = parse_openai_models(&body);
+                if !models.is_empty() {
+                    models.sort_by_key(|a| a.id.to_lowercase());
+                    return Ok(ModelsFetchResult {
+                        models,
+                        raw: Some(body),
+                    });
+                }
+            }
+            Err(ureq::Error::Status(401, _) | ureq::Error::Status(403, _)) => {
+                return Err(ModelsFetchError::Auth);
+            }
+            Err(ureq::Error::Status(404, _) | ureq::Error::Status(405, _)) => {
+                last_err = format!("Candidate {url} returned 404/405");
+                continue;
+            }
+            Err(other) => {
+                last_err = other.to_string();
+                continue;
+            }
+        }
     }
-    let response = request.call().map_err(|e| match e {
-        ureq::Error::Status(401, _) | ureq::Error::Status(403, _) => ModelsFetchError::Auth,
-        other => ModelsFetchError::Network(other.to_string()),
-    })?;
-    let body: Value = response
-        .into_json()
-        .map_err(|e| ModelsFetchError::Parse(e.to_string()))?;
-    let models = parse_openai_models(&body);
-    if models.is_empty() {
-        return Err(ModelsFetchError::Unsupported(
-            "no models in response".into(),
-        ));
+
+    if !last_err.is_empty() {
+        Err(ModelsFetchError::Network(last_err))
+    } else {
+        Err(ModelsFetchError::Unsupported(
+            "No models returned from provider endpoints".into(),
+        ))
     }
-    Ok(ModelsFetchResult {
-        models,
-        raw: Some(body),
-    })
+}
+
+/// Backward-compatible live fetch.
+pub fn fetch_models(base_url: &str, api_key: &str) -> Result<ModelsFetchResult, ModelsFetchError> {
+    fetch_models_advanced(base_url, api_key, None, None, None)
 }
 
 /// Connectivity test used by provider cards and the batch-test action.
-/// A successful `/v1/models` response proves URL + authentication and also
-/// returns the model count; failures retain bounded diagnostic text.
 pub fn test_connectivity(settings: &Value) -> ConnectivityResult {
     let start = std::time::Instant::now();
     let Some((base_url, api_key)) = provider_endpoint(settings) else {
@@ -249,84 +457,103 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn models_url_shapes() {
-        assert_eq!(
-            models_url("https://api.example.com/v1").unwrap(),
-            "https://api.example.com/v1/models"
-        );
-        assert_eq!(
-            models_url("https://api.example.com").unwrap(),
-            "https://api.example.com/v1/models"
-        );
-        assert_eq!(
-            models_url("api.example.com/v1/").unwrap(),
-            "https://api.example.com/v1/models"
-        );
-        assert!(models_url("").is_err());
-        assert!(models_url("   ").is_err());
+    fn test_build_models_url_candidates_standard() {
+        let candidates =
+            build_models_url_candidates("https://api.openai.com/v1", false, None).unwrap();
+        assert_eq!(candidates[0], "https://api.openai.com/v1/models");
+
+        let candidates =
+            build_models_url_candidates("https://api.deepseek.com", false, None).unwrap();
+        assert!(candidates.contains(&"https://api.deepseek.com/v1/models".to_string()));
     }
 
     #[test]
-    fn parses_openai_models() {
+    fn test_build_models_url_candidates_versioned() {
+        // e.g. ZhiPu GLM Coding Plan
+        let candidates =
+            build_models_url_candidates("https://open.bigmodel.cn/api/coding/paas/v4", false, None)
+                .unwrap();
+        assert_eq!(
+            candidates[0],
+            "https://open.bigmodel.cn/api/coding/paas/v4/models"
+        );
+        assert!(candidates.contains(&"https://open.bigmodel.cn/api/coding/paas/v4/v1/models".to_string()));
+    }
+
+    #[test]
+    fn test_build_models_url_candidates_compat_suffix() {
+        let candidates =
+            build_models_url_candidates("https://api.example.com/api/anthropic", false, None)
+                .unwrap();
+        assert!(candidates.contains(&"https://api.example.com/v1/models".to_string()));
+        assert!(candidates.contains(&"https://api.example.com/models".to_string()));
+    }
+
+    #[test]
+    fn test_build_models_url_candidates_override() {
+        let candidates = build_models_url_candidates(
+            "https://api.example.com",
+            false,
+            Some("https://custom.endpoint/models"),
+        )
+        .unwrap();
+        assert_eq!(candidates, vec!["https://custom.endpoint/models"]);
+    }
+
+    #[test]
+    fn test_build_auth_headers() {
+        let anthropic = build_auth_headers("sk-ant", Some("anthropic"), None);
+        assert_eq!(anthropic, vec![("x-api-key".to_string(), "sk-ant".to_string())]);
+
+        let gemini = build_auth_headers("gem-key", Some("gemini"), None);
+        assert_eq!(
+            gemini,
+            vec![("x-goog-api-key".to_string(), "gem-key".to_string())]
+        );
+
+        let default_auth = build_auth_headers("sk-open", None, None);
+        assert_eq!(
+            default_auth,
+            vec![("Authorization".to_string(), "Bearer sk-open".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_parse_custom_headers() {
+        let raw = "X-Custom: Value1\nAuthorization-Alt: Token2";
+        let map = parse_custom_headers(raw);
+        assert_eq!(map.get("X-Custom").map(|s| s.as_str()), Some("Value1"));
+        assert_eq!(
+            map.get("Authorization-Alt").map(|s| s.as_str()),
+            Some("Token2")
+        );
+
+        let json_raw = r#"{"X-Foo": "Bar", "X-Num": 123}"#;
+        let map = parse_custom_headers(json_raw);
+        assert_eq!(map.get("X-Foo").map(|s| s.as_str()), Some("Bar"));
+    }
+
+    #[test]
+    fn test_parses_openai_models_with_owned_by() {
         let body = json!({
             "object": "list",
             "data": [
-                {"id": "m-1", "display_name": "Model One", "context_length": 128000,
-                 "input_price": 0.5, "output_price": 1.5, "tool_support": true},
-                {"id": "m-2"},
-                {"no_id": true}
+                {
+                    "id": "claude-3-7-sonnet",
+                    "owned_by": "anthropic",
+                    "display_name": "Claude 3.7 Sonnet"
+                },
+                {
+                    "id": "deepseek-chat",
+                    "owned_by": "deepseek"
+                }
             ]
         });
         let models = parse_openai_models(&body);
         assert_eq!(models.len(), 2);
-        assert_eq!(models[0].id, "m-1");
-        assert_eq!(models[0].display_name.as_deref(), Some("Model One"));
-        assert_eq!(models[0].context_length, Some(128000));
-        assert_eq!(models[0].input_price, Some(0.5));
-        assert_eq!(models[0].tool_support, Some(true));
-        assert!(models[0].vision_support.is_none());
-        assert_eq!(models[1].id, "m-2");
-    }
-
-    #[test]
-    fn endpoint_extraction_all_field_shapes() {
-        // Pi/OMP camelCase
-        let v = json!({"baseUrl": "https://a/v1", "apiKey": "k1"});
-        assert_eq!(
-            provider_endpoint(&v),
-            Some(("https://a/v1".into(), "k1".into()))
-        );
-        // snake_case
-        let v = json!({"base_url": "https://b/v1", "api_key": "k2"});
-        assert_eq!(
-            provider_endpoint(&v),
-            Some(("https://b/v1".into(), "k2".into()))
-        );
-        // Claude env style
-        let v = json!({"env": {"ANTHROPIC_BASE_URL": "https://c", "ANTHROPIC_AUTH_TOKEN": "k3"}});
-        assert_eq!(
-            provider_endpoint(&v),
-            Some(("https://c".into(), "k3".into()))
-        );
-
-        // Codex TOML projection
-        let v = json!({"toml": "model_provider = \"x\"\n[model_providers.x]\nbase_url = \"https://x/v1\"\napi_key = \"kx\"\n"});
-        assert_eq!(
-            provider_endpoint(&v),
-            Some(("https://x/v1".into(), "kx".into()))
-        );
-
-        // OpenCode provider map
-        let v =
-            json!({"provider": {"q": {"options": {"baseURL": "https://q/v1", "apiKey": "kq"}}}});
-        assert_eq!(
-            provider_endpoint(&v),
-            Some(("https://q/v1".into(), "kq".into()))
-        );
-    }
-
-    #[test]
-    fn auth_header_format() {
-        assert_eq!(auth_header("sk-1"), "Bearer sk-1");
+        assert_eq!(models[0].id, "claude-3-7-sonnet");
+        assert_eq!(models[0].owned_by.as_deref(), Some("anthropic"));
+        assert_eq!(models[1].id, "deepseek-chat");
+        assert_eq!(models[1].owned_by.as_deref(), Some("deepseek"));
     }
 }

@@ -496,6 +496,63 @@ pub fn export_session(paths: &Paths, meta: &SessionMeta) -> Result<String, Strin
     serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())
 }
 
+/// Export one session as clean formatted Markdown.
+pub fn export_session_markdown(paths: &Paths, meta: &SessionMeta) -> Result<String, String> {
+    let messages = load_messages(paths, meta)?;
+    let mut md = String::new();
+    let title = meta.title.as_deref().unwrap_or(&meta.session_id);
+    md.push_str(&format!("# 会话记录: {title}\n\n"));
+    md.push_str(&format!("- **工具**: {}\n", meta.provider_id));
+    md.push_str(&format!("- **会话 ID**: `{}`\n", meta.session_id));
+    if let Some(dir) = &meta.project_dir {
+        md.push_str(&format!("- **项目路径**: `{dir}`\n"));
+    }
+    if let Some(summary) = &meta.summary {
+        md.push_str(&format!("- **摘要**: {summary}\n"));
+    }
+    md.push_str("\n---\n\n");
+
+    for m in messages {
+        let role_title = match m.role.as_str() {
+            "user" => "👤 用户 (User)",
+            "assistant" => "🤖 助手 (Assistant)",
+            "system" => "⚙️ 系统 (System)",
+            _ => "💬 消息 (Message)",
+        };
+        md.push_str(&format!("### {role_title}\n\n"));
+        if !m.content.trim().is_empty() {
+            md.push_str(m.content.trim());
+            md.push_str("\n\n");
+        }
+        for b in &m.blocks {
+            if b.kind == "thinking" {
+                if let Some(txt) = &b.text {
+                    let trimmed = txt.trim();
+                    if !trimmed.is_empty() {
+                        md.push_str("> 🧠 **思考过程**:\n");
+                        for line in trimmed.lines() {
+                            md.push_str(&format!("> {line}\n"));
+                        }
+                        md.push('\n');
+                    }
+                }
+            } else if b.kind == "tool_call" {
+                let name = b.tool_name.as_deref().or(b.title.as_deref()).unwrap_or("tool");
+                md.push_str(&format!("🔧 **工具调用**: `{name}`\n\n"));
+                if let Some(txt) = &b.text {
+                    md.push_str("```json\n");
+                    md.push_str(txt);
+                    md.push_str("\n```\n\n");
+                }
+            }
+        }
+        md.push_str("---\n\n");
+    }
+
+    Ok(md)
+}
+
+
 /// Import an exported v2 session back into a tool's session directory as a
 /// plain JSONL file (best effort; runtimes own their real resume state).
 pub fn import_session(paths: &Paths, tool: ToolId, doc: &str) -> Result<String, String> {

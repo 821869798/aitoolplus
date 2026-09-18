@@ -8,9 +8,9 @@ pub mod skills_page;
 pub mod tool_page;
 
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, MouseButton, Window, div, prelude::*, px};
+use gpui::{ClickEvent, Context, IntoElement, MouseButton, Window, div, prelude::*, px};
 
-use crate::components::{ButtonVariant, button_l, icon_button_l};
+use crate::components::{ButtonVariant, button_l};
 use crate::text_area::TextArea;
 use crate::text_input::TextInput;
 use crate::theme::Theme;
@@ -125,6 +125,11 @@ pub struct WorkspaceState {
     pub claude_marketplaces_input: gpui::Entity<TextInput>,
     pub pi_other_editor: Option<gpui::Entity<TextArea>>,
     pub runtime_files_cache: Option<(ToolId, Vec<(String, std::path::PathBuf, bool, String)>)>,
+    pub runtime_edit_dialog: Option<(std::path::PathBuf, gpui::Entity<TextArea>)>,
+    pub prompt_search: gpui::Entity<TextInput>,
+    pub mcp_search: gpui::Entity<TextInput>,
+    pub skill_search: gpui::Entity<TextInput>,
+    pub skill_detail_dialog: Option<SkillDetailState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,21 +165,102 @@ pub struct S3Inputs {
     pub prefix: gpui::Entity<TextInput>,
 }
 
+#[derive(Clone)]
+pub struct PiModelDraft {
+    pub key: String,
+    pub id: gpui::Entity<TextInput>,
+    pub name: gpui::Entity<TextInput>,
+    pub reasoning: bool,
+    pub image_input: bool,
+    pub context_window: gpui::Entity<TextInput>,
+    pub max_tokens: gpui::Entity<TextInput>,
+    pub is_expanded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProviderDialogTab {
+    #[default]
+    Connection,
+    Advanced,
+}
+
+#[derive(Clone)]
+pub struct CustomHeaderDraft {
+    pub key: gpui::Entity<TextInput>,
+    pub value: gpui::Entity<TextInput>,
+}
+
+#[derive(Clone)]
+pub struct ModelRewriteDraft {
+    pub from: gpui::Entity<TextInput>,
+    pub to: gpui::Entity<TextInput>,
+}
+
+#[derive(Clone)]
 pub struct ProviderDialogState {
     /// None = create mode.
     pub editing_id: Option<String>,
     pub tool: ToolId,
+    pub active_tab: ProviderDialogTab,
     pub name: gpui::Entity<TextInput>,
     pub category: String,
-    pub settings: gpui::Entity<TextArea>,
+
+    // Core Connection
+    pub base_url: gpui::Entity<TextInput>,
+    pub api_key: gpui::Entity<TextInput>,
+    pub show_api_key: bool,
+    pub api_format: String,
+
+    // Model configuration
+    pub model: gpui::Entity<TextInput>,
+    pub sonnet_model: gpui::Entity<TextInput>,
+    pub sonnet_name: gpui::Entity<TextInput>,
+    pub opus_model: gpui::Entity<TextInput>,
+    pub opus_name: gpui::Entity<TextInput>,
+    pub haiku_model: gpui::Entity<TextInput>,
+    pub haiku_name: gpui::Entity<TextInput>,
+    pub fable_model: gpui::Entity<TextInput>,
+    pub fable_name: gpui::Entity<TextInput>,
+    pub subagent_model: gpui::Entity<TextInput>,
+    pub sonnet_1m: bool,
+    pub opus_1m: bool,
+    pub haiku_1m: bool,
+    pub fable_1m: bool,
+    pub subagent_1m: bool,
+
+    // Pi specific
+    pub pi_provider_key: gpui::Entity<TextInput>,
+    pub pi_api_format: String,
+    pub pi_models: Vec<PiModelDraft>,
+
+    // Codex specific
+    pub codex_wire_api: String,
+    pub codex_reasoning_effort: String,
+
+    // Meta & Advanced
     pub notes: gpui::Entity<TextInput>,
     pub website: gpui::Entity<TextInput>,
-    /// Selected preset index (None = blank/custom).
     pub preset_index: Option<usize>,
-    /// API key input shown when a preset is selected.
-    pub api_key: gpui::Entity<TextInput>,
+    pub advanced_expanded: bool,
+    pub custom_user_agent: gpui::Entity<TextInput>,
+    pub custom_headers_list: Vec<CustomHeaderDraft>,
+    pub billing_enabled: bool,
+    pub cost_multiplier: gpui::Entity<TextInput>,
+    pub pricing_model_source: String,
+    pub model_rewrites: Vec<ModelRewriteDraft>,
+    pub custom_headers: gpui::Entity<TextInput>,
+    pub settings: gpui::Entity<TextArea>,
+
+    // Upstream Model Discovery
+    pub fetched_models: Vec<aitoolplus_core::api_hub::FetchedModel>,
+    pub is_fetching_models: bool,
+    pub fetch_error: Option<String>,
+    pub active_model_dropdown: Option<String>,
+    pub model_search: gpui::Entity<TextInput>,
+    pub model_bounds: std::collections::BTreeMap<String, gpui::Bounds<gpui::Pixels>>,
 }
 
+#[derive(Clone)]
 pub struct PromptDialogState {
     pub editing_id: Option<String>,
     pub tool: ToolId,
@@ -182,6 +268,7 @@ pub struct PromptDialogState {
     pub content: gpui::Entity<TextArea>,
 }
 
+#[derive(Clone)]
 pub struct McpDialogState {
     pub editing_id: Option<String>,
     pub name: gpui::Entity<TextInput>,
@@ -193,12 +280,23 @@ pub struct McpDialogState {
     pub headers: gpui::Entity<TextInput>,
     pub timeout_seconds: gpui::Entity<TextInput>,
     pub group: gpui::Entity<TextInput>,
+    pub enabled_tools: Vec<ToolId>,
 }
 
+#[derive(Clone)]
 pub struct ConfirmState {
     pub title: String,
     pub message: String,
     pub action: ConfirmAction,
+}
+
+#[derive(Clone)]
+pub struct SkillDetailState {
+    pub skill_id: String,
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub skill_md: String,
+    pub tools: Vec<ToolId>,
 }
 
 #[derive(Clone)]
@@ -207,6 +305,7 @@ pub enum ConfirmAction {
     DeletePrompt { tool: ToolId, id: String },
     DeleteSession { tool: ToolId, id: String },
     DeleteMcp { id: String },
+    DeleteSkill { id: String },
 }
 
 impl WorkspaceState {
@@ -221,6 +320,9 @@ impl WorkspaceState {
             cx.new(|cx| TextInput::new("来源，如 npm:context-mode", cx));
         let claude_marketplaces_input =
             cx.new(|cx| TextInput::new("来源，如 anthropics/claude-code", cx));
+        let prompt_search = cx.new(|cx| TextInput::new("搜索 Prompt…", cx));
+        let mcp_search = cx.new(|cx| TextInput::new("搜索 MCP 服务器…", cx));
+        let skill_search = cx.new(|cx| TextInput::new("搜索 Skill 技能…", cx));
         Self {
             tool_tab: ToolTab::Providers,
             common_editors: Default::default(),
@@ -266,6 +368,11 @@ impl WorkspaceState {
             claude_marketplaces_input,
             pi_other_editor: None,
             runtime_files_cache: None,
+            runtime_edit_dialog: None,
+            prompt_search,
+            mcp_search,
+            skill_search,
+            skill_detail_dialog: None,
         }
     }
 
@@ -462,6 +569,8 @@ impl WorkspaceState {
             || self.mcp_dialog.is_some()
             || self.confirm.is_some()
             || self.rename_dialog.is_some()
+            || self.runtime_edit_dialog.is_some()
+            || self.skill_detail_dialog.is_some()
     }
 
     /// Resolve or lazily create the common-config editor for a tool.
@@ -500,8 +609,31 @@ pub fn modal_scaffold(
     title: &str,
     body: gpui::AnyElement,
     cx: &mut Context<Workspace>,
-    on_close: impl Fn(&mut Workspace, &gpui::MouseDownEvent, &mut Window, &mut Context<Workspace>)
-    + 'static,
+    on_close: impl Fn(&mut Workspace, &ClickEvent, &mut Window, &mut Context<Workspace>) + 'static,
+) -> gpui::AnyElement {
+    modal_scaffold_sized(theme, title, px(560.0), None, body, cx, on_close)
+}
+
+/// Shared modal scaffold with configurable card width.
+pub fn modal_scaffold_custom(
+    theme: &Theme,
+    title: &str,
+    width: gpui::Pixels,
+    body: gpui::AnyElement,
+    cx: &mut Context<Workspace>,
+    on_close: impl Fn(&mut Workspace, &ClickEvent, &mut Window, &mut Context<Workspace>) + 'static,
+) -> gpui::AnyElement {
+    modal_scaffold_sized(theme, title, width, Some(px(720.0)), body, cx, on_close)
+}
+
+pub fn modal_scaffold_sized(
+    theme: &Theme,
+    title: &str,
+    width: gpui::Pixels,
+    height: Option<gpui::Pixels>,
+    body: gpui::AnyElement,
+    cx: &mut Context<Workspace>,
+    on_close: impl Fn(&mut Workspace, &ClickEvent, &mut Window, &mut Context<Workspace>) + 'static,
 ) -> gpui::AnyElement {
     let t = theme.clone();
     let backdrop = div()
@@ -514,39 +646,53 @@ pub fn modal_scaffold(
         .flex()
         .items_center()
         .justify_center()
-        .on_mouse_down(MouseButton::Left, cx.listener(on_close));
+        .on_click(cx.listener(on_close));
 
-    let dialog = div()
+    let mut dialog = div()
         .id("modal-card")
-        .w(px(620.0))
-        .max_w(gpui::relative(0.9))
-        .max_h(gpui::relative(0.85))
+        .w(width)
+        .max_w(gpui::relative(0.92))
+        .max_h(gpui::relative(0.90))
         .p(px(20.0))
         .rounded(px(12.0))
         .bg(t.card_bg)
         .border_1()
         .border_color(t.card_border)
         .shadow_lg()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            // stop clicks inside the dialog from closing it
+            // stop mouse down inside the dialog from bubbling
             cx.stop_propagation();
         })
+        .on_click(|_, _, cx| {
+            // stop clicks inside the dialog from closing it
+            cx.stop_propagation();
+        });
+
+    if let Some(h) = height {
+        dialog = dialog.h(h);
+    }
+
+    let dialog = dialog
         .child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
                 .mb(px(12.0))
+                .flex_shrink_0()
                 .child(
                     div()
-                        .text_size(px(15.0))
+                        .text_size(px(16.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.text_primary)
                         .child(title.to_string()),
                 )
-                .child(icon_button_l(
+                .child(crate::components::icon_button_svg(
                     "modal-close",
-                    "✕",
+                    crate::icons::X_SVG,
                     "Close",
                     true,
                     theme,
@@ -556,11 +702,19 @@ pub fn modal_scaffold(
                         ws.ui.prompt_dialog = None;
                         ws.ui.mcp_dialog = None;
                         ws.ui.confirm = None;
+                        ws.ui.rename_dialog = None;
                         cx.notify();
                     },
                 )),
         )
-        .child(body);
+        .child(
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex()
+                .flex_col()
+                .child(body),
+        );
 
     backdrop.child(dialog).into_any_element()
 }
@@ -619,7 +773,7 @@ pub fn render_confirm_dialog(
                 )),
         );
 
-    modal_scaffold(&t, &title, body.into_any_element(), cx, |ws, _, _, cx| {
+    modal_scaffold_sized(&t, &title, px(420.0), None, body.into_any_element(), cx, |ws, _, _, cx| {
         ws.ui.confirm = None;
         cx.notify();
     })
@@ -662,6 +816,26 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
             ws.persist_store();
             let msg = i.t("MCP 服务器已删除", "MCP server deleted").to_string();
             ws.ui.toast(msg, false);
+        }
+        ConfirmAction::DeleteSkill { id } => {
+            let mut store = ws.store.store().skills.clone();
+            let settings = store.settings.clone();
+            if let Some(pos) = store.skills.iter().position(|s| s.id == id) {
+                let mut skill = store.skills[pos].clone();
+                for tool in aitoolplus_core::skills::skills_tools().iter().copied() {
+                    let _ = aitoolplus_core::skills::remove_skill_from_tool(&settings, &ws.paths, &mut skill, tool);
+                }
+                let repo = aitoolplus_core::skills::central_repo_path(&settings, &ws.paths);
+                let skill_dir = repo.join(&skill.central_path);
+                if skill_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&skill_dir);
+                }
+                store.skills.remove(pos);
+                let _ = ws.store.update(|db| db.skills = store);
+                ws.persist_store();
+                let msg = i.t("Skill 已卸载删除", "skill deleted").to_string();
+                ws.ui.toast(msg, false);
+            }
         }
     }
     cx.notify();
@@ -707,5 +881,34 @@ pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
         Page::Skills => skills_page::render_skills_page(ws, cx),
         Page::Sessions => sessions_page::render_sessions_page(ws, cx),
         Page::Settings => settings_page::render_settings_page(ws, cx),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_confirm_state_clone() {
+        let confirm = ConfirmState {
+            title: "Delete Provider".into(),
+            message: "Are you sure?".into(),
+            action: ConfirmAction::DeleteProvider {
+                tool: ToolId::ClaudeCode,
+                id: "prov-1".into(),
+            },
+        };
+
+        // Ensure ConfirmState derives Clone properly
+        let cloned = confirm.clone();
+        assert_eq!(cloned.title, confirm.title);
+        assert_eq!(cloned.message, confirm.message);
+        match cloned.action {
+            ConfirmAction::DeleteProvider { tool, id } => {
+                assert_eq!(tool, ToolId::ClaudeCode);
+                assert_eq!(id, "prov-1");
+            }
+            _ => panic!("unexpected action"),
+        }
     }
 }

@@ -13,6 +13,7 @@ use gpui::{Context, Render, Window, div, prelude::*, px};
 
 use crate::i18n::I18n;
 use crate::pages::{self, Page, WorkspaceState};
+use crate::text_input::TextInput;
 use crate::theme::Theme;
 
 /// Callbacks the host binary provides to persist state.
@@ -174,7 +175,7 @@ impl Workspace {
         }
 
         let root_focus = cx.focus_handle();
-        Self {
+        let mut ws = Self {
             paths,
             store,
             settings,
@@ -184,7 +185,138 @@ impl Workspace {
             ui,
             callbacks,
             root_focus,
+        };
+
+        if let Ok(target_tool) = std::env::var("AITOOLPLUS_OPEN_PROVIDER") {
+            tracing::info!(open_provider = %target_tool, "open provider requested");
+            if let Some(tool) = ToolId::from_key(&target_tool) {
+                let existing_id = std::env::var("AITOOLPLUS_PROVIDER_ID")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty());
+                tracing::info!(?tool, ?existing_id, "calling open_provider_dialog");
+                pages::tool_page::open_provider_dialog(existing_id, tool, &mut ws, cx);
+                tracing::info!(has_dialog = ws.ui.provider_dialog.is_some(), "dialog state after open");
+                if std::env::var("AITOOLPLUS_FETCH_MODELS").ok().as_deref() == Some("1") {
+                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                        d.fetched_models = vec![
+                            aitoolplus_core::api_hub::FetchedModel {
+                                id: "claude-3-7-sonnet-20250219".to_string(),
+                                display_name: Some("Claude 3.7 Sonnet".to_string()),
+                                owned_by: Some("Anthropic".to_string()),
+                                context_length: Some(200000),
+                                ..Default::default()
+                            },
+                            aitoolplus_core::api_hub::FetchedModel {
+                                id: "claude-3-5-sonnet-20241022".to_string(),
+                                display_name: Some("Claude 3.5 Sonnet".to_string()),
+                                owned_by: Some("Anthropic".to_string()),
+                                context_length: Some(200000),
+                                ..Default::default()
+                            },
+                            aitoolplus_core::api_hub::FetchedModel {
+                                id: "claude-3-opus-20240229".to_string(),
+                                display_name: Some("Claude 3 Opus".to_string()),
+                                owned_by: Some("Anthropic".to_string()),
+                                context_length: Some(200000),
+                                ..Default::default()
+                            },
+                            aitoolplus_core::api_hub::FetchedModel {
+                                id: "claude-3-5-haiku-20241022".to_string(),
+                                display_name: Some("Claude 3.5 Haiku".to_string()),
+                                owned_by: Some("Anthropic".to_string()),
+                                context_length: Some(200000),
+                                ..Default::default()
+                            },
+                            aitoolplus_core::api_hub::FetchedModel {
+                                id: "deepseek-ai/DeepSeek-V3".to_string(),
+                                display_name: Some("DeepSeek V3".to_string()),
+                                owned_by: Some("DeepSeek".to_string()),
+                                context_length: Some(64000),
+                                ..Default::default()
+                            },
+                            aitoolplus_core::api_hub::FetchedModel {
+                                id: "deepseek-ai/DeepSeek-R1".to_string(),
+                                display_name: Some("DeepSeek R1".to_string()),
+                                owned_by: Some("DeepSeek".to_string()),
+                                context_length: Some(64000),
+                                ..Default::default()
+                            },
+                        ];
+                        if let Some(active_dd) = std::env::var("AITOOLPLUS_ACTIVE_DROPDOWN")
+                            .ok()
+                            .filter(|s| !s.trim().is_empty())
+                        {
+                            d.active_model_dropdown = Some(active_dd);
+                        }
+                    }
+                }
+                if std::env::var("AITOOLPLUS_EXPAND_PI").ok().as_deref() == Some("1") {
+                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                        for m in &mut d.pi_models {
+                            m.is_expanded = true;
+                        }
+                    }
+                }
+                if let Ok(dialog_tab) = std::env::var("AITOOLPLUS_DIALOG_TAB") {
+                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                        if dialog_tab == "advanced" {
+                            d.active_tab = pages::ProviderDialogTab::Advanced;
+                        }
+                    }
+                }
+                if std::env::var("AITOOLPLUS_SEED_ADVANCED").ok().as_deref() == Some("1") {
+                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                        d.custom_user_agent.update(cx, |inp, cx| {
+                            inp.set_text_silent("claude-cli/2.1.237 (external, cli)", cx);
+                        });
+                        let k1 = cx.new(|cx| {
+                            let mut inp = TextInput::new("Header 名称", cx);
+                            inp.set_text_silent("HTTP-Referer", cx);
+                            inp
+                        });
+                        let v1 = cx.new(|cx| {
+                            let mut inp = TextInput::new("Header 对应值", cx);
+                            inp.set_text_silent("https://github.com/aitoolplus", cx);
+                            inp
+                        });
+                        let k2 = cx.new(|cx| {
+                            let mut inp = TextInput::new("Header 名称", cx);
+                            inp.set_text_silent("X-Title", cx);
+                            inp
+                        });
+                        let v2 = cx.new(|cx| {
+                            let mut inp = TextInput::new("Header 对应值", cx);
+                            inp.set_text_silent("MyProject", cx);
+                            inp
+                        });
+                        d.custom_headers_list = vec![
+                            crate::pages::CustomHeaderDraft { key: k1, value: v1 },
+                            crate::pages::CustomHeaderDraft { key: k2, value: v2 },
+                        ];
+                        d.billing_enabled = true;
+                        d.cost_multiplier.update(cx, |inp, cx| {
+                            inp.set_text_silent("1.5", cx);
+                        });
+                        d.pricing_model_source = "request".to_string();
+                        let f1 = cx.new(|cx| {
+                            let mut inp = TextInput::new("From", cx);
+                            inp.set_text_silent("claude-3-5-haiku-20241022", cx);
+                            inp
+                        });
+                        let t1 = cx.new(|cx| {
+                            let mut inp = TextInput::new("To", cx);
+                            inp.set_text_silent("deepseek-chat", cx);
+                            inp
+                        });
+                        d.model_rewrites = vec![
+                            crate::pages::ModelRewriteDraft { from: f1, to: t1 },
+                        ];
+                    }
+                }
+            }
         }
+
+        ws
     }
 
     // -- navigation ---------------------------------------------------------
@@ -262,8 +394,16 @@ impl Workspace {
             .min_w(px(0.0))
             .overflow_x_hidden()
             .overflow_y_scroll()
-            .p(px(24.0))
-            .child(pages::render_page(self, cx));
+            .px(px(24.0))
+            .py(px(20.0))
+            .items_center()
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(1120.0))
+                    .min_w(px(0.0))
+                    .child(pages::render_page(self, cx)),
+            );
 
         if let Some(toast) = pages::render_toast(self, cx) {
             pane = pane.child(toast);
@@ -380,20 +520,25 @@ impl gpui::Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let sidebar = self.sidebar(cx);
+        let topbar = self.topbar(cx);
+        let content = self.page_content(cx);
+
         let base = div()
             .size_full()
             .flex()
-            .flex_col()
             .bg(self.theme.bg)
             .text_color(self.theme.text_primary)
-            .child(self.topbar(cx))
+            .child(sidebar)
             .child(
                 div()
-                    .flex()
                     .flex_1()
-                    .min_h(px(0.0))
-                    .child(self.sidebar(cx))
-                    .child(self.page_content(cx)),
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(topbar)
+                    .child(content),
             );
 
         // Standard gpui-kit Root overlay layers: dialogs, sheets, notifications
@@ -405,12 +550,14 @@ impl Render for Workspace {
         // Modals render at the root as overlays (flyclip GPUI guideline #3).
         let modal_open = self.ui.modal_active();
         let modals = if modal_open {
-            // take the dialog states out to avoid double borrows
-            let dialogs = std::mem::take(&mut self.ui.provider_dialog);
-            let prompts = std::mem::take(&mut self.ui.prompt_dialog);
-            let mcps = std::mem::take(&mut self.ui.mcp_dialog);
-            let confirms = std::mem::take(&mut self.ui.confirm);
-            let renames = std::mem::take(&mut self.ui.rename_dialog);
+            // clone dialog states so they persist across frames until explicitly closed
+            let dialogs = self.ui.provider_dialog.clone();
+            let prompts = self.ui.prompt_dialog.clone();
+            let mcps = self.ui.mcp_dialog.clone();
+            let confirms = self.ui.confirm.clone();
+            let renames = self.ui.rename_dialog.clone();
+            let runtime_edits = self.ui.runtime_edit_dialog.clone();
+            let skill_details = self.ui.skill_detail_dialog.clone();
             let mut out = vec![];
             if let Some(d) = dialogs {
                 out.push(pages::tool_page::render_provider_dialog(d, self, cx));
@@ -427,6 +574,16 @@ impl Render for Workspace {
             if let Some((meta, input)) = renames {
                 out.push(pages::sessions_page::render_rename_dialog(
                     meta, input, self, cx,
+                ));
+            }
+            if let Some((path, editor)) = runtime_edits {
+                out.push(pages::tool_page::render_runtime_edit_dialog(
+                    path, editor, self, cx,
+                ));
+            }
+            if let Some(detail) = skill_details {
+                out.push(pages::skills_page::render_skill_detail_dialog(
+                    detail, self, cx,
                 ));
             }
             out

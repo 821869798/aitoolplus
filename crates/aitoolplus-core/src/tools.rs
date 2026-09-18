@@ -93,10 +93,9 @@ impl ToolId {
         })
     }
 
-    pub const ALL: [ToolId; 12] = [
+    pub const ALL: [ToolId; 11] = [
         ToolId::ClaudeCode,
         ToolId::Codex,
-        ToolId::GeminiCli,
         ToolId::Grok,
         ToolId::Kimi,
         ToolId::OpenCode,
