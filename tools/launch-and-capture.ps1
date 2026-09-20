@@ -13,7 +13,8 @@ param(
   [string]$SeedAdvanced = "",
   [int]$ScrollDelta = 0,
   [Nullable[int]]$ScrollX = $null,
-  [Nullable[int]]$ScrollY = $null
+  [Nullable[int]]$ScrollY = $null,
+  [string]$Session = ""
 )
 Get-Process aitoolplus -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
@@ -24,6 +25,7 @@ $psi.EnvironmentVariables['AITOOLPLUS_HOME'] = 'C:\Users\zhuzi'
 $psi.EnvironmentVariables['AITOOLPLUS_APPDATA'] = 'C:\temp\aitoolplus-visual\appdata'
 $psi.EnvironmentVariables['AITOOLPLUS_START_PAGE'] = $Page
 $psi.EnvironmentVariables['AITOOLPLUS_START_TAB'] = $Tab
+if ($Session -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_START_SESSION'] = $Session }
 if ($OpenProvider -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_PROVIDER'] = $OpenProvider }
 if ($ProviderId -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_PROVIDER_ID'] = $ProviderId }
 if ($FetchModels -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_FETCH_MODELS'] = $FetchModels }

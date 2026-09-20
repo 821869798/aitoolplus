@@ -270,6 +270,14 @@ pub fn list_marketplaces(paths: &Paths) -> Result<Vec<KnownMarketplace>, String>
     Ok(out)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudePluginsData {
+    pub marketplaces: Vec<KnownMarketplace>,
+    pub marketplace_plugins: Vec<MarketplacePlugin>,
+    pub installed_plugins: Vec<InstalledPlugin>,
+}
+
 /// Enumerate every plugin offered by every known marketplace.
 pub fn list_marketplace_plugins(paths: &Paths) -> Result<Vec<MarketplacePlugin>, String> {
     let marketplaces = list_marketplaces(paths)?;
@@ -313,15 +321,55 @@ fn has_non_empty_value(value: &Option<Value>) -> bool {
     }
 }
 
-/// Full installed-plugin state: installed_plugins.json merged with
-/// marketplace metadata, manifests, and settings.json enabledPlugins.
-pub fn list_installed_plugins(paths: &Paths) -> Result<Vec<InstalledPlugin>, String> {
+/// Single-pass loader for all Claude plugin data (marketplaces, discover plugins, and installed plugins).
+pub fn list_all_plugins_data(paths: &Paths) -> Result<ClaudePluginsData, String> {
+    let marketplaces = list_marketplaces(paths)?;
+    let mut marketplace_plugins = Vec::new();
+    let mut marketplace_map = std::collections::HashMap::new();
+
+    for market in &marketplaces {
+        let manifest = market
+            .install_location
+            .as_deref()
+            .map(Path::new)
+            .map(|dir| dir.join(".claude-plugin").join("marketplace.json"))
+            .filter(|m| m.exists())
+            .map(|m| read_json_or_default::<MarketplaceManifest>(&m))
+            .transpose()?
+            .unwrap_or_default();
+        for plugin in manifest.plugins {
+            let plugin_id = format!("{}@{}", plugin.name, market.name);
+            let item = MarketplacePlugin {
+                marketplace_name: market.name.clone(),
+                name: plugin.name,
+                description: plugin.description,
+                version: plugin.version,
+                homepage: plugin.homepage,
+                repository: plugin.repository,
+                category: plugin.category,
+                tags: plugin.tags,
+                source: plugin.source,
+                plugin_id: plugin_id.clone(),
+            };
+            marketplace_map.insert(plugin_id, item.clone());
+            marketplace_plugins.push(item);
+        }
+    }
+
+    let installed_plugins = list_installed_plugins_with_map(paths, &marketplace_map)?;
+
+    Ok(ClaudePluginsData {
+        marketplaces,
+        marketplace_plugins,
+        installed_plugins,
+    })
+}
+
+fn list_installed_plugins_with_map(
+    paths: &Paths,
+    marketplace_map: &std::collections::HashMap<String, MarketplacePlugin>,
+) -> Result<Vec<InstalledPlugin>, String> {
     let installed: InstalledPluginsFile = read_json_or_default(&installed_plugins_path(paths))?;
-    let marketplace_map: std::collections::HashMap<String, MarketplacePlugin> =
-        list_marketplace_plugins(paths)?
-            .into_iter()
-            .map(|p| (p.plugin_id.clone(), p))
-            .collect();
 
     let settings_path = paths.tool_root(ToolId::ClaudeCode).join("settings.json");
     let settings: Value = read_json_or_default(&settings_path)?;
@@ -388,6 +436,17 @@ pub fn list_installed_plugins(paths: &Paths) -> Result<Vec<InstalledPlugin>, Str
     Ok(out)
 }
 
+/// Full installed-plugin state: installed_plugins.json merged with
+/// marketplace metadata, manifests, and settings.json enabledPlugins.
+pub fn list_installed_plugins(paths: &Paths) -> Result<Vec<InstalledPlugin>, String> {
+    let marketplace_map: std::collections::HashMap<String, MarketplacePlugin> =
+        list_marketplace_plugins(paths)?
+            .into_iter()
+            .map(|p| (p.plugin_id.clone(), p))
+            .collect();
+    list_installed_plugins_with_map(paths, &marketplace_map)
+}
+
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
@@ -435,13 +494,37 @@ pub fn set_all_plugins_enabled(
         .filter(|p| p.user_scope_installed)
         .map(|p| p.plugin_id.clone())
         .collect();
-    let mut files = vec![];
-    let mut count = 0;
-    for id in ids {
-        files.extend(set_plugin_enabled(paths, &id, enabled)?);
-        count += 1;
+    if ids.is_empty() {
+        return Ok((0, vec![]));
     }
-    Ok((count, files))
+
+    let settings_path = paths.tool_root(ToolId::ClaudeCode).join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_else(|| Value::Object(Map::new()))
+    } else {
+        Value::Object(Map::new())
+    };
+    let Some(obj) = settings.as_object_mut() else {
+        return Err("settings.json must be an object".into());
+    };
+
+    let plugins = obj
+        .entry("enabledPlugins".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(plugins) = plugins.as_object_mut() else {
+        return Err("enabledPlugins must be an object".into());
+    };
+
+    let count = ids.len();
+    for id in ids {
+        plugins.insert(id, Value::Bool(enabled));
+    }
+
+    crate::store::save_json_atomic(&settings_path, &settings).map_err(|e| e.to_string())?;
+    Ok((count, vec![settings_path]))
 }
 
 fn resolve_claude_program() -> Option<PathBuf> {

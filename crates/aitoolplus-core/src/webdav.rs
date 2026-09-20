@@ -414,4 +414,149 @@ mod tests {
                 .any(|request| request.starts_with("DELETE "))
         );
     }
+
+    #[test]
+    #[ignore]
+    fn real_jianguoyun_sync_e2e() {
+        let (url, username, password) = if let Ok(home) =
+            std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME"))
+        {
+            let settings_path = PathBuf::from(home).join(".cc-switch").join("settings.json");
+            if let Ok(content) = std::fs::read_to_string(&settings_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let w = &val["webdavSync"];
+                    (
+                        w["baseUrl"].as_str().unwrap_or_default().to_string(),
+                        w["username"].as_str().unwrap_or_default().to_string(),
+                        w["password"].as_str().unwrap_or_default().to_string(),
+                    )
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        if url.is_empty() || username.is_empty() || password.is_empty() {
+            return;
+        }
+
+        let config = WebDavConfig {
+            url,
+            username,
+            password,
+            remote_directory: "aitoolplus-test".into(),
+        };
+
+        // 1. Test Connection
+        println!("1. Testing connection...");
+        test_connection(&config).expect("test_connection failed");
+        println!("Connection OK!");
+
+        // 2. Ensure directory
+        println!("2. Ensuring remote directory...");
+        ensure_directory(&config).expect("ensure_directory failed");
+        println!("Directory OK!");
+
+        // 3. Create dummy app data & backup
+        println!("3. Creating full local backup with Antigravity accounts...");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let home = temp_dir.path().join("home");
+        let app_data = temp_dir.path().join("appdata");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&app_data).unwrap();
+
+        let paths = crate::paths::Paths::new(&home, &app_data);
+        let mut settings = crate::settings::AppSettings::default();
+        settings.backup_cli_config_files_enabled = true;
+
+        // Write store, settings, antigravity_accounts, and some CLI config files
+        std::fs::write(paths.store_file(), r#"{"schema_version":1,"test_store":true}"#).unwrap();
+        std::fs::write(paths.settings_file(), r#"{"theme_mode":"Dark","test_settings":true}"#).unwrap();
+        std::fs::write(
+            paths.app_data.join("antigravity_accounts.json"),
+            r#"{"accounts":[{"email":"test@gmail.com","refresh_token":"rt_xyz_test"}]}"#,
+        ).unwrap();
+
+        let claude_dir = paths.tool_root(crate::tools::ToolId::ClaudeCode);
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(claude_dir.join("settings.json"), r#"{"claude_test":true}"#).unwrap();
+
+        let gemini_dir = paths.tool_root(crate::tools::ToolId::GeminiCli);
+        std::fs::create_dir_all(&gemini_dir).unwrap();
+        std::fs::write(gemini_dir.join("oauth_creds.json"), r#"{"access_token":"at_test"}"#).unwrap();
+
+        let local_backup_file = temp_dir.path().join("aitoolplus-test-backup.zip");
+        let backup_report = crate::backup::create_backup(&paths, &settings, &local_backup_file)
+            .expect("create_backup failed");
+        println!("Backup created with {} files", backup_report.file_count);
+
+        // 4. Upload to Jianguoyun
+        println!("4. Uploading to Jianguoyun...");
+        let remote_backup = upload(&config, &local_backup_file).expect("upload failed");
+        println!("Uploaded: {} ({})", remote_backup.name, remote_backup.href);
+
+        // 5. List remote backups
+        println!("5. Listing remote backups...");
+        let remote_list = list(&config).expect("list failed");
+        println!("Found {} remote backups", remote_list.len());
+        for b in &remote_list {
+            println!(" - {} ({})", b.name, b.href);
+        }
+        assert!(remote_list.iter().any(|b| b.name == "aitoolplus-test-backup.zip"));
+
+        // 6. Download from Jianguoyun
+        println!("6. Downloading from Jianguoyun...");
+        let downloaded_file = temp_dir.path().join("downloaded.zip");
+        download(&config, "aitoolplus-test-backup.zip", &downloaded_file)
+            .expect("download failed");
+        assert!(downloaded_file.exists());
+        println!("Downloaded successfully!");
+
+        // 7. Inspect downloaded backup
+        println!("7. Inspecting manifest...");
+        let manifest = crate::backup::inspect_backup(&downloaded_file)
+            .expect("inspect_backup failed");
+        println!("Manifest has {} entries", manifest.entries.len());
+        assert!(manifest.entries.iter().any(|e| e.restore_target == "appdata/antigravity_accounts.json"));
+        assert!(manifest.entries.iter().any(|e| e.restore_target == "appdata/store.json"));
+        assert!(manifest.entries.iter().any(|e| e.restore_target == "home/.gemini/oauth_creds.json"));
+
+        // 8. Restore to new target
+        println!("8. Restoring to clean target directory...");
+        let restore_home = temp_dir.path().join("restore_home");
+        let restore_appdata = temp_dir.path().join("restore_appdata");
+        let restore_paths = crate::paths::Paths::new(&restore_home, &restore_appdata);
+
+        let restore_report = crate::backup::restore_backup(&restore_paths, &downloaded_file, false)
+            .expect("restore_backup failed");
+        println!("Restored {} files", restore_report.restored);
+        assert!(restore_report.restored >= 4);
+
+        // Verify restored contents
+        let restored_ag = std::fs::read_to_string(restore_paths.app_data.join("antigravity_accounts.json")).unwrap();
+        assert!(restored_ag.contains("test@gmail.com"));
+        assert!(restored_ag.contains("rt_xyz_test"));
+
+        let restored_store = std::fs::read_to_string(restore_paths.store_file()).unwrap();
+        assert!(restored_store.contains("test_store"));
+
+        let restored_oauth = std::fs::read_to_string(restore_paths.home.join(".gemini").join("oauth_creds.json")).unwrap();
+        assert!(restored_oauth.contains("at_test"));
+
+        println!("All restored contents match perfectly!");
+
+        // 9. Cleanup on Jianguoyun
+        println!("9. Cleaning up test backup on Jianguoyun...");
+        delete(&config, "aitoolplus-test-backup.zip").expect("delete failed");
+        println!("Deleted!");
+
+        // 10. Verify deletion
+        let remote_list_after = list(&config).expect("list after delete failed");
+        assert!(!remote_list_after.iter().any(|b| b.name == "aitoolplus-test-backup.zip"));
+        println!("Cleanup verified!");
+    }
 }

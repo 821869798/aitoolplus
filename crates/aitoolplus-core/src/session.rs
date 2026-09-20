@@ -64,7 +64,7 @@ pub struct SessionMessage {
     pub model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMessageBlock {
     pub kind: String,
@@ -80,6 +80,12 @@ pub struct SessionMessageBlock {
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -122,9 +128,9 @@ pub fn scan_sessions(paths: &Paths, tool: ToolId, limit: usize) -> Vec<SessionMe
     }
     let mut sessions = match tool {
         ToolId::Grok => scan_grok(&root),
-        ToolId::ClaudeCode => scan_claude_code(&root),
-        ToolId::Kimi => scan_kimi_dirs(&root),
-        _ => scan_jsonl_generic(&root, tool),
+        ToolId::ClaudeCode => scan_claude_code(&root, limit),
+        ToolId::Kimi => scan_kimi_dirs(&root, limit),
+        _ => scan_jsonl_generic(&root, tool, limit),
     };
     sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
     sessions.truncate(limit);
@@ -205,25 +211,27 @@ fn parse_grok_summary(session_dir: &Path, summary: &Path) -> Option<SessionMeta>
 }
 
 /// Claude Code: `~/.claude/projects/<encoded>/*.jsonl` (+ optional index).
-fn scan_claude_code(root: &Path) -> Vec<SessionMeta> {
-    scan_jsonl_generic(root, ToolId::ClaudeCode)
+fn scan_claude_code(root: &Path, limit: usize) -> Vec<SessionMeta> {
+    scan_jsonl_generic(root, ToolId::ClaudeCode, limit)
 }
 
 /// Kimi: session directories with metadata; fall back to jsonl scan.
-fn scan_kimi_dirs(root: &Path) -> Vec<SessionMeta> {
-    scan_jsonl_generic(root, ToolId::Kimi)
+fn scan_kimi_dirs(root: &Path, limit: usize) -> Vec<SessionMeta> {
+    scan_jsonl_generic(root, ToolId::Kimi, limit)
 }
 
 /// Generic JSONL scan for tools whose sessions are line-delimited JSON
 /// files (codex/pi/omp/gemini/opencode/openclaw/hermes/dsh).
-fn scan_jsonl_generic(root: &Path, tool: ToolId) -> Vec<SessionMeta> {
+fn scan_jsonl_generic(root: &Path, tool: ToolId, limit: usize) -> Vec<SessionMeta> {
     let mut files = vec![];
     collect_jsonl(root, &mut files);
     files.sort_by_key(|p| std::cmp::Reverse(modified_ms(p)));
+    files.truncate(limit.saturating_mul(2));
     let provider = tool.key().to_string();
     files
         .into_iter()
         .filter_map(|path| parse_jsonl_meta(&path, &provider, tool))
+        .take(limit)
         .collect()
 }
 
@@ -234,12 +242,25 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.eq_ignore_ascii_case("subagents")
+                || name.eq_ignore_ascii_case("tool-results")
+                || name.eq_ignore_ascii_case("memory")
+                || name.eq_ignore_ascii_case("context-fold")
+                || name.eq_ignore_ascii_case("subagent-artifacts")
+            {
+                continue;
+            }
             collect_jsonl(&path, out);
         } else if path
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("jsonl"))
         {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with("agent-") {
+                continue;
+            }
             out.push(path);
         }
     }
@@ -255,71 +276,185 @@ fn modified_ms(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-fn parse_jsonl_meta(path: &Path, provider: &str, tool: ToolId) -> Option<SessionMeta> {
-    // Read only head+tail lines to build cheap metadata (upstream style).
-    let raw = std::fs::read_to_string(path).ok()?;
-    let lines: Vec<&str> = raw.lines().collect();
-    if lines.is_empty() {
-        return None;
+fn strip_xml_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(c);
+        }
     }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn clean_session_title(raw: &str) -> String {
+    let text = raw.trim();
+    if let Some(start) = text.find("<command-args>") {
+        if let Some(end) = text[start..].find("</command-args>") {
+            let inner = &text[start + "<command-args>".len()..start + end];
+            let inner_trimmed = inner.trim();
+            if !inner_trimmed.is_empty() {
+                return inner_trimmed.chars().take(120).collect();
+            }
+        }
+    }
+    if let Some(start) = text.find("<command-name>") {
+        if let Some(end) = text[start..].find("</command-name>") {
+            let cmd = text[start + "<command-name>".len()..start + end].trim();
+            let stripped = strip_xml_tags(text);
+            if !stripped.is_empty() {
+                return stripped.chars().take(120).collect();
+            }
+            return cmd.chars().take(120).collect();
+        }
+    }
+    let stripped = strip_xml_tags(text);
+    if !stripped.is_empty() {
+        stripped.chars().take(120).collect()
+    } else {
+        text.chars().take(120).collect()
+    }
+}
+
+fn parse_ts_value(v: &Value) -> Option<i64> {
+    if let Some(num) = v.as_i64() {
+        return Some(num);
+    }
+    if let Some(s) = v.as_str() {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            return Some(dt.timestamp_millis());
+        }
+    }
+    None
+}
+
+fn parse_jsonl_meta(path: &Path, provider: &str, tool: ToolId) -> Option<SessionMeta> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file);
 
     let mut first_user: Option<String> = None;
+    let mut latest_session_name: Option<String> = None;
     let mut last_ts: Option<i64> = None;
     let mut first_ts: Option<i64> = None;
     let mut message_count = 0usize;
+    let mut project_dir: Option<String> = None;
+    let mut session_id_from_file: Option<String> = None;
 
-    let inspect = |line: &str| -> Option<()> {
-        let value: Value = serde_json::from_str(line).ok()?;
-        let role = value
-            .get("type")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("role").and_then(Value::as_str))?;
-        if role == "user" || role == "assistant" {
-            message_count += 1;
-        }
-        if first_user.is_none() && role == "user" {
-            first_user = Some(extract_text(&value).chars().take(120).collect());
-        }
-        if let Some(ts) = value
-            .get("timestamp")
-            .or_else(|| value.get("ts"))
-            .or_else(|| value.get("created_at"))
-            .and_then(Value::as_i64)
-        {
-            if first_ts.is_none() {
-                first_ts = Some(ts);
+    let mut line = String::new();
+    let mut read_lines = 0;
+    while read_lines < 80 {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                read_lines += 1;
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+                    let entry_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+                    if entry_type == "session" {
+                        if let Some(id) = value.get("id").and_then(Value::as_str) {
+                            if !id.trim().is_empty() {
+                                session_id_from_file = Some(id.to_string());
+                            }
+                        }
+                    } else if entry_type == "session_info" {
+                        if let Some(name) = value.get("name").and_then(Value::as_str) {
+                            let trimmed_name = name.trim();
+                            if !trimmed_name.is_empty() {
+                                latest_session_name = Some(trimmed_name.to_string());
+                            }
+                        }
+                    }
+
+                    if project_dir.is_none() {
+                        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+                            if !cwd.trim().is_empty() {
+                                project_dir = Some(cwd.to_string());
+                            }
+                        } else if let Some(cwd) = value.pointer("/attachment/snapshot/workingDirectory").and_then(Value::as_str) {
+                            if !cwd.trim().is_empty() {
+                                project_dir = Some(cwd.to_string());
+                            }
+                        }
+                    }
+
+                    let role = value
+                        .pointer("/message/role")
+                        .and_then(Value::as_str)
+                        .or_else(|| value.get("role").and_then(Value::as_str))
+                        .or_else(|| value.pointer("/payload/role").and_then(Value::as_str))
+                        .or_else(|| {
+                            if entry_type == "user" || entry_type == "assistant" {
+                                Some(entry_type)
+                            } else {
+                                None
+                            }
+                        });
+
+                    if let Some(role) = role {
+                        if role.eq_ignore_ascii_case("user") || role.eq_ignore_ascii_case("assistant") {
+                            message_count += 1;
+                        }
+                        if first_user.is_none() && role.eq_ignore_ascii_case("user") {
+                            let text = extract_text(&value);
+                            let cleaned = clean_session_title(&text);
+                            if !cleaned.is_empty() {
+                                first_user = Some(cleaned);
+                            }
+                        }
+                    }
+
+                    if let Some(ts) = value
+                        .get("timestamp")
+                        .or_else(|| value.get("ts"))
+                        .or_else(|| value.get("created_at"))
+                        .and_then(parse_ts_value)
+                    {
+                        if first_ts.is_none() {
+                            first_ts = Some(ts);
+                        }
+                        last_ts = Some(ts);
+                    }
+                }
             }
-            last_ts = Some(ts);
         }
-        Some(())
-    };
-
-    // head 40 + tail 20 lines
-    let head = lines.iter().take(40);
-    let tail_start = lines.len().saturating_sub(20);
-    let tail = lines[tail_start.min(lines.len())..].iter();
-    let mut inspect = inspect;
-    let _ = &mut inspect;
-    for line in head.chain(tail) {
-        inspect(line);
     }
 
-    if message_count == 0 {
+    if message_count == 0 && first_user.is_none() && latest_session_name.is_none() {
         return None;
     }
 
-    let session_id = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("session")
-        .to_string();
-    let resume = resume_command(tool, &session_id);
+    let session_id = session_id_from_file.unwrap_or_else(|| {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("session");
+        if let Some(pos) = stem.find('_') {
+            let suffix = &stem[pos + 1..];
+            if suffix.len() >= 32 {
+                return suffix.to_string();
+            }
+        }
+        stem.to_string()
+    });
+
+    let display_title = latest_session_name.or(first_user);
+    let resume = resume_command(tool, &session_id, path.to_str());
+
     Some(SessionMeta {
         provider_id: provider.to_string(),
-        session_id: session_id.clone(),
-        title: first_user.clone(),
-        summary: first_user,
-        project_dir: None,
+        session_id,
+        title: display_title.clone(),
+        summary: display_title,
+        project_dir,
         created_at: first_ts,
         last_active_at: last_ts.or(Some(modified_ms(path))),
         source_path: path.to_string_lossy().to_string(),
@@ -327,7 +462,7 @@ fn parse_jsonl_meta(path: &Path, provider: &str, tool: ToolId) -> Option<Session
     })
 }
 
-fn resume_command(tool: ToolId, session_id: &str) -> Option<String> {
+fn resume_command(tool: ToolId, session_id: &str, source_path: Option<&str>) -> Option<String> {
     Some(match tool {
         ToolId::ClaudeCode => format!("claude --resume {session_id}"),
         ToolId::Codex => format!("codex resume {session_id}"),
@@ -336,8 +471,20 @@ fn resume_command(tool: ToolId, session_id: &str) -> Option<String> {
         ToolId::Kimi => format!("kimi --resume {session_id}"),
         ToolId::OpenCode => format!("opencode --continue {session_id}"),
         ToolId::OpenClaw => format!("openclaw resume {session_id}"),
-        ToolId::Pi => format!("pi --continue {session_id}"),
-        ToolId::OhMyPi => format!("omp --continue {session_id}"),
+        ToolId::Pi => {
+            if let Some(sp) = source_path {
+                format!("pi --session \"{sp}\"")
+            } else {
+                format!("pi --continue {session_id}")
+            }
+        }
+        ToolId::OhMyPi => {
+            if let Some(sp) = source_path {
+                format!("omp --session \"{sp}\"")
+            } else {
+                format!("omp --continue {session_id}")
+            }
+        }
         ToolId::Hermes => return None,
         ToolId::Dsh => return None,
         ToolId::ClaudeDesktop => return None,
@@ -362,40 +509,460 @@ pub fn load_messages(_paths: &Paths, meta: &SessionMeta) -> Result<Vec<SessionMe
 }
 
 fn load_jsonl_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
-    let raw = std::fs::read_to_string(path)
+    use std::io::BufRead;
+    let file = std::fs::File::open(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    let mut out = vec![];
-    for line in raw.lines() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+    let reader = std::io::BufReader::new(file);
+
+    let mut out: Vec<SessionMessage> = vec![];
+    let mut tool_use_map: HashMap<String, (usize, usize)> = HashMap::new();
+
+    for line in reader.lines().filter_map(|l| l.ok()) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
             continue;
         };
-        let Some(role) = value
-            .get("type")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("role").and_then(Value::as_str))
-        else {
-            continue;
-        };
-        let content = extract_text(&value);
+
+        // 1. Filter out internal noise / meta events
+        if let Some(type_str) = value.get("type").and_then(Value::as_str) {
+            match type_str {
+                "mode" | "permission-mode" | "atis-latch" | "file-history-snapshot"
+                | "attachment" | "last-prompt" | "turn_context" | "session_meta"
+                | "session" | "session_info" => {
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        // 2. Extract timestamp
         let ts = value
             .get("timestamp")
             .or_else(|| value.get("ts"))
             .or_else(|| value.get("created_at"))
-            .and_then(Value::as_i64);
+            .and_then(|v| {
+                if let Some(num) = v.as_i64() {
+                    Some(num)
+                } else if let Some(s) = v.as_str() {
+                    chrono::DateTime::parse_from_rfc3339(s)
+                        .ok()
+                        .map(|dt| dt.timestamp_millis())
+                } else {
+                    None
+                }
+            });
+
+        // 3. Codex "response_item"
+        if value.get("type").and_then(Value::as_str) == Some("response_item") {
+            if let Some(payload) = value.get("payload") {
+                let p_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
+                if p_type == "message" {
+                    let role = payload.get("role").and_then(Value::as_str).unwrap_or("user");
+                    let model = payload.get("model").and_then(Value::as_str).map(String::from);
+                    let mut blocks = vec![];
+                    let mut content = String::new();
+
+                    if let Some(reasoning) = payload.get("reasoning_content").and_then(Value::as_str) {
+                        if !reasoning.trim().is_empty() {
+                            blocks.push(SessionMessageBlock {
+                                kind: "thinking".into(),
+                                text: Some(reasoning.to_string()),
+                                title: Some("Thinking".into()),
+                                ..Default::default()
+                            });
+                        }
+                    }
+
+                    if let Some(content_val) = payload.get("content") {
+                        if let Some(s) = content_val.as_str() {
+                            content.push_str(s);
+                            blocks.push(SessionMessageBlock {
+                                kind: "text".into(),
+                                text: Some(s.to_string()),
+                                ..Default::default()
+                            });
+                        } else if let Some(arr) = content_val.as_array() {
+                            for item in arr {
+                                let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+                                if item_type == "thinking" || item_type == "reasoning" {
+                                    if let Some(t) = item.get("thinking").or_else(|| item.get("text")).and_then(Value::as_str) {
+                                        blocks.push(SessionMessageBlock {
+                                            kind: "thinking".into(),
+                                            text: Some(t.to_string()),
+                                            title: Some("Thinking".into()),
+                                            ..Default::default()
+                                        });
+                                    }
+                                } else if item_type == "text" || item_type == "input_text" {
+                                    if let Some(t) = item.get("text").and_then(Value::as_str) {
+                                        if !content.is_empty() {
+                                            content.push('\n');
+                                        }
+                                        content.push_str(t);
+                                        blocks.push(SessionMessageBlock {
+                                            kind: "text".into(),
+                                            text: Some(t.to_string()),
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if !blocks.is_empty() || !content.is_empty() {
+                        let msg_type = if blocks.iter().any(|b| b.kind == "thinking") && blocks.iter().all(|b| b.kind == "thinking") {
+                            "thinking"
+                        } else {
+                            "text"
+                        };
+                        out.push(SessionMessage {
+                            role: role.to_string(),
+                            content,
+                            ts,
+                            id: None,
+                            message_type: Some(msg_type.to_string()),
+                            blocks,
+                            model,
+                        });
+                    }
+                    continue;
+                } else if p_type == "function_call" {
+                    let fn_name = payload.get("name").and_then(Value::as_str).unwrap_or("tool");
+                    let call_id = payload.get("call_id").and_then(Value::as_str).unwrap_or("");
+                    let args = payload.get("arguments").and_then(Value::as_str).unwrap_or("");
+                    let is_cmd = fn_name.eq_ignore_ascii_case("bash")
+                        || fn_name.eq_ignore_ascii_case("exec")
+                        || fn_name.eq_ignore_ascii_case("shell")
+                        || fn_name.eq_ignore_ascii_case("command");
+
+                    let block = SessionMessageBlock {
+                        kind: if is_cmd { "command".into() } else { "tool_call".into() },
+                        text: Some(args.to_string()),
+                        command: if is_cmd { Some(args.to_string()) } else { None },
+                        tool_name: Some(fn_name.to_string()),
+                        title: Some(format!("Call {fn_name}")),
+                        ..Default::default()
+                    };
+
+                    let msg_idx = out.len();
+                    if !call_id.is_empty() {
+                        tool_use_map.insert(call_id.to_string(), (msg_idx, 0));
+                    }
+
+                    out.push(SessionMessage {
+                        role: "assistant".to_string(),
+                        content: format!("Called {fn_name}: {args}"),
+                        ts,
+                        id: if call_id.is_empty() { None } else { Some(call_id.to_string()) },
+                        message_type: Some(if is_cmd { "command".into() } else { "tool_call".into() }),
+                        blocks: vec![block],
+                        model: None,
+                    });
+                    continue;
+                } else if p_type == "function_call_output" {
+                    let call_id = payload.get("call_id").and_then(Value::as_str).unwrap_or("");
+                    let output = payload.get("output").and_then(Value::as_str).unwrap_or("");
+                    if let Some(&(m_idx, b_idx)) = tool_use_map.get(call_id) {
+                        if let Some(msg) = out.get_mut(m_idx) {
+                            if let Some(blk) = msg.blocks.get_mut(b_idx) {
+                                blk.output = Some(output.to_string());
+                                blk.status = Some("completed".into());
+                                continue;
+                            }
+                        }
+                    }
+                    out.push(SessionMessage {
+                        role: "tool".to_string(),
+                        content: output.to_string(),
+                        ts,
+                        id: Some(call_id.to_string()),
+                        message_type: Some("tool_call".into()),
+                        blocks: vec![SessionMessageBlock {
+                            kind: "tool_result".into(),
+                            text: Some(output.to_string()),
+                            output: Some(output.to_string()),
+                            status: Some("completed".into()),
+                            ..Default::default()
+                        }],
+                        model: None,
+                    });
+                    continue;
+                }
+            }
+        }
+
+        // 4. Claude Code / Pi / Generic JSONL parsing
+        let role = value
+            .pointer("/message/role")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("role").and_then(Value::as_str))
+            .or_else(|| {
+                let t = value.get("type").and_then(Value::as_str)?;
+                if t == "user" || t == "assistant" || t == "tool" {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or("");
+
+        // Handle Pi toolResult message
+        if role.eq_ignore_ascii_case("toolResult") {
+            let tool_call_id = value
+                .pointer("/message/toolCallId")
+                .or_else(|| value.get("tool_call_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let tool_name = value
+                .pointer("/message/toolName")
+                .or_else(|| value.get("tool_name"))
+                .and_then(Value::as_str)
+                .unwrap_or("tool");
+            let is_err = value
+                .pointer("/message/isError")
+                .or_else(|| value.get("is_error"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let res_content = value
+                .pointer("/message/content")
+                .map(content_text)
+                .unwrap_or_else(|| extract_text(&value));
+
+            let mut attached = false;
+            if !tool_call_id.is_empty() {
+                if let Some(&(m_idx, b_idx)) = tool_use_map.get(tool_call_id) {
+                    if let Some(msg) = out.get_mut(m_idx) {
+                        if let Some(blk) = msg.blocks.get_mut(b_idx) {
+                            blk.output = Some(res_content.clone());
+                            blk.is_error = Some(is_err);
+                            blk.status = Some(if is_err { "failed".into() } else { "completed".into() });
+                            attached = true;
+                        }
+                    }
+                }
+            }
+
+            if !attached {
+                out.push(SessionMessage {
+                    role: "tool".to_string(),
+                    content: res_content.clone(),
+                    ts,
+                    id: if tool_call_id.is_empty() { None } else { Some(tool_call_id.to_string()) },
+                    message_type: Some("tool_call".into()),
+                    blocks: vec![SessionMessageBlock {
+                        kind: "tool_result".into(),
+                        text: Some(res_content.clone()),
+                        output: Some(res_content),
+                        tool_name: Some(tool_name.to_string()),
+                        is_error: Some(is_err),
+                        status: Some(if is_err { "failed".into() } else { "completed".into() }),
+                        ..Default::default()
+                    }],
+                    model: None,
+                });
+            }
+            continue;
+        }
+
+        let model = value
+            .get("model")
+            .or_else(|| value.pointer("/message/model"))
+            .and_then(Value::as_str)
+            .map(String::from);
+
+        let msg_id = value
+            .get("uuid")
+            .or_else(|| value.get("id"))
+            .or_else(|| value.pointer("/message/id"))
+            .and_then(Value::as_str)
+            .map(String::from);
+
+        let mut blocks: Vec<SessionMessageBlock> = vec![];
+        let mut content = String::new();
+
+        let content_arr = value
+            .pointer("/message/content")
+            .or_else(|| value.get("content"))
+            .and_then(Value::as_array);
+
+        if let Some(items) = content_arr {
+            let mut is_pure_tool_result = true;
+            for item in items {
+                let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+                match item_type {
+                    "thinking" => {
+                        is_pure_tool_result = false;
+                        if let Some(th) = item.get("thinking").and_then(Value::as_str) {
+                            blocks.push(SessionMessageBlock {
+                                kind: "thinking".into(),
+                                text: Some(th.to_string()),
+                                title: Some("Thinking".into()),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    "text" => {
+                        is_pure_tool_result = false;
+                        if let Some(txt) = item.get("text").and_then(Value::as_str) {
+                            if !content.is_empty() {
+                                content.push('\n');
+                            }
+                            content.push_str(txt);
+                            blocks.push(SessionMessageBlock {
+                                kind: "text".into(),
+                                text: Some(txt.to_string()),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    "tool_use" | "toolCall" => {
+                        is_pure_tool_result = false;
+                        let tool_name = item.get("name").and_then(Value::as_str).unwrap_or("tool");
+                        let tool_id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                        let input = item.get("input").or_else(|| item.get("arguments"));
+                        let is_cmd = tool_name.eq_ignore_ascii_case("bash")
+                            || tool_name.eq_ignore_ascii_case("command")
+                            || tool_name.eq_ignore_ascii_case("terminal");
+
+                        let mut cmd_str = None;
+                        let mut desc_str = None;
+                        let mut param_summary = String::new();
+
+                        if let Some(inp) = input {
+                            if let Some(cmd) = inp.get("command").and_then(Value::as_str) {
+                                cmd_str = Some(cmd.to_string());
+                            }
+                            if let Some(desc) = inp.get("description").and_then(Value::as_str) {
+                                desc_str = Some(desc.to_string());
+                            }
+                            if !is_cmd {
+                                if let Some(path) = inp.get("file_path").or_else(|| inp.get("path")).and_then(Value::as_str) {
+                                    param_summary = path.to_string();
+                                } else if let Some(pattern) = inp.get("pattern").and_then(Value::as_str) {
+                                    param_summary = format!("pattern: {pattern}");
+                                } else if let Some(q) = inp.get("query").and_then(Value::as_str) {
+                                    param_summary = q.to_string();
+                                } else if let Ok(s) = serde_json::to_string(inp) {
+                                    param_summary = s;
+                                }
+                            }
+                        }
+
+                        let block = SessionMessageBlock {
+                            kind: if is_cmd { "command".into() } else { "tool_call".into() },
+                            text: if is_cmd { cmd_str.clone() } else { Some(param_summary.clone()) },
+                            command: cmd_str,
+                            tool_name: Some(tool_name.to_string()),
+                            title: desc_str.or_else(|| if !param_summary.is_empty() { Some(param_summary) } else { None }),
+                            ..Default::default()
+                        };
+
+                        let msg_idx = out.len();
+                        let blk_idx = blocks.len();
+                        if !tool_id.is_empty() {
+                            tool_use_map.insert(tool_id.to_string(), (msg_idx, blk_idx));
+                        }
+                        blocks.push(block);
+                    }
+                    "tool_result" => {
+                        let tool_use_id = item.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+                        let res_content = extract_text(item);
+                        let is_err = item.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+
+                        let mut stdout = value.pointer("/toolUseResult/stdout").and_then(Value::as_str).map(String::from);
+                        let stderr = value.pointer("/toolUseResult/stderr").and_then(Value::as_str).map(String::from);
+                        if stdout.is_none() && !res_content.is_empty() {
+                            stdout = Some(res_content.clone());
+                        }
+
+                        let mut attached = false;
+                        if let Some(&(m_idx, b_idx)) = tool_use_map.get(tool_use_id) {
+                            if let Some(msg) = out.get_mut(m_idx) {
+                                if let Some(blk) = msg.blocks.get_mut(b_idx) {
+                                    let full_output = match (&stdout, &stderr) {
+                                        (Some(o), Some(e)) if !e.is_empty() => format!("{o}\n[stderr]: {e}"),
+                                        (Some(o), _) => o.clone(),
+                                        (None, Some(e)) => format!("[stderr]: {e}"),
+                                        _ => res_content.clone(),
+                                    };
+                                    blk.output = Some(full_output);
+                                    blk.is_error = Some(is_err);
+                                    blk.status = Some(if is_err { "failed".into() } else { "completed".into() });
+                                    attached = true;
+                                }
+                            }
+                        }
+
+                        if !attached {
+                            blocks.push(SessionMessageBlock {
+                                kind: "tool_result".into(),
+                                text: stdout.or(Some(res_content)),
+                                is_error: Some(is_err),
+                                status: Some(if is_err { "failed".into() } else { "completed".into() }),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if is_pure_tool_result && blocks.is_empty() {
+                continue;
+            }
+        } else {
+            let text = extract_text(&value);
+            if !text.trim().is_empty() {
+                content = text.clone();
+                blocks.push(SessionMessageBlock {
+                    kind: "text".into(),
+                    text: Some(text),
+                    ..Default::default()
+                });
+            }
+        }
+
+        if blocks.is_empty() && content.trim().is_empty() {
+            continue;
+        }
+
+        let message_type = if blocks.iter().any(|b| b.kind == "command") {
+            "command"
+        } else if blocks.iter().any(|b| b.kind == "tool_call" || b.kind == "tool_result") {
+            "tool_call"
+        } else if blocks.iter().any(|b| b.kind == "thinking") && blocks.iter().all(|b| b.kind == "thinking") {
+            "thinking"
+        } else {
+            "text"
+        };
+
+        let final_role = if role == "assistant" {
+            "assistant"
+        } else if role == "user" {
+            "user"
+        } else if role == "tool" {
+            "tool"
+        } else if blocks.iter().any(|b| b.kind == "command" || b.kind == "tool_call") {
+            "assistant"
+        } else {
+            "user"
+        };
+
         out.push(SessionMessage {
-            role: role.to_string(),
+            role: final_role.to_string(),
             content,
             ts,
-            id: value.get("id").and_then(Value::as_str).map(String::from),
-            message_type: value.get("type").and_then(Value::as_str).map(String::from),
-            blocks: vec![],
-            model: value
-                .get("model")
-                .or_else(|| value.pointer("/message/model"))
-                .and_then(Value::as_str)
-                .map(String::from),
+            id: msg_id,
+            message_type: Some(message_type.to_string()),
+            blocks,
+            model,
         });
     }
+
     Ok(out)
 }
 
@@ -792,5 +1359,49 @@ mod tests {
         }
         let sessions = scan_sessions(&paths, ToolId::ClaudeCode, 3);
         assert_eq!(sessions.len(), 3);
+    }
+
+    #[test]
+    fn test_rich_session_parsing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rich_session.jsonl");
+        let content = r#"
+{"type":"mode","mode":"normal"}
+{"type":"assistant","message":{"model":"claude-3-7-sonnet","role":"assistant","content":[{"type":"thinking","thinking":"Analyzing the codebase..."},{"type":"text","text":"I will run git status."},{"type":"tool_use","id":"tool_1","name":"Bash","input":{"command":"git status","description":"Check git status"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_1","content":"On branch main\nnothing to commit","is_error":false}]},"toolUseResult":{"stdout":"On branch main\nnothing to commit","stderr":""}}
+{"type":"assistant","message":{"model":"claude-3-7-sonnet","role":"assistant","content":[{"type":"text","text":"Working tree is clean."}]}}
+"#;
+        std::fs::write(&file, content).unwrap();
+        let meta = SessionMeta {
+            provider_id: "claude_code".into(),
+            session_id: "test".into(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: None,
+            last_active_at: None,
+            source_path: file.to_string_lossy().to_string(),
+            resume_command: None,
+        };
+        let paths = paths_with(dir.path());
+        let messages = load_messages(&paths, &meta).unwrap();
+        // Mode line was skipped!
+        // Tool result was attached to the command block!
+        assert_eq!(messages.len(), 2);
+        
+        let msg0 = &messages[0];
+        assert_eq!(msg0.role, "assistant");
+        assert_eq!(msg0.blocks.len(), 3);
+        assert_eq!(msg0.blocks[0].kind, "thinking");
+        assert_eq!(msg0.blocks[0].text.as_deref(), Some("Analyzing the codebase..."));
+        assert_eq!(msg0.blocks[1].kind, "text");
+        assert_eq!(msg0.blocks[2].kind, "command");
+        assert_eq!(msg0.blocks[2].command.as_deref(), Some("git status"));
+        assert_eq!(msg0.blocks[2].output.as_deref(), Some("On branch main\nnothing to commit"));
+        assert_eq!(msg0.blocks[2].status.as_deref(), Some("completed"));
+
+        let msg1 = &messages[1];
+        assert_eq!(msg1.role, "assistant");
+        assert_eq!(msg1.content, "Working tree is clean.");
     }
 }

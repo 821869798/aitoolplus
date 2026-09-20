@@ -150,6 +150,7 @@ impl Workspace {
             "mcp" => Page::Mcp,
             "skills" => Page::Skills,
             "sessions" => Page::Sessions,
+            "antigravity" => Page::Antigravity,
             "settings" => Page::Settings,
             key => ToolId::from_key(key)
                 .map(Page::Tool)
@@ -162,6 +163,8 @@ impl Workspace {
                 "runtime" => pages::ToolTab::Runtime,
                 "extensions" => pages::ToolTab::Extensions,
                 "plugins" => pages::ToolTab::Plugins,
+                "marketplace" => pages::ToolTab::Marketplace,
+                "sessions" => pages::ToolTab::Sessions,
                 "addons" => pages::ToolTab::Addons,
                 _ => pages::ToolTab::Providers,
             };
@@ -171,6 +174,13 @@ impl Workspace {
                     "about" => pages::SettingsTab::About,
                     _ => pages::SettingsTab::General,
                 };
+            }
+        }
+        if let Ok(sess_id) = std::env::var("AITOOLPLUS_START_SESSION") {
+            match page {
+                Page::Tool(tool) => ui.open_session = Some((tool, sess_id)),
+                Page::Sessions => ui.open_session = Some((ui.sessions_tool, sess_id)),
+                _ => {}
             }
         }
 
@@ -186,6 +196,28 @@ impl Workspace {
             callbacks,
             root_focus,
         };
+
+        if std::env::var("AITOOLPLUS_OPEN_SESSION_ACTIONS").ok().as_deref() == Some("1") {
+            ws.ui.session_actions_menu_open = true;
+        }
+
+        if std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_DIALOG").ok().as_deref() == Some("1") {
+            let refresh_token = cx.new(|cx| TextInput::new("输入 Google OAuth Refresh Token…", cx));
+            let custom_label = cx.new(|cx| TextInput::new("自定义备注（例如：工作主账号、备用账号）…", cx));
+            let active_tab = if std::env::var("AITOOLPLUS_ANTIGRAVITY_TAB").ok().as_deref() == Some("token") {
+                pages::antigravity_page::AntigravityDialogTab::RefreshToken
+            } else {
+                pages::antigravity_page::AntigravityDialogTab::GoogleAuth
+            };
+            ws.ui.antigravity_dialog = Some(pages::antigravity_page::AntigravityDialogState {
+                active_tab,
+                refresh_token,
+                custom_label,
+                auth_status: None,
+                is_authorizing: false,
+                error_message: None,
+            });
+        }
 
         if let Ok(target_tool) = std::env::var("AITOOLPLUS_OPEN_PROVIDER") {
             tracing::info!(open_provider = %target_tool, "open provider requested");
@@ -316,6 +348,27 @@ impl Workspace {
             }
         }
 
+        if std::env::var("AITOOLPLUS_OPEN_PROMPT_DIALOG").ok().as_deref() == Some("1") {
+            if let Page::Tool(tool) = ws.page {
+                let editing_id = std::env::var("AITOOLPLUS_PROMPT_ID")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty());
+                pages::tool_page::open_prompt_dialog(editing_id, tool, &mut ws, cx);
+            }
+        }
+        if let Ok(pid) = std::env::var("AITOOLPLUS_EXPAND_PROMPT") {
+            ws.ui.expanded_prompts.insert(pid);
+        }
+
+        if let Ok(dd) = std::env::var("AITOOLPLUS_OPEN_PI_DROPDOWN") {
+            ws.ui.pi_dropdown_open = match dd.as_str() {
+                "prov" => Some(pages::PiDropdownField::Provider),
+                "model" => Some(pages::PiDropdownField::Model),
+                "think" => Some(pages::PiDropdownField::Thinking),
+                _ => None,
+            };
+        }
+
         ws
     }
 
@@ -386,24 +439,77 @@ impl Workspace {
 
     /// The scrollable content area for the current page.
     pub(crate) fn page_content(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let mut pane = div()
-            .id("page-scroll")
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w(px(0.0))
-            .overflow_x_hidden()
-            .overflow_y_scroll()
-            .px(px(24.0))
-            .py(px(20.0))
-            .items_center()
-            .child(
-                div()
-                    .w_full()
-                    .max_w(px(1120.0))
-                    .min_w(px(0.0))
-                    .child(pages::render_page(self, cx)),
-            );
+        let is_session_open = self.ui.open_session.is_some();
+        let is_custom_scroll = is_session_open
+            || (matches!(self.page, Page::Tool(_))
+                && matches!(self.ui.tool_tab, pages::ToolTab::Marketplace | pages::ToolTab::Sessions))
+            || matches!(self.page, Page::Sessions);
+
+        let mut pane = if is_session_open {
+            div()
+                .id("page-scroll")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .overflow_hidden()
+                .px(px(14.0))
+                .py(px(10.0))
+                .items_center()
+                .child(
+                    div()
+                        .w_full()
+                        .h_full()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .child(pages::render_page(self, cx)),
+                )
+        } else if is_custom_scroll {
+            div()
+                .id("page-scroll")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .overflow_hidden()
+                .px(px(24.0))
+                .py(px(20.0))
+                .items_center()
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(1120.0))
+                        .h_full()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .child(pages::render_page(self, cx)),
+                )
+        } else {
+            div()
+                .id("page-scroll")
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_x_hidden()
+                .overflow_y_scroll()
+                .px(px(24.0))
+                .py(px(20.0))
+                .items_center()
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(1120.0))
+                        .min_w(px(0.0))
+                        .child(pages::render_page(self, cx)),
+                )
+        };
 
         if let Some(toast) = pages::render_toast(self, cx) {
             pane = pane.child(toast);
@@ -467,6 +573,52 @@ impl Workspace {
         self.persist_store();
         cx.notify();
     }
+
+    /// Toggle or set a Pi provider's enabled state in models.json and auth.json.
+    pub fn set_pi_provider_enabled(&mut self, provider_id: &str, enabled: bool, cx: &mut Context<Self>) {
+        let i = self.i18n;
+        let provider = self
+            .store
+            .store()
+            .tool(ToolId::Pi)
+            .providers
+            .iter()
+            .find(|p| p.id == provider_id)
+            .cloned();
+
+        let Some(provider) = provider else {
+            let msg = i.t("未找到该供应商", "provider not found").to_string();
+            (self.callbacks.notify)(msg);
+            cx.notify();
+            return;
+        };
+
+        match aitoolplus_core::pi_runtime::set_provider_enabled(&self.paths, &provider, enabled) {
+            Ok(files) => {
+                let _ = self.store.update(|store| {
+                    let section = store.tool_mut(ToolId::Pi);
+                    if let Some(p) = section.providers.iter_mut().find(|p| p.id == provider_id) {
+                        p.is_applied = enabled;
+                    }
+                });
+                self.persist_store();
+                let msg = if enabled {
+                    i.t("供应商已启用", "Provider enabled").to_string()
+                } else {
+                    i.t("供应商已停用", "Provider disabled").to_string()
+                };
+                self.ui.toast(msg, false);
+                for f in files {
+                    (self.callbacks.notify)(format!("runtime updated: {}", f.display()));
+                }
+            }
+            Err(e) => {
+                let msg = format!("{e}");
+                self.ui.toast(msg, true);
+            }
+        }
+        cx.notify();
+    }
 }
 
 /// Whether the OS prefers dark (cheap heuristic; Windows registry-free).
@@ -521,8 +673,25 @@ impl gpui::Focusable for Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar(cx);
-        let topbar = self.topbar(cx);
+        let is_session_open = self.ui.open_session.is_some();
+        let topbar = if is_session_open {
+            None
+        } else {
+            Some(self.topbar(cx))
+        };
         let content = self.page_content(cx);
+
+        let mut right_col = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .flex()
+            .flex_col();
+
+        if let Some(tb) = topbar {
+            right_col = right_col.child(tb);
+        }
+        right_col = right_col.child(content);
 
         let base = div()
             .size_full()
@@ -530,16 +699,7 @@ impl Render for Workspace {
             .bg(self.theme.bg)
             .text_color(self.theme.text_primary)
             .child(sidebar)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .child(topbar)
-                    .child(content),
-            );
+            .child(right_col);
 
         // Standard gpui-kit Root overlay layers: dialogs, sheets, notifications
         let overlays = div()
@@ -558,6 +718,7 @@ impl Render for Workspace {
             let renames = self.ui.rename_dialog.clone();
             let runtime_edits = self.ui.runtime_edit_dialog.clone();
             let skill_details = self.ui.skill_detail_dialog.clone();
+            let antigravity_dialog = self.ui.antigravity_dialog.clone();
             let mut out = vec![];
             if let Some(d) = dialogs {
                 out.push(pages::tool_page::render_provider_dialog(d, self, cx));
@@ -585,6 +746,9 @@ impl Render for Workspace {
                 out.push(pages::skills_page::render_skill_detail_dialog(
                     detail, self, cx,
                 ));
+            }
+            if let Some(d) = antigravity_dialog {
+                out.push(pages::antigravity_page::render_add_account_dialog(&d, self, cx));
             }
             out
         } else {

@@ -82,6 +82,7 @@ pub fn cli_config_files(paths: &Paths) -> Vec<PathBuf> {
     }
     // Runtime-owned auth/catalog/state files not all exposed by config_files.
     files.extend([
+        paths.tool_root(ToolId::GeminiCli).join("oauth_creds.json"),
         paths.tool_root(ToolId::Pi).join("auth.json"),
         paths.tool_root(ToolId::Pi).join("models.json"),
         paths
@@ -143,6 +144,14 @@ pub fn create_backup(
         &paths.settings_file(),
         "appdata/settings.json",
         "appdata/settings.json",
+        &mut manifest,
+        &mut report,
+    )?;
+    add_file_if_exists(
+        &mut zip,
+        &paths.app_data.join("antigravity_accounts.json"),
+        "appdata/antigravity_accounts.json",
+        "appdata/antigravity_accounts.json",
         &mut manifest,
         &mut report,
     )?;
@@ -771,5 +780,28 @@ mod tests {
             fs::read_to_string(paths.store_file()).unwrap(),
             r#"{"schema_version":1}"#
         );
+    }
+
+    #[test]
+    fn antigravity_accounts_backed_up_and_restored() {
+        let (directory, paths, settings) = setup();
+        let accounts_file = paths.app_data.join("antigravity_accounts.json");
+        fs::write(&accounts_file, r#"{"accounts":[{"email":"user@gmail.com","refresh_token":"rt_123"}]}"#).unwrap();
+
+        let backup = directory.path().join("ag_backup.zip");
+        let report = create_backup(&paths, &settings, &backup).unwrap();
+        assert!(report.file_count >= 3);
+
+        // Delete local accounts file
+        fs::remove_file(&accounts_file).unwrap();
+        assert!(!accounts_file.exists());
+
+        // Restore
+        let restore_report = restore_backup(&paths, &backup, false).unwrap();
+        assert!(restore_report.restored >= 3);
+        assert!(accounts_file.exists());
+        let content = fs::read_to_string(&accounts_file).unwrap();
+        assert!(content.contains("user@gmail.com"));
+        assert!(content.contains("rt_123"));
     }
 }

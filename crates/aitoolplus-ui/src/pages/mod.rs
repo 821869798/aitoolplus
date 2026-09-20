@@ -1,7 +1,9 @@
 //! Feature pages: tool pages (providers/common/prompts), MCP, Skills,
 //! Sessions, Settings.
 
+pub mod antigravity_page;
 pub mod mcp_page;
+pub mod session_detail;
 pub mod sessions_page;
 pub mod settings_page;
 pub mod skills_page;
@@ -23,6 +25,7 @@ pub enum Page {
     Mcp,
     Skills,
     Sessions,
+    Antigravity,
     Settings,
 }
 
@@ -33,6 +36,7 @@ impl Page {
             Page::Mcp => "mcp",
             Page::Skills => "skills",
             Page::Sessions => "sessions",
+            Page::Antigravity => "antigravity",
             Page::Settings => "settings",
         }
     }
@@ -47,10 +51,21 @@ pub enum ToolTab {
     Runtime,
     /// Pi extension management (packages + local .ts).
     Extensions,
-    /// Claude Code/Grok plugin management.
+    /// Claude Code/Codex/Grok plugin management.
     Plugins,
+    /// Claude Code/Codex/Grok marketplace discovery.
+    Marketplace,
     /// OpenCode companion profiles (OpenAgent / Slim).
     Addons,
+    /// Agent session management.
+    Sessions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PiDropdownField {
+    Provider,
+    Model,
+    Thinking,
 }
 
 /// All transient UI state owned by the workspace.
@@ -123,6 +138,16 @@ pub struct WorkspaceState {
     >,
     pub grok_plugins_loading: bool,
     pub claude_marketplaces_input: gpui::Entity<TextInput>,
+    pub claude_installed_search: gpui::Entity<TextInput>,
+    pub claude_market_search: gpui::Entity<TextInput>,
+    pub claude_market_page: usize,
+    pub claude_market_page_size: usize,
+    pub claude_market_scroll_handle: gpui::UniformListScrollHandle,
+    pub claude_marketplaces_expanded: bool,
+    pub claude_plugins_tab: ClaudePluginsTab,
+    pub claude_plugins:
+        Option<Result<aitoolplus_core::claude_plugins::ClaudePluginsData, String>>,
+    pub claude_plugins_loading: bool,
     pub pi_other_editor: Option<gpui::Entity<TextArea>>,
     pub runtime_files_cache: Option<(ToolId, Vec<(String, std::path::PathBuf, bool, String)>)>,
     pub runtime_edit_dialog: Option<(std::path::PathBuf, gpui::Entity<TextArea>)>,
@@ -130,6 +155,48 @@ pub struct WorkspaceState {
     pub mcp_search: gpui::Entity<TextInput>,
     pub skill_search: gpui::Entity<TextInput>,
     pub skill_detail_dialog: Option<SkillDetailState>,
+    pub expanded_prompts: std::collections::HashSet<String>,
+    pub pi_ms_initialized: bool,
+    pub pi_ms_provider_input: gpui::Entity<TextInput>,
+    pub pi_ms_model_input: gpui::Entity<TextInput>,
+    pub pi_ms_thinking_input: gpui::Entity<TextInput>,
+    pub pi_dropdown_open: Option<PiDropdownField>,
+    pub pi_dropdown_typing: bool,
+    pub pi_dropdown_search: gpui::Entity<TextInput>,
+    pub pi_dropdown_just_closed: Option<(PiDropdownField, std::time::Instant)>,
+    pub codex_plugins: Option<
+        Result<
+            aitoolplus_core::codex_plugins::CodexPluginData,
+            String,
+        >,
+    >,
+    pub codex_plugins_loading: bool,
+    pub codex_installed_search: gpui::Entity<TextInput>,
+    pub codex_market_search: gpui::Entity<TextInput>,
+    pub grok_installed_search: gpui::Entity<TextInput>,
+    pub grok_market_search: gpui::Entity<TextInput>,
+    pub agent_session_search: gpui::Entity<TextInput>,
+    pub agent_sessions: Option<(ToolId, Vec<aitoolplus_core::session::SessionMeta>)>,
+    pub agent_sessions_loading: bool,
+    pub antigravity_store: Option<aitoolplus_core::antigravity::AntigravityStore>,
+    pub antigravity_loading: bool,
+    pub antigravity_dialog: Option<antigravity_page::AntigravityDialogState>,
+    pub antigravity_refreshing_all: bool,
+    pub antigravity_search: gpui::Entity<TextInput>,
+    pub session_messages_cache: Option<(ToolId, String, std::sync::Arc<Vec<aitoolplus_core::session::SessionMessage>>)>,
+    pub session_actions_menu_open: bool,
+    pub session_expanded_blocks: std::collections::HashSet<String>,
+    pub session_expanded_thinkings: std::collections::HashSet<String>,
+    pub session_expanded_outputs: std::collections::HashSet<String>,
+    pub session_message_limit: usize,
+    pub session_list_state: Option<(ToolId, String, (bool, bool, bool, bool, bool, bool), gpui::ListState)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClaudePluginsTab {
+    #[default]
+    Installed,
+    Marketplaces,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,6 +373,7 @@ pub enum ConfirmAction {
     DeleteSession { tool: ToolId, id: String },
     DeleteMcp { id: String },
     DeleteSkill { id: String },
+    DeleteAntigravityAccount { id: String },
 }
 
 impl WorkspaceState {
@@ -320,9 +388,93 @@ impl WorkspaceState {
             cx.new(|cx| TextInput::new("来源，如 npm:context-mode", cx));
         let claude_marketplaces_input =
             cx.new(|cx| TextInput::new("来源，如 anthropics/claude-code", cx));
-        let prompt_search = cx.new(|cx| TextInput::new("搜索 Prompt…", cx));
+        let claude_installed_search = cx.new(|cx| TextInput::new("搜索已安装插件…", cx));
+        let claude_market_search = cx.new(|cx| TextInput::new("搜索市场插件…", cx));
+        let prompt_search = cx.new(|cx| TextInput::new("搜索全局提示词…", cx));
         let mcp_search = cx.new(|cx| TextInput::new("搜索 MCP 服务器…", cx));
         let skill_search = cx.new(|cx| TextInput::new("搜索 Skill 技能…", cx));
+        let pi_dropdown_search = cx.new(|cx| TextInput::new("输入搜索…", cx));
+        cx.subscribe(&pi_dropdown_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            match event {
+                crate::text_input::TextInputEvent::Escape => {
+                    this.ui.pi_dropdown_open = None;
+                    cx.notify();
+                }
+                _ => {
+                    cx.notify();
+                }
+            }
+        }).detach();
+        let pi_ms_provider_input = cx.new(|cx| {
+            let mut inp = TextInput::new("请选择或输入默认供应商…", cx);
+            inp.set_borderless(true);
+            inp
+        });
+        let pi_ms_model_input = cx.new(|cx| {
+            let mut inp = TextInput::new("请选择或输入默认模型…", cx);
+            inp.set_borderless(true);
+            inp
+        });
+        let pi_ms_thinking_input = cx.new(|cx| {
+            let mut inp = TextInput::new("请选择思考等级…", cx);
+            inp.set_borderless(true);
+            inp
+        });
+
+        cx.subscribe(&pi_ms_provider_input, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            match event {
+                crate::text_input::TextInputEvent::Change(text) => {
+                    this.ui.pi_dropdown_open = Some(PiDropdownField::Provider);
+                    this.ui.pi_dropdown_typing = true;
+                    this.ui.pi_ms_provider = if text.trim().is_empty() { None } else { Some(text.trim().to_string()) };
+                    cx.notify();
+                }
+                crate::text_input::TextInputEvent::Escape | crate::text_input::TextInputEvent::Enter => {
+                    this.ui.pi_dropdown_open = None;
+                    this.ui.pi_dropdown_typing = false;
+                    cx.notify();
+                }
+            }
+        }).detach();
+
+        cx.subscribe(&pi_ms_model_input, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            match event {
+                crate::text_input::TextInputEvent::Change(text) => {
+                    this.ui.pi_dropdown_open = Some(PiDropdownField::Model);
+                    this.ui.pi_dropdown_typing = true;
+                    this.ui.pi_ms_model = if text.trim().is_empty() { None } else { Some(text.trim().to_string()) };
+                    cx.notify();
+                }
+                crate::text_input::TextInputEvent::Escape | crate::text_input::TextInputEvent::Enter => {
+                    this.ui.pi_dropdown_open = None;
+                    this.ui.pi_dropdown_typing = false;
+                    cx.notify();
+                }
+            }
+        }).detach();
+
+        cx.subscribe(&pi_ms_thinking_input, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            match event {
+                crate::text_input::TextInputEvent::Change(text) => {
+                    this.ui.pi_dropdown_open = Some(PiDropdownField::Thinking);
+                    this.ui.pi_dropdown_typing = true;
+                    this.ui.pi_ms_thinking = if text.trim().is_empty() { None } else { Some(text.trim().to_string()) };
+                    cx.notify();
+                }
+                crate::text_input::TextInputEvent::Escape | crate::text_input::TextInputEvent::Enter => {
+                    this.ui.pi_dropdown_open = None;
+                    this.ui.pi_dropdown_typing = false;
+                    cx.notify();
+                }
+            }
+        }).detach();
+
+        let codex_installed_search = cx.new(|cx| TextInput::new("搜索已安装插件…", cx));
+        let codex_market_search = cx.new(|cx| TextInput::new("搜索市场插件…", cx));
+        let grok_installed_search = cx.new(|cx| TextInput::new("搜索已安装插件…", cx));
+        let grok_market_search = cx.new(|cx| TextInput::new("搜索市场插件…", cx));
+        let agent_session_search = cx.new(|cx| TextInput::new("搜索会话（标题、ID、项目路径、摘要）…", cx));
+        let antigravity_search = cx.new(|cx| TextInput::new("搜索账号（邮箱、备注）…", cx));
         Self {
             tool_tab: ToolTab::Providers,
             common_editors: Default::default(),
@@ -334,12 +486,19 @@ impl WorkspaceState {
             confirm: None,
             settings_tab: SettingsTab::General,
             skills_tool_filter: None,
-            sessions_tool: ToolId::ClaudeCode,
+            sessions_tool: std::env::var("AITOOLPLUS_SESSIONS_TOOL")
+                .ok()
+                .and_then(|k| ToolId::from_key(&k))
+                .unwrap_or(ToolId::ClaudeCode),
             session_search,
             toast: None,
             mcp_discovered: false,
             skills_discovered: false,
             rename_dialog: None,
+            pi_ms_initialized: false,
+            pi_ms_provider_input,
+            pi_ms_model_input,
+            pi_ms_thinking_input,
             pi_ms_provider: None,
             pi_ms_model: None,
             pi_ms_thinking: None,
@@ -366,6 +525,15 @@ impl WorkspaceState {
             grok_plugins: None,
             grok_plugins_loading: false,
             claude_marketplaces_input,
+            claude_installed_search,
+            claude_market_search,
+            claude_market_page: 0,
+            claude_market_page_size: 20,
+            claude_market_scroll_handle: gpui::UniformListScrollHandle::new(),
+            claude_marketplaces_expanded: false,
+            claude_plugins_tab: ClaudePluginsTab::Installed,
+            claude_plugins: None,
+            claude_plugins_loading: false,
             pi_other_editor: None,
             runtime_files_cache: None,
             runtime_edit_dialog: None,
@@ -373,6 +541,32 @@ impl WorkspaceState {
             mcp_search,
             skill_search,
             skill_detail_dialog: None,
+            expanded_prompts: std::collections::HashSet::new(),
+            pi_dropdown_open: None,
+            pi_dropdown_typing: false,
+            pi_dropdown_search,
+            pi_dropdown_just_closed: None,
+            codex_plugins: None,
+            codex_plugins_loading: false,
+            codex_installed_search,
+            codex_market_search,
+            grok_installed_search,
+            grok_market_search,
+            agent_session_search,
+            agent_sessions: None,
+            agent_sessions_loading: false,
+            antigravity_store: None,
+            antigravity_loading: false,
+            antigravity_dialog: None,
+            antigravity_refreshing_all: false,
+            antigravity_search,
+            session_messages_cache: None,
+            session_actions_menu_open: false,
+            session_expanded_blocks: std::collections::HashSet::new(),
+            session_expanded_thinkings: std::collections::HashSet::new(),
+            session_expanded_outputs: std::collections::HashSet::new(),
+            session_message_limit: 80,
+            session_list_state: None,
         }
     }
 
@@ -561,6 +755,18 @@ impl WorkspaceState {
         if let Page::Sessions = page {
             self.open_session = None;
         }
+        if let Page::Tool(tool) = page {
+            let valid_tab = match self.tool_tab {
+                ToolTab::Providers | ToolTab::Common | ToolTab::Prompts | ToolTab::Runtime | ToolTab::Sessions => true,
+                ToolTab::Extensions => matches!(tool, aitoolplus_core::tools::ToolId::Pi | aitoolplus_core::tools::ToolId::OhMyPi),
+                ToolTab::Plugins => matches!(tool, aitoolplus_core::tools::ToolId::ClaudeCode | aitoolplus_core::tools::ToolId::Codex | aitoolplus_core::tools::ToolId::Grok),
+                ToolTab::Marketplace => matches!(tool, aitoolplus_core::tools::ToolId::ClaudeCode | aitoolplus_core::tools::ToolId::Codex | aitoolplus_core::tools::ToolId::Grok),
+                ToolTab::Addons => tool == aitoolplus_core::tools::ToolId::OpenCode,
+            };
+            if !valid_tab {
+                self.tool_tab = ToolTab::Providers;
+            }
+        }
     }
 
     pub fn modal_active(&self) -> bool {
@@ -571,6 +777,7 @@ impl WorkspaceState {
             || self.rename_dialog.is_some()
             || self.runtime_edit_dialog.is_some()
             || self.skill_detail_dialog.is_some()
+            || self.antigravity_dialog.is_some()
     }
 
     /// Resolve or lazily create the common-config editor for a tool.
@@ -636,6 +843,10 @@ pub fn modal_scaffold_sized(
     on_close: impl Fn(&mut Workspace, &ClickEvent, &mut Window, &mut Context<Workspace>) + 'static,
 ) -> gpui::AnyElement {
     let t = theme.clone();
+    let on_close = std::rc::Rc::new(on_close);
+    let on_close_backdrop = on_close.clone();
+    let on_close_button = on_close.clone();
+
     let backdrop = div()
         .id("modal-backdrop")
         .absolute()
@@ -646,7 +857,7 @@ pub fn modal_scaffold_sized(
         .flex()
         .items_center()
         .justify_center()
-        .on_click(cx.listener(on_close));
+        .on_click(cx.listener(move |ws, ev, window, cx| on_close_backdrop(ws, ev, window, cx)));
 
     let mut dialog = div()
         .id("modal-card")
@@ -697,12 +908,16 @@ pub fn modal_scaffold_sized(
                     true,
                     theme,
                     cx,
-                    |ws, _, _, cx| {
+                    move |ws, ev, window, cx| {
                         ws.ui.provider_dialog = None;
                         ws.ui.prompt_dialog = None;
                         ws.ui.mcp_dialog = None;
                         ws.ui.confirm = None;
                         ws.ui.rename_dialog = None;
+                        ws.ui.antigravity_dialog = None;
+                        ws.ui.skill_detail_dialog = None;
+                        ws.ui.runtime_edit_dialog = None;
+                        on_close_button(ws, ev, window, cx);
                         cx.notify();
                     },
                 )),
@@ -805,6 +1020,10 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
             if let Some(meta) = sessions.iter().find(|s| s.session_id == id) {
                 let _ = aitoolplus_core::session::delete_session(meta);
                 aitoolplus_core::session::invalidate_cache();
+                ws.ui.agent_sessions = None;
+                if ws.ui.open_session.as_ref().map(|(t, sid)| *t == tool && sid == &id).unwrap_or(false) {
+                    ws.ui.open_session = None;
+                }
                 let msg = i.t("会话已删除", "session deleted").to_string();
                 ws.ui.toast(msg, false);
             }
@@ -835,6 +1054,16 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 ws.persist_store();
                 let msg = i.t("Skill 已卸载删除", "skill deleted").to_string();
                 ws.ui.toast(msg, false);
+            }
+        }
+        ConfirmAction::DeleteAntigravityAccount { id } => {
+            if let Some(mut store) = ws.ui.antigravity_store.clone() {
+                if store.remove_account(&id) {
+                    let _ = aitoolplus_core::antigravity::save_store(&ws.paths.app_data, &store);
+                    ws.ui.antigravity_store = Some(store);
+                    let msg = i.t("Antigravity 账号已删除", "Account deleted").to_string();
+                    ws.ui.toast(msg, false);
+                }
             }
         }
     }
@@ -880,6 +1109,7 @@ pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
         Page::Mcp => mcp_page::render_mcp_page(ws, cx),
         Page::Skills => skills_page::render_skills_page(ws, cx),
         Page::Sessions => sessions_page::render_sessions_page(ws, cx),
+        Page::Antigravity => antigravity_page::render_antigravity_page(ws, cx),
         Page::Settings => settings_page::render_settings_page(ws, cx),
     }
 }

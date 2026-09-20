@@ -75,6 +75,10 @@ impl Workspace {
 
         nav_list = nav_list.child(self.sidebar_group(i.t("编码工具", "Coding Tools")));
 
+        let mut ag_rendered = false;
+        let show_ag = self.settings.visible_tools.is_empty()
+            || self.settings.visible_tools.iter().any(|key| key == "antigravity");
+
         for tool in aitoolplus_core::ToolId::ALL {
             if !self.settings.visible_tools.is_empty()
                 && !self
@@ -87,12 +91,23 @@ impl Workspace {
             }
             let page = Page::Tool(tool);
             nav_list = nav_list.child(self.sidebar_item(cx, page));
+
+            // Right after Codex, show Antigravity if visible
+            if tool == aitoolplus_core::ToolId::Codex && show_ag {
+                nav_list = nav_list.child(self.sidebar_item(cx, Page::Antigravity));
+                ag_rendered = true;
+            }
+        }
+
+        // If Codex was hidden or not rendered, but Antigravity is enabled, render it in Coding Tools
+        if show_ag && !ag_rendered {
+            nav_list = nav_list.child(self.sidebar_item(cx, Page::Antigravity));
         }
 
         nav_list = nav_list.child(self.sidebar_group(i.t("共享资源", "Shared Resources")));
+        nav_list = nav_list.child(self.sidebar_item(cx, Page::Sessions));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Mcp));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Skills));
-        nav_list = nav_list.child(self.sidebar_item(cx, Page::Sessions));
 
         // 3. Docked Settings at Bottom
         let footer = div()
@@ -153,6 +168,7 @@ impl Workspace {
             Page::Mcp => (crate::icons::MCP_SVG, i.t("MCP 服务器", "MCP Servers")),
             Page::Skills => (crate::icons::SPARKLES_SVG, i.t("Skills 技能", "Skills")),
             Page::Sessions => (crate::icons::HISTORY_SVG, i.t("会话管理", "Sessions")),
+            Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("Antigravity 账号", "Antigravity")),
             Page::Settings => (crate::icons::SETTINGS_SVG, i.t("系统设置", "Settings")),
         };
 
@@ -227,6 +243,10 @@ impl Workspace {
             Page::Sessions => (
                 i.t("会话管理", "Sessions"),
                 i.t("浏览、恢复与导出各 CLI 工具的历史对话会话", "Browse and export CLI chat sessions"),
+            ),
+            Page::Antigravity => (
+                i.t("Antigravity 账号管理", "Antigravity Accounts"),
+                i.t("Google / Antigravity 账号配额监控与一键凭据无缝切换", "Account quota inspection and seamless credential switching"),
             ),
             Page::Settings => (
                 i.t("系统设置", "Settings"),

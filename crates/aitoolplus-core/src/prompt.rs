@@ -96,6 +96,12 @@ pub fn applied(prompts: &[PromptRecord]) -> Option<&PromptRecord> {
     prompts.iter().find(|p| p.is_applied)
 }
 
+pub fn unapply_all(prompts: &mut [PromptRecord]) {
+    for p in prompts.iter_mut() {
+        p.is_applied = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +144,14 @@ mod tests {
         update(&mut v, "1", |p| p.name = "renamed".into()).unwrap();
         assert_eq!(v[0].name, "renamed");
         assert_ne!(v[0].updated_at, before);
+    }
+
+    #[test]
+    fn unapply_all_clears_all_applied_flags() {
+        let mut v = recs();
+        select(&mut v, "2");
+        assert!(applied(&v).is_some());
+        unapply_all(&mut v);
+        assert!(applied(&v).is_none());
     }
 }

@@ -19,6 +19,11 @@ fn main() {
     let _ = std::fs::create_dir_all(&paths.app_data);
     log::init(&paths.app_data.join("aitoolplus.log"));
 
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("PANIC: {info}");
+        eprintln!("PANIC: {info}");
+    }));
+
     let incoming = std::env::args()
         .skip(1)
         .find(|argument| argument.starts_with("aitoolbox://"));

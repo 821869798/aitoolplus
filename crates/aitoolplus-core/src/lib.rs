@@ -5,11 +5,13 @@
 //! file IO happens on KB-sized JSON/TOML files, so synchronous reads are fine.
 
 pub mod adapters;
+pub mod antigravity;
 pub mod api_hub;
 pub mod backup;
 pub mod claude_desktop;
 pub mod claude_plugins;
 pub mod cli_launch;
+pub mod codex_plugins;
 pub mod config;
 pub mod deeplink;
 pub mod dsh;
@@ -38,6 +40,7 @@ pub mod tools;
 pub mod updater;
 pub mod webdav;
 
+pub use antigravity::{AntigravityAccount, AntigravityQuota, AntigravityStore, ModelQuotaInfo};
 pub use api_hub::{FetchedModel, ModelsFetchResult};
 pub use claude_desktop::ClaudeDesktopPaths;
 pub use claude_plugins::{InstalledPlugin, KnownMarketplace, MarketplacePlugin};

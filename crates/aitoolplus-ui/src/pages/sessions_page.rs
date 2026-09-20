@@ -6,7 +6,7 @@ use gpui::{Context, IntoElement, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::components::{
-    BadgeKind, ButtonVariant, badge, button_l, input_container,
+    ButtonVariant, button_l, button_with_icon_l, input_container,
 };
 use crate::text_input::TextInput;
 use crate::workspace::Workspace;
@@ -15,6 +15,14 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     let t = ws.theme.clone();
     let i = ws.i18n;
     let tool = ws.ui.sessions_tool;
+
+    // If a session is open, render the full, rich session detail view
+    if let Some((open_tool, ref open_sid)) = ws.ui.open_session {
+        let sessions = session::cached_scan(&ws.paths, open_tool, session::DEFAULT_SESSION_PATH_LIMIT);
+        if let Some(meta) = sessions.iter().find(|s| &s.session_id == open_sid) {
+            return super::session_detail::render_session_detail(open_tool, meta, ws, cx);
+        }
+    }
 
     // tool selector
     let mut tools_row = div()
@@ -46,43 +54,6 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         ));
     }
 
-    let filter = ws.settings.session_filters.clone();
-    let mut filter_row = div().flex().flex_wrap().gap(px(6.0));
-    for (key, label, enabled) in [
-        ("user", i.t("用户", "User"), filter.user),
-        ("assistant", i.t("助手", "Assistant"), filter.assistant),
-        ("text", i.t("文本", "Text"), filter.text),
-        ("thinking", i.t("思考", "Thinking"), filter.thinking),
-        ("tool_call", i.t("工具调用", "Tool Calls"), filter.tool_call),
-        ("command", i.t("命令", "Commands"), filter.command),
-    ] {
-        filter_row = filter_row.child(button_l(
-            gpui::SharedString::from(format!("session-filter-{key}")),
-            label,
-            if enabled {
-                ButtonVariant::Primary
-            } else {
-                ButtonVariant::Secondary
-            },
-            &t,
-            cx,
-            move |ws, _, _, cx| {
-                let filters = &mut ws.settings.session_filters;
-                match key {
-                    "user" => filters.user = !filters.user,
-                    "assistant" => filters.assistant = !filters.assistant,
-                    "text" => filters.text = !filters.text,
-                    "thinking" => filters.thinking = !filters.thinking,
-                    "tool_call" => filters.tool_call = !filters.tool_call,
-                    "command" => filters.command = !filters.command,
-                    _ => {}
-                }
-                (ws.callbacks.save_settings)(&ws.settings);
-                cx.notify();
-            },
-        ));
-    }
-
     let search = ws.ui.session_search.clone();
     let query = search.read(cx).text().to_lowercase();
 
@@ -98,6 +69,9 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                 || s.summary
                     .as_deref()
                     .is_some_and(|x| x.to_lowercase().contains(&query))
+                || s.project_dir
+                    .as_deref()
+                    .is_some_and(|x| x.to_lowercase().contains(&query))
         })
         .collect();
 
@@ -107,13 +81,31 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         .w_full()
         .min_w(px(0.0))
         .gap(px(12.0))
-        .child(tools_row)
-        .child(filter_row)
+        .child(tools_row);
+
+    let toolbar = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(10.0))
         .child(
             div()
                 .w(px(320.0))
                 .child(input_container(&t, search)),
+        )
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(t.text_muted)
+                .child(format!(
+                    "{} {} {}",
+                    i.t("共", "Total"),
+                    filtered.len(),
+                    i.t("个会话", "sessions")
+                )),
         );
+
+    section = section.child(toolbar);
 
     if filtered.is_empty() {
         section = section.child(crate::components::empty_state_svg(
@@ -126,13 +118,9 @@ pub fn render_sessions_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
             ),
         ));
     } else {
-        let mut list = div().flex().flex_col().gap(px(6.0));
+        let mut list = div().flex().flex_col().gap(px(12.0));
         for s in &filtered {
             list = list.child(session_row(s, tool, ws, cx));
-            // expanded message view
-            if ws.ui.open_session == Some((tool, s.session_id.clone())) {
-                list = list.child(expanded_messages(s, ws, cx));
-            }
         }
         section = section.child(list);
     }
@@ -145,6 +133,16 @@ fn fmt_time(ms: Option<i64>) -> String {
         chrono::DateTime::from_timestamp_millis(m).map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
     })
     .unwrap_or_else(|| "—".into())
+}
+
+fn short_session_id(sid: &str) -> String {
+    if sid.len() <= 12 {
+        sid.to_string()
+    } else {
+        let prefix: String = sid.chars().take(8).collect();
+        let suffix: String = sid.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("{prefix}...{suffix}")
+    }
 }
 
 fn session_row(
@@ -166,19 +164,27 @@ fn session_row(
         .or_else(|| s.summary.clone())
         .unwrap_or_else(|| s.session_id.clone());
 
+    let display_time = fmt_time(s.last_active_at.or(s.created_at));
+    let short_hash = short_session_id(&sid);
+
+    let sid_for_click = sid.clone();
+
     let row = div()
         .id(gpui::SharedString::from(format!("sess-{}", s.session_id)))
         .flex()
-        .flex_col()
+        .items_center()
+        .justify_between()
         .w_full()
         .min_w(px(0.0))
-        .gap(px(10.0))
-        .p(px(14.0))
-        .rounded(px(8.0))
+        .gap(px(12.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .rounded(px(12.0))
         .bg(t.card_bg)
         .border_1()
         .border_color(if is_open { t.accent } else { t.card_border })
         .shadow_xs()
+        .cursor_pointer()
         .hover(move |h| {
             h.bg(t.card_hover).border_color(if is_open {
                 t.accent
@@ -186,69 +192,112 @@ fn session_row(
                 t.card_border_hover
             })
         })
+        .on_click(cx.listener(move |ws, _, _, cx| {
+            ws.ui.open_session = Some((tool, sid_for_click.clone()));
+            cx.notify();
+        }))
+        // Left main info: compact 2 rows
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
-                .w_full()
+                .gap(px(6.0))
+                .flex_1()
                 .min_w(px(0.0))
                 .overflow_hidden()
+                // Row 1: Title
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(display_title),
+                )
+                // Row 2: Meta (Time, Hash, Directory)
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
+                        .gap(px(12.0))
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        // Time with Clock icon
                         .child(
                             div()
-                                .text_size(px(14.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(t.text_primary)
-                                .overflow_hidden()
-                                .child(display_title),
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .flex_shrink_0()
+                                .child(crate::icons::svg_icon(crate::icons::CLOCK_SVG, px(12.0), t.text_muted))
+                                .child(display_time),
                         )
-                        .child(badge(&t, fmt_time(s.last_active_at), BadgeKind::Accent)),
-                )
-                .children(s.project_dir.clone().map(|d| {
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(t.text_muted)
-                        .overflow_hidden()
-                        .child(d)
-                        .into_any_element()
-                })),
+                        // Hash (short session id)
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(2.0))
+                                .flex_shrink_0()
+                                .text_color(t.text_muted)
+                                .child(short_hash),
+                        )
+                        // Project Directory (if available)
+                        .children(s.project_dir.as_ref().map(|dir| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0))
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .text_color(t.text_muted)
+                                .child(crate::icons::svg_icon(crate::icons::FOLDER_SVG, px(12.0), t.text_muted))
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(dir.clone()),
+                                )
+                                .into_any_element()
+                        })),
+                ),
         )
+        // Right actions: 恢复命令, 重命名, 删除
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
-                .flex_wrap()
-                .child(button_l(
-                    gpui::SharedString::from(format!("sess-view-{}", sid)),
-                    if is_open {
-                        i.t("收起", "Collapse")
-                    } else {
-                        i.t("查看", "View")
-                    },
+                .gap(px(8.0))
+                .flex_shrink_0()
+                .child(button_with_icon_l(
+                    gpui::SharedString::from(format!("sess-resume-{}", sid)),
+                    crate::icons::TERMINAL_SVG,
+                    i.t("恢复命令", "Resume"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
                     {
-                        let sid = sid.clone();
-                        let open_target = if is_open {
-                            None
-                        } else {
-                            Some((tool, sid.clone()))
-                        };
+                        let cmd_opt = meta.resume_command.clone();
                         move |ws, _, _, cx| {
-                            ws.ui.open_session = open_target.clone();
+                            cx.stop_propagation();
+                            if let Some(cmd) = cmd_opt.as_ref() {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(cmd.clone()));
+                                ws.ui.toast(ws.i18n.t("已复制恢复命令", "Copied resume command").to_string(), false);
+                            } else {
+                                ws.ui.toast(ws.i18n.t("该会话暂不支持恢复命令", "Resume not supported for this session").to_string(), true);
+                            }
                             cx.notify();
                         }
                     },
                 ))
-                .child(button_l(
+                .child(button_with_icon_l(
                     gpui::SharedString::from(format!("sess-rename-{}", sid)),
+                    crate::icons::PENCIL_SVG,
                     i.t("重命名", "Rename"),
                     ButtonVariant::Secondary,
                     &t,
@@ -256,6 +305,7 @@ fn session_row(
                     {
                         let meta_for_rename = meta.clone();
                         move |ws, _, window, cx| {
+                            cx.stop_propagation();
                             let current = session::sidecar_title(&meta_for_rename)
                                 .or_else(|| meta_for_rename.title.clone())
                                 .unwrap_or_default();
@@ -271,129 +321,9 @@ fn session_row(
                         }
                     },
                 ))
-                .child(button_l(
-                    gpui::SharedString::from(format!("sess-export-json-{}", sid)),
-                    i.t("导出 JSON", "Export JSON"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    {
-                        let meta_for_export = meta.clone();
-                        move |ws, _, _, cx| {
-                            match session::export_session(&ws.paths, &meta_for_export) {
-                                Ok(json) => {
-                                    let out = ws.paths.app_data.join(format!(
-                                        "session-{}.json",
-                                        meta_for_export.session_id
-                                    ));
-                                    match std::fs::write(&out, json) {
-                                        Ok(()) => {
-                                            let msg = ws
-                                                .i18n
-                                                .t(
-                                                    &format!("已导出 JSON 到 {}", out.display()),
-                                                    &format!("exported JSON to {}", out.display()),
-                                                )
-                                                .to_string();
-                                            ws.ui.toast(msg, false);
-                                        }
-                                        Err(e) => {
-                                            let msg = format!("export failed: {e}");
-                                            ws.ui.toast(msg, true);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let msg = format!("export failed: {e}");
-                                    ws.ui.toast(msg, true);
-                                }
-                            }
-                            cx.notify();
-                        }
-                    },
-                ))
-                .child(button_l(
-                    gpui::SharedString::from(format!("sess-export-md-{}", sid)),
-                    i.t("导出 MD", "Export MD"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    {
-                        let meta_for_export = meta.clone();
-                        move |ws, _, _, cx| {
-                            match session::export_session_markdown(&ws.paths, &meta_for_export) {
-                                Ok(md) => {
-                                    let out = ws.paths.app_data.join(format!(
-                                        "session-{}.md",
-                                        meta_for_export.session_id
-                                    ));
-                                    match std::fs::write(&out, md) {
-                                        Ok(()) => {
-                                            let msg = ws
-                                                .i18n
-                                                .t(
-                                                    &format!("已导出 Markdown 到 {}", out.display()),
-                                                    &format!("exported Markdown to {}", out.display()),
-                                                )
-                                                .to_string();
-                                            ws.ui.toast(msg, false);
-                                        }
-                                        Err(e) => {
-                                            let msg = format!("export failed: {e}");
-                                            ws.ui.toast(msg, true);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let msg = format!("export failed: {e}");
-                                    ws.ui.toast(msg, true);
-                                }
-                            }
-                            cx.notify();
-                        }
-                    },
-                ))
-                .child(button_l(
-                    gpui::SharedString::from(format!("sess-reveal-{}", sid)),
-                    i.t("定位", "Reveal"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    {
-                        let path_for_reveal = source_path.clone();
-                        move |ws, _, _, cx| {
-                            let path = std::path::PathBuf::from(&path_for_reveal);
-                            if path.exists() {
-                                let _ = std::process::Command::new("explorer")
-                                    .arg(format!("/select,{}", path.display()))
-                                    .spawn();
-                            } else {
-                                ws.ui.toast(
-                                    ws.i18n.t("源文件路径不存在", "source file not found").to_string(),
-                                    true,
-                                );
-                                cx.notify();
-                            }
-                        }
-                    },
-                ))
-                .child(button_l(
-                    gpui::SharedString::from(format!("sess-copy-id-{}", sid)),
-                    i.t("复制 ID", "Copy ID"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    {
-                        let sid_copy = sid.clone();
-                        move |ws, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(sid_copy.clone()));
-                            ws.ui.toast(ws.i18n.t("已复制会话 ID", "Copied session ID").to_string(), false);
-                            cx.notify();
-                        }
-                    },
-                ))
-                .child(button_l(
+                .child(button_with_icon_l(
                     gpui::SharedString::from(format!("sess-del-{}", sid)),
+                    crate::icons::TRASH_SVG,
                     i.t("删除", "Delete"),
                     ButtonVariant::Danger,
                     &t,
@@ -402,6 +332,7 @@ fn session_row(
                         let id = sid.clone();
                         let path = source_path.clone();
                         move |ws, _, _, cx| {
+                            cx.stop_propagation();
                             ws.ui.confirm = Some(super::ConfirmState {
                                 title: ws.i18n.t("删除会话", "Delete Session").to_string(),
                                 message: ws
@@ -422,145 +353,6 @@ fn session_row(
                 )),
         );
     row.into_any_element()
-}
-
-fn expanded_messages(
-    s: &SessionMeta,
-    ws: &mut Workspace,
-    cx: &mut Context<Workspace>,
-) -> gpui::AnyElement {
-    let t = ws.theme.clone();
-    let i = ws.i18n;
-    let messages = session::load_messages(&ws.paths, s).unwrap_or_default();
-    let mut msgs = div()
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .pl(px(20.0))
-        .pr(px(6.0))
-        .pt(px(4.0))
-        .pb(px(8.0));
-    let filters = &ws.settings.session_filters;
-    let filtered_msgs: Vec<_> = messages
-        .into_iter()
-        .filter(|message| {
-            (message.role != "user" || filters.user)
-                && (message.role != "assistant" || filters.assistant)
-                && (message.message_type.as_deref() != Some("thinking") || filters.thinking)
-                && (message.message_type.as_deref() != Some("tool_call") || filters.tool_call)
-                && (message.message_type.as_deref() != Some("command") || filters.command)
-                && (!message.blocks.is_empty() || filters.text)
-        })
-        .take(200)
-        .collect();
-
-    if filtered_msgs.is_empty() {
-        msgs = msgs.child(
-            div()
-                .p(px(12.0))
-                .rounded(px(6.0))
-                .bg(t.input_bg)
-                .text_size(px(12.0))
-                .text_color(t.text_muted)
-                .child(i.t("（当前过滤条件下无消息）", "(No messages match the current filters)")),
-        );
-    } else {
-        for (idx, m) in filtered_msgs.into_iter().enumerate() {
-            let is_user = m.role == "user";
-            let is_thinking = m.message_type.as_deref() == Some("thinking");
-            let is_tool = m.message_type.as_deref() == Some("tool_call");
-            let is_command = m.message_type.as_deref() == Some("command");
-            let role_display = if is_user {
-                i.t("👤 用户", "👤 User")
-            } else if is_thinking {
-                i.t("🧠 思考", "🧠 Thinking")
-            } else if is_tool {
-                i.t("🔧 工具", "🔧 Tool")
-            } else if is_command {
-                i.t("💻 终端", "💻 Command")
-            } else {
-                i.t("🤖 助手", "🤖 Assistant")
-            };
-
-            let content_text = m.content.clone();
-            let mut bubble = div()
-                .id(gpui::SharedString::from(format!("msg-{}-{}", s.session_id, idx)))
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .p(px(10.0))
-                .rounded(px(8.0))
-                .border_1()
-                .when(is_user, |b| {
-                    b.bg(t.accent_subtle).border_color(t.accent)
-                })
-                .when(is_thinking, |b| {
-                    b.bg(t.card_bg).border_color(crate::rgba_const(0x8b5cf666))
-                })
-                .when(is_tool || is_command, |b| {
-                    b.bg(t.card_bg).border_color(crate::rgba_const(0x3b82f666))
-                })
-                .when(!is_user && !is_thinking && !is_tool && !is_command, |b| {
-                    b.bg(t.card_bg).border_color(t.card_border)
-                });
-
-            let header = div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(badge(
-                            &t,
-                            role_display,
-                            if is_user {
-                                BadgeKind::Accent
-                            } else {
-                                BadgeKind::Neutral
-                            },
-                        ))
-                        .children(m.model.map(|mod_name| badge(&t, mod_name, BadgeKind::Neutral)))
-                        .children(m.ts.map(|ts| {
-                            div()
-                                .text_size(px(10.5))
-                                .text_color(t.text_muted)
-                                .child(fmt_time(Some(ts)))
-                        })),
-                )
-                .child(button_l(
-                    gpui::SharedString::from(format!("msg-copy-{}-{}", s.session_id, idx)),
-                    i.t("复制", "Copy"),
-                    ButtonVariant::Ghost,
-                    &t,
-                    cx,
-                    move |ws, _, _, cx| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(content_text.clone()));
-                        ws.ui.toast(
-                            ws.i18n.t("已复制消息内容", "Copied message content").to_string(),
-                            false,
-                        );
-                        cx.notify();
-                    },
-                ));
-
-            bubble = bubble.child(header);
-
-            bubble = bubble.child(
-                div()
-                    .text_size(px(12.0))
-                    .line_height(px(18.0))
-                    .text_color(t.text_primary)
-                    .child(m.content.chars().take(1200).collect::<String>()),
-            );
-
-            msgs = msgs.child(bubble);
-        }
-    }
-    msgs.into_any_element()
 }
 
 fn i18n_placeholder() -> &'static str {

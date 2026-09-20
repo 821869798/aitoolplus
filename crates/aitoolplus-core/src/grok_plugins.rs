@@ -206,6 +206,15 @@ pub fn enable(paths: &Paths, id: &str, enabled: bool) -> Result<(), String> {
     .map(|_| ())
 }
 
+pub fn set_all_enabled(paths: &Paths, enabled: bool) -> Result<usize, String> {
+    let installed = list_installed(paths)?;
+    let count = installed.len();
+    for p in installed {
+        let _ = enable(paths, &p.plugin_id, enabled);
+    }
+    Ok(count)
+}
+
 pub fn uninstall(paths: &Paths, id: &str) -> Result<(), String> {
     run(paths, &["plugin", "uninstall", id, "--confirm"]).map(|_| ())
 }

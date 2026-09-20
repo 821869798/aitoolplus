@@ -325,10 +325,12 @@ impl Default for AppSettings {
 }
 
 fn default_visible_tools() -> Vec<String> {
-    crate::tools::ToolId::ALL
+    let mut list: Vec<String> = crate::tools::ToolId::ALL
         .into_iter()
         .map(|tool| tool.key().to_string())
-        .collect()
+        .collect();
+    list.push("antigravity".into());
+    list
 }
 
 fn default_true() -> bool {

@@ -28,6 +28,7 @@ pub struct TextInput {
     pub last_bounds: Option<Bounds<Pixels>>,
     pub is_secret: bool,
     pub read_only: bool,
+    pub borderless: bool,
     pub cursor_visible: bool,
     pub drag_anchor: Option<usize>,
     _blink_task: Option<gpui::Task<()>>,
@@ -50,6 +51,7 @@ impl TextInput {
             last_bounds: None,
             is_secret: false,
             read_only: false,
+            borderless: false,
             cursor_visible: false,
             drag_anchor: None,
             _blink_task: None,
@@ -74,6 +76,10 @@ impl TextInput {
         cx.notify();
     }
 
+    pub fn set_borderless(&mut self, borderless: bool) {
+        self.borderless = borderless;
+    }
+
     /// Sets the text and emits a [`TextInputEvent::Change`] event.
     ///
     /// Use this for programmatic user-like inputs. To synchronize UI with
@@ -96,6 +102,14 @@ impl TextInput {
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<String>, cx: &mut Context<Self>) {
         self.placeholder = placeholder.into();
+        cx.notify();
+    }
+
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = 0..self.content.len();
+        self.selection_reversed = false;
+        self.drag_anchor = Some(0);
+        self.reset_blink(cx);
         cx.notify();
     }
 
@@ -670,7 +684,7 @@ impl gpui::Render for TextInput {
             .flex()
             .items_center()
             .rounded(px(6.0))
-            .when(is_focused, |d| {
+            .when(is_focused && !self.borderless, |d| {
                 d.border_1().border_color(rgba(0x3b82f6cc))
             })
             .on_mouse_down(

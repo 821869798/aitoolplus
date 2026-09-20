@@ -32,8 +32,12 @@ async-channel = "2"
 rfd = "0.15"
 unicode-segmentation = "1.12"
 
+[profile.dev.package.aitoolplus-ui]
+opt-level = 1
+
 [profile.release]
 opt-level = "s"
 lto = "thin"
 codegen-units = 4
 strip = true
+

@@ -102,14 +102,14 @@ pub fn import_runtime(paths: &Paths, providers: &mut Vec<ProviderRecord>) -> Res
             obj.insert("_providerKey".into(), Value::String(key.clone()));
         }
 
+        let is_enabled = model_map.contains_key(&key);
         let stable_id = format!("pi:{key}");
         let existing = providers.iter_mut().find(|p| p.id == stable_id);
         if let Some(record) = existing {
             record.name = name;
             record.settings_config =
                 serde_json::to_string_pretty(&merged).unwrap_or_else(|_| "{}".into());
-            record.is_applied =
-                settings.get("defaultProvider").and_then(Value::as_str) == Some(key.as_str());
+            record.is_applied = is_enabled;
             record.touch();
             continue;
         }
@@ -118,8 +118,7 @@ pub fn import_runtime(paths: &Paths, providers: &mut Vec<ProviderRecord>) -> Res
         let mut record = ProviderRecord::new(name, pi_category(model, credential));
         record.id = stable_id;
         record.sort_index = next;
-        record.is_applied =
-            settings.get("defaultProvider").and_then(Value::as_str) == Some(key.as_str());
+        record.is_applied = is_enabled;
         record.settings_config =
             serde_json::to_string_pretty(&merged).unwrap_or_else(|_| "{}".into());
         record.notes = Some(format!("Pi runtime provider: {key}"));
@@ -143,9 +142,13 @@ fn pi_category(model: Option<&Value>, credential: Option<&Value>) -> String {
     "other".into()
 }
 
-/// Apply a provider record back to Pi's runtime files, preserving all
-/// unknown top-level and sibling provider fields.
-pub fn apply_provider(paths: &Paths, provider: &ProviderRecord) -> Result<Vec<PathBuf>, String> {
+/// Enable or disable a provider record in Pi's runtime models.json / auth.json.
+/// In Pi, multiple providers can be enabled simultaneously (present in models.json).
+pub fn set_provider_enabled(
+    paths: &Paths,
+    provider: &ProviderRecord,
+    enabled: bool,
+) -> Result<Vec<PathBuf>, String> {
     let runtime = PiRuntimePaths::from_paths(paths);
     let key = provider
         .id
@@ -153,11 +156,6 @@ pub fn apply_provider(paths: &Paths, provider: &ProviderRecord) -> Result<Vec<Pa
         .ok_or_else(|| "Pi provider record has no runtime key".to_string())?;
     let incoming: Value = serde_json::from_str(&provider.settings_config)
         .map_err(|e| format!("invalid Pi provider JSON: {e}"))?;
-    let mut model_provider = incoming.clone();
-    if let Some(obj) = model_provider.as_object_mut() {
-        obj.remove("_auth");
-        obj.remove("_providerKey");
-    }
 
     let mut models = read_object(&runtime.models)?;
     let model_root = models
@@ -168,34 +166,53 @@ pub fn apply_provider(paths: &Paths, provider: &ProviderRecord) -> Result<Vec<Pa
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or_else(|| "Pi models.json providers must be an object".to_string())?;
-    providers.insert(key.to_string(), model_provider);
-    save_json_atomic(&runtime.models, &models).map_err(|e| e.to_string())?;
 
-    let mut settings = read_object(&runtime.settings)?;
-    if let Some(obj) = settings.as_object_mut() {
-        obj.insert("defaultProvider".into(), Value::String(key.to_string()));
-        if let Some(model) = incoming
-            .get("models")
-            .and_then(Value::as_array)
-            .and_then(|models| models.first())
-            .and_then(|model| model.get("id"))
-            .cloned()
-        {
-            obj.insert("defaultModel".into(), model);
+    let mut files = vec![runtime.models.clone()];
+
+    if enabled {
+        let mut model_provider = incoming.clone();
+        if let Some(obj) = model_provider.as_object_mut() {
+            obj.remove("_auth");
+            obj.remove("_providerKey");
+        }
+        providers.insert(key.to_string(), model_provider);
+
+        if let Some(credential) = incoming.get("_auth") {
+            let mut auth = read_object(&runtime.auth)?;
+            auth.as_object_mut()
+                .ok_or_else(|| "Pi auth.json must be an object".to_string())?
+                .insert(key.to_string(), credential.clone());
+            save_json_atomic(&runtime.auth, &auth).map_err(|e| e.to_string())?;
+            files.push(runtime.auth.clone());
+        }
+    } else {
+        providers.remove(key);
+        let mut auth = read_object(&runtime.auth)?;
+        if let Some(auth_obj) = auth.as_object_mut() {
+            if auth_obj.remove(key).is_some() {
+                save_json_atomic(&runtime.auth, &auth).map_err(|e| e.to_string())?;
+                files.push(runtime.auth.clone());
+            }
+        }
+        let mut settings = read_object(&runtime.settings)?;
+        if let Some(obj) = settings.as_object_mut() {
+            if obj.get("defaultProvider").and_then(Value::as_str) == Some(key) {
+                obj.remove("defaultProvider");
+                obj.remove("defaultModel");
+                save_json_atomic(&runtime.settings, &settings).map_err(|e| e.to_string())?;
+                files.push(runtime.settings.clone());
+            }
         }
     }
-    save_json_atomic(&runtime.settings, &settings).map_err(|e| e.to_string())?;
 
-    let mut files = vec![runtime.models, runtime.settings];
-    if let Some(credential) = incoming.get("_auth") {
-        let mut auth = read_object(&runtime.auth)?;
-        auth.as_object_mut()
-            .ok_or_else(|| "Pi auth.json must be an object".to_string())?
-            .insert(key.to_string(), credential.clone());
-        save_json_atomic(&runtime.auth, &auth).map_err(|e| e.to_string())?;
-        files.push(runtime.auth);
-    }
+    save_json_atomic(&runtime.models, &models).map_err(|e| e.to_string())?;
     Ok(files)
+}
+
+/// Apply a provider record back to Pi's runtime files, preserving all
+/// unknown top-level and sibling provider fields.
+pub fn apply_provider(paths: &Paths, provider: &ProviderRecord) -> Result<Vec<PathBuf>, String> {
+    set_provider_enabled(paths, provider, true)
 }
 
 #[cfg(test)]
@@ -231,11 +248,12 @@ mod tests {
         let alpha = records.iter().find(|p| p.id == "pi:alpha").unwrap();
         assert_eq!(alpha.name, "Alpha");
         assert_eq!(alpha.settings()["_auth"]["key"], "k");
-        assert!(!alpha.is_applied);
+        // In Pi, enabled is determined by presence in models.json (alpha is present)
+        assert!(alpha.is_applied);
         assert!(
             records
                 .iter()
-                .any(|p| p.id == "pi:defaultOnly" && p.is_applied)
+                .any(|p| p.id == "pi:defaultOnly" && !p.is_applied)
         );
         assert_eq!(import_runtime(&paths, &mut records).unwrap(), 0);
     }
@@ -257,7 +275,7 @@ mod tests {
         p.id = "pi:alpha".into();
         p.settings_config = r#"{"name":"Alpha","baseUrl":"https://x","models":[{"id":"m1"}],"_auth":{"type":"api_key","key":"secret"},"_providerKey":"alpha"}"#.into();
         let files = apply_provider(&paths, &p).unwrap();
-        assert_eq!(files.len(), 3);
+        assert_eq!(files.len(), 2);
         let models: Value =
             serde_json::from_str(&std::fs::read_to_string(root.join("models.json")).unwrap())
                 .unwrap();
@@ -273,7 +291,5 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(root.join("settings.json")).unwrap())
                 .unwrap();
         assert_eq!(settings["keep"], 42);
-        assert_eq!(settings["defaultProvider"], "alpha");
-        assert_eq!(settings["defaultModel"], "m1");
     }
 }

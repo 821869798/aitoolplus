@@ -474,10 +474,12 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
             .child(tool.name_en())
             .on_click(cx.listener(move |ws, _, _, cx| {
                 if ws.settings.visible_tools.is_empty() {
-                    ws.settings.visible_tools = aitoolplus_core::ToolId::ALL
+                    let mut all: Vec<String> = aitoolplus_core::ToolId::ALL
                         .into_iter()
                         .map(|tool| tool.key().to_string())
                         .collect();
+                    all.push("antigravity".to_string());
+                    ws.settings.visible_tools = all;
                 }
                 if ws.settings.visible_tools.iter().any(|key| key == tool.key()) {
                     ws.settings.visible_tools.retain(|key| key != tool.key());
@@ -489,6 +491,63 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
             }));
         visibility_chips = visibility_chips.child(chip);
     }
+
+    // Antigravity visibility chip
+    let ag_visible = ws.settings.visible_tools.is_empty()
+        || ws.settings.visible_tools.iter().any(|key| key == "antigravity");
+    let chip_theme = t.clone();
+    let ag_chip = div()
+        .id("tool-visibility-antigravity")
+        .cursor_pointer()
+        .px(px(12.0))
+        .py(px(6.0))
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .text_size(px(12.5))
+        .when(ag_visible, |s| {
+            s.bg(chip_theme.tab_active_bg)
+                .border_1()
+                .border_color(chip_theme.accent)
+                .text_color(chip_theme.text_primary)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(
+                    gpui::svg()
+                        .data(crate::icons::CHECK_SVG)
+                        .size(px(13.0))
+                        .text_color(chip_theme.accent),
+                )
+        })
+        .when(!ag_visible, |s| {
+            s.bg(chip_theme.input_bg)
+                .border_1()
+                .border_color(chip_theme.card_border)
+                .text_color(chip_theme.text_muted)
+                .hover(move |h| {
+                    h.border_color(chip_theme.card_border_hover)
+                        .text_color(chip_theme.text_secondary)
+                })
+        })
+        .child("Antigravity")
+        .on_click(cx.listener(move |ws, _, _, cx| {
+            if ws.settings.visible_tools.is_empty() {
+                let mut all: Vec<String> = aitoolplus_core::ToolId::ALL
+                    .into_iter()
+                    .map(|tool| tool.key().to_string())
+                    .collect();
+                all.push("antigravity".to_string());
+                ws.settings.visible_tools = all;
+            }
+            if ws.settings.visible_tools.iter().any(|key| key == "antigravity") {
+                ws.settings.visible_tools.retain(|key| key != "antigravity");
+            } else {
+                ws.settings.visible_tools.push("antigravity".to_string());
+            }
+            (ws.callbacks.save_settings)(&ws.settings);
+            cx.notify();
+        }));
+    visibility_chips = visibility_chips.child(ag_chip);
 
     let visibility_card = settings_card(
         &t,

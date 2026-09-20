@@ -5,8 +5,9 @@
 use aitoolplus_core::pi_extensions::{PiExtensionKind, PiExtensionScope};
 use aitoolplus_core::pi_pages::PiModelSettings;
 use aitoolplus_core::providers::{CATEGORIES, ProviderRecord};
+use aitoolplus_core::session::{self, SessionMeta};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, deferred, div, prelude::*, px};
+use gpui::{Context, IntoElement, deferred, div, prelude::*, px, uniform_list};
 use gpui_kit::base::{Align, ElementExt as _, Placement, Positioner, POPUP_PRIORITY};
 use serde_json::Value;
 
@@ -14,8 +15,10 @@ use crate::components::{
     self, BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l,
     button_with_icon_loading_l, input_container, page_header, section_title, textarea_container,
 };
+use crate::i18n::I18n;
 use crate::text_area::TextArea;
 use crate::text_input::TextInput;
+use crate::theme::Theme;
 use crate::workspace::Workspace;
 
 use super::{PromptDialogState, ProviderDialogState, ToolTab, modal_scaffold, modal_scaffold_custom};
@@ -25,16 +28,50 @@ pub fn render_tool_page(
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) -> gpui::AnyElement {
+    // If a session is open for this tool, directly render the full session detail view (covering tabs_bar)
+    if let Some((open_tool, ref open_sid)) = ws.ui.open_session {
+        if open_tool == tool {
+            let meta_opt = ws.ui.agent_sessions.as_ref()
+                .and_then(|(t, list)| if *t == tool { list.iter().find(|s| &s.session_id == open_sid).cloned() } else { None })
+                .or_else(|| {
+                    let sessions = session::cached_scan(&ws.paths, open_tool, session::DEFAULT_SESSION_PATH_LIMIT);
+                    sessions.into_iter().find(|s| &s.session_id == open_sid)
+                });
+            if let Some(meta) = meta_opt {
+                return super::session_detail::render_session_detail(open_tool, &meta, ws, cx);
+            }
+        }
+    }
+
     let _i = ws.i18n;
     let _t = ws.theme.clone();
+
+    // Ensure active tool_tab is supported by this tool; fall back to Providers if not.
+    let valid_tab = match ws.ui.tool_tab {
+        ToolTab::Providers | ToolTab::Common | ToolTab::Prompts | ToolTab::Runtime | ToolTab::Sessions => true,
+        ToolTab::Extensions => matches!(tool, ToolId::Pi | ToolId::OhMyPi),
+        ToolTab::Plugins => matches!(tool, ToolId::ClaudeCode | ToolId::Codex | ToolId::Grok),
+        ToolTab::Marketplace => matches!(tool, ToolId::ClaudeCode | ToolId::Codex | ToolId::Grok),
+        ToolTab::Addons => tool == ToolId::OpenCode,
+    };
+    if !valid_tab {
+        ws.ui.tool_tab = ToolTab::Providers;
+    }
+
+    let is_custom_scroll = matches!(ws.ui.tool_tab, ToolTab::Marketplace | ToolTab::Sessions);
 
     let mut col = div()
         .flex()
         .flex_col()
         .w_full()
         .min_w(px(0.0))
-        .gap(px(16.0))
-        .child(tabs_bar(tool, ws, cx));
+        .gap(px(16.0));
+
+    if is_custom_scroll {
+        col = col.h_full().min_h(px(0.0));
+    }
+
+    col = col.child(tabs_bar(tool, ws, cx));
 
     match ws.ui.tool_tab {
         ToolTab::Providers | ToolTab::Common => {
@@ -48,15 +85,37 @@ pub fn render_tool_page(
         }
         ToolTab::Prompts => col = col.child(prompts_section(tool, ws, cx)),
         ToolTab::Runtime => col = col.child(runtime_section(tool, ws, cx)),
-        ToolTab::Extensions => col = col.child(extensions_section(tool, ws, cx)),
-        ToolTab::Plugins => {
-            col = col.child(if tool == ToolId::Grok {
-                grok_plugins_section(ws, cx)
-            } else {
-                plugins_section(ws, cx)
-            })
+        ToolTab::Extensions => {
+            if matches!(tool, ToolId::Pi | ToolId::OhMyPi) {
+                col = col.child(extensions_section(tool, ws, cx));
+            }
         }
-        ToolTab::Addons => col = col.child(opencode_addons_section(ws, cx)),
+        ToolTab::Plugins => {
+            if tool == ToolId::ClaudeCode {
+                col = col.child(claude_installed_plugins_section(ws, cx));
+            } else if tool == ToolId::Codex {
+                col = col.child(codex_installed_plugins_section(ws, cx));
+            } else if tool == ToolId::Grok {
+                col = col.child(grok_installed_plugins_section(ws, cx));
+            }
+        }
+        ToolTab::Marketplace => {
+            if tool == ToolId::ClaudeCode {
+                col = col.child(claude_marketplace_section(ws, cx));
+            } else if tool == ToolId::Codex {
+                col = col.child(codex_marketplace_section(ws, cx));
+            } else if tool == ToolId::Grok {
+                col = col.child(grok_marketplace_section(ws, cx));
+            }
+        }
+        ToolTab::Addons => {
+            if tool == ToolId::OpenCode {
+                col = col.child(opencode_addons_section(ws, cx));
+            }
+        }
+        ToolTab::Sessions => {
+            col = col.child(agent_sessions_section(tool, ws, cx));
+        }
     }
     col.into_any_element()
 }
@@ -68,18 +127,20 @@ fn tabs_bar(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
 
     let mut tabs = vec![
         (ToolTab::Providers, i.t("供应商", "Providers")),
-        (ToolTab::Prompts, i.t("全局 Prompt", "Prompts")),
+        (ToolTab::Prompts, i.t("全局提示词", "Prompts")),
         (ToolTab::Runtime, i.t("运行时文件", "Runtime Files")),
     ];
     if matches!(tool, ToolId::Pi | ToolId::OhMyPi) {
         tabs.push((ToolTab::Extensions, i.t("扩展", "Extensions")));
     }
-    if matches!(tool, ToolId::ClaudeCode | ToolId::Grok) {
-        tabs.push((ToolTab::Plugins, i.t("插件", "Plugins")));
+    if tool == ToolId::ClaudeCode || tool == ToolId::Codex || tool == ToolId::Grok {
+        tabs.push((ToolTab::Plugins, i.t("已安装插件", "Installed Plugins")));
+        tabs.push((ToolTab::Marketplace, i.t("插件市场", "Marketplace")));
     }
     if tool == ToolId::OpenCode {
         tabs.push((ToolTab::Addons, i.t("附加工具", "Add-ons")));
     }
+    tabs.push((ToolTab::Sessions, i.t("会话管理", "Sessions")));
 
     crate::components::segmented_tab_bar(
         "tool",
@@ -441,7 +502,32 @@ fn provider_row(
         actions = actions.child(tb);
     }
 
-    if p.is_applied {
+    if tool == ToolId::Pi {
+        let pid_toggle = p.id.clone();
+        let is_enabled = p.is_applied;
+        actions = actions.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    badge(
+                        &t,
+                        if is_enabled { i.t("已启用", "Enabled") } else { i.t("未启用", "Disabled") },
+                        if is_enabled { BadgeKind::Success } else { BadgeKind::Neutral },
+                    )
+                )
+                .child(components::toggle(
+                    gpui::SharedString::from(format!("pi-prov-toggle-{}", p.id)),
+                    is_enabled,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        ws.set_pi_provider_enabled(&pid_toggle, !is_enabled, cx);
+                    },
+                ))
+        );
+    } else if p.is_applied {
         actions = actions.child(
             div()
                 .px(px(14.0))
@@ -641,12 +727,22 @@ fn provider_row(
     }
 
     let border_color = if p.is_applied {
-        gpui::rgb(0x3b82f6)
+        if tool == ToolId::Pi {
+            gpui::rgba(0x22c55e66)
+        } else {
+            gpui::rgb(0x3b82f6)
+        }
     } else {
         t.card_border
     };
     let bg_color = if p.is_applied {
-        if t.is_dark {
+        if tool == ToolId::Pi {
+            if t.is_dark {
+                crate::rgba_const(0x102418ff)
+            } else {
+                crate::rgba_const(0xf0fdf4ff)
+            }
+        } else if t.is_dark {
             crate::rgba_const(0x121722ff)
         } else {
             crate::rgba_const(0xf0f7ffff)
@@ -656,19 +752,31 @@ fn provider_row(
     };
     let hover_bg = if t.is_dark {
         if p.is_applied {
-            crate::rgba_const(0x151c2aff)
+            if tool == ToolId::Pi {
+                crate::rgba_const(0x143020ff)
+            } else {
+                crate::rgba_const(0x151c2aff)
+            }
         } else {
             t.card_hover
         }
     } else {
         if p.is_applied {
-            crate::rgba_const(0xe6f0feff)
+            if tool == ToolId::Pi {
+                crate::rgba_const(0xdcfce7ff)
+            } else {
+                crate::rgba_const(0xe6f0feff)
+            }
         } else {
             t.card_hover
         }
     };
     let hover_border = if p.is_applied {
-        gpui::rgb(0x60a5fa)
+        if tool == ToolId::Pi {
+            gpui::rgb(0x22c55e)
+        } else {
+            gpui::rgb(0x60a5fa)
+        }
     } else {
         t.card_border_hover
     };
@@ -1014,7 +1122,7 @@ fn prompts_section(
         .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
         .unwrap_or_else(|| "Prompt".into());
 
-    let add_label = i.t("新增 Prompt", "Add Prompt");
+    let add_label = i.t("新增提示词", "Add Prompt");
 
     // Presets quick-add bar
     let mut presets_bar = div()
@@ -1050,7 +1158,7 @@ fn prompts_section(
                     inp
                 });
                 let content_ta = cx.new(|cx| {
-                    let mut ta = TextArea::new("Prompt 内容…", cx);
+                    let mut ta = TextArea::new("提示词内容…", cx);
                     ta.set_text_silent(content_str, cx);
                     ta
                 });
@@ -1065,40 +1173,56 @@ fn prompts_section(
         ));
     }
 
+    // Top hint block aligned with ai-toolbox
+    let hint_block = div()
+        .p(px(12.0))
+        .rounded(px(6.0))
+        .bg(t.card_bg)
+        .border_l_4()
+        .border_color(t.accent)
+        .text_size(px(12.5))
+        .text_color(t.text_secondary)
+        .child(i.t(
+            "全局提示词将在与 AI 对话时自动作为系统提示词或前置上下文生效。您可以创建多个提示词模板并随时切换或启用。",
+            "Global prompts will be injected as system instructions or leading context during conversations. You can create multiple templates and switch or enable them at any time.",
+        ));
+
+    let header = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(section_title(
+            &t,
+            i.t("全局提示词", "Global Prompts"),
+            Some(i.t(
+                &format!("应用后写入工具的提示词文件（{}）", target_file_str),
+                &format!("Applied prompts are written to {}", target_file_str),
+            )),
+        ))
+        .child(button_with_icon_l(
+            "prompt-add",
+            crate::icons::PLUS_SVG,
+            add_label,
+            ButtonVariant::Primary,
+            &t,
+            cx,
+            move |ws, _, window, cx| {
+                open_prompt_dialog(None, tool, ws, cx);
+                if let Some(dlg) = &ws.ui.prompt_dialog {
+                    dlg.name.update(cx, |name, cx| {
+                        name.focus_handle.focus(window, cx);
+                        name.start_blink(cx);
+                    });
+                }
+            },
+        ));
+
     let mut section = div()
         .flex()
         .flex_col()
         .gap(px(12.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(section_title(
-                    &t,
-                    i.t("全局 Prompt", "Global Prompts"),
-                    Some(i.t(
-                        &format!("应用后写入工具的 Prompt 文件（{}）", target_file_str),
-                        &format!("Applied prompts are written to {}", target_file_str),
-                    )),
-                ))
-                .child(button_l(
-                    "prompt-add",
-                    add_label,
-                    ButtonVariant::Primary,
-                    &t,
-                    cx,
-                    move |ws, _, window, cx| {
-                        open_prompt_dialog(None, tool, ws, cx);
-                        if let Some(dlg) = &ws.ui.prompt_dialog {
-                            dlg.name.update(cx, |name, cx| {
-                                name.focus_handle.focus(window, cx);
-                                name.start_blink(cx);
-                            });
-                        }
-                    },
-                )),
-        )
+        .child(hint_block)
+        .child(header)
         .child(presets_bar)
         .child(
             div()
@@ -1111,13 +1235,13 @@ fn prompts_section(
             &t,
             crate::icons::FILE_TEXT_SVG,
             if query.is_empty() {
-                i.t("还没有 Prompt", "No prompts yet")
+                i.t("还没有全局提示词", "No prompts yet")
             } else {
-                i.t("没有找到匹配的 Prompt", "No matching prompts")
+                i.t("没有找到匹配的提示词", "No matching prompts")
             },
             if query.is_empty() {
                 i.t(
-                    "点击上方快捷预设模板，或新增一条可一键应用的全局 Prompt",
+                    "点击上方快捷预设模板，或新增一条可一键应用的全局提示词",
                     "Click a preset above or add a new global prompt",
                 )
             } else {
@@ -1125,219 +1249,306 @@ fn prompts_section(
             },
         ));
     } else {
-        let mut list = div().flex().flex_col().gap(px(6.0));
+        let mut list = div().flex().flex_col().gap(px(8.0));
         for p in &filtered_prompts {
             let pid = p.id.clone();
+            let pid_unapply = p.id.clone();
             let pid2 = p.id.clone();
             let pid3 = p.id.clone();
             let pid4 = p.id.clone();
             let pid5 = p.id.clone();
+            let pid_toggle = p.id.clone();
             let p_content = p.content.clone();
             let p_name = p.name.clone();
+            let is_expanded = ws.ui.expanded_prompts.contains(&p.id);
 
-            let status_badge = if p.is_applied {
-                badge(&t, i.t("应用中", "Applied"), BadgeKind::Success)
+            // Card header row
+            let mut top_row = div().flex().items_center().justify_between().gap(px(10.0)).w_full();
+
+            let left = div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .min_w(px(0.0))
+                .flex_1()
+                .child(
+                    div()
+                        .size(px(14.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_grab()
+                        .child(
+                            gpui::svg()
+                                .data(crate::icons::GRIP_VERTICAL_SVG)
+                                .size(px(14.0))
+                                .text_color(t.text_muted),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child(p.name.clone()),
+                )
+                .children(p.is_applied.then(|| {
+                    badge(&t, i.t("已应用", "Applied"), BadgeKind::Success)
+                }))
+                .child(badge(
+                    &t,
+                    gpui::SharedString::from(target_file_str.clone()),
+                    BadgeKind::Neutral,
+                ));
+
+            let mut actions = div().flex().items_center().gap(px(6.0)).flex_shrink_0();
+
+            if p.is_applied {
+                actions = actions.child(button_with_icon_l(
+                    gpui::SharedString::from(format!("prompt-unapply-{pid_unapply}")),
+                    crate::icons::EYE_OFF_SVG,
+                    i.t("停用", "Disable"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| unapply_prompt(tool, &pid_unapply, ws, cx),
+                ));
             } else {
-                badge(&t, i.t("未应用", "Idle"), BadgeKind::Neutral)
-            };
+                let pid_apply = pid.clone();
+                actions = actions.child(button_with_icon_l(
+                    gpui::SharedString::from(format!("prompt-apply-{pid_apply}")),
+                    crate::icons::CHECK_SVG,
+                    i.t("应用", "Apply"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| apply_prompt(tool, &pid_apply, ws, cx),
+                ));
+            }
 
-            let preview_snippet: String = p
-                .content
-                .lines()
-                .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-                .take(2)
-                .collect::<Vec<_>>()
-                .join(" ");
-            let preview_clean = if preview_snippet.chars().count() > 80 {
-                format!("{}…", preview_snippet.chars().take(80).collect::<String>())
-            } else {
-                preview_snippet
-            };
+            actions = actions
+                .child(crate::components::icon_button_svg(
+                    gpui::SharedString::from(format!("prompt-copy-{pid4}")),
+                    crate::icons::COPY_SVG,
+                    i.t("复制内容", "Copy Content"),
+                    false,
+                    &t,
+                    cx,
+                    {
+                        let content_copy = p_content.clone();
+                        move |ws, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                content_copy.clone(),
+                            ));
+                            let msg = ws
+                                .i18n
+                                .t(
+                                    "提示词内容已复制到剪贴板",
+                                    "prompt copied to clipboard",
+                                )
+                                .to_string();
+                            ws.ui.toast(msg, false);
+                            cx.notify();
+                        }
+                    },
+                ))
+                .child(crate::components::icon_button_svg(
+                    gpui::SharedString::from(format!("prompt-dup-{pid5}")),
+                    crate::icons::SPARKLES_SVG,
+                    i.t("创建副本", "Duplicate"),
+                    false,
+                    &t,
+                    cx,
+                    {
+                        let dup_name = format!("{} (副本)", p_name);
+                        let dup_content = p_content.clone();
+                        move |ws, _, _, cx| {
+                            let _ = ws.store.update(|store| {
+                                let s = store.tool_mut(tool);
+                                aitoolplus_core::prompt::create(
+                                    &mut s.prompts,
+                                    &dup_name,
+                                    &dup_content,
+                                );
+                            });
+                            ws.persist_store();
+                            let msg = ws
+                                .i18n
+                                .t("已创建提示词副本", "prompt duplicate created")
+                                .to_string();
+                            ws.ui.toast(msg, false);
+                            cx.notify();
+                        }
+                    },
+                ))
+                .child(crate::components::icon_button_svg(
+                    gpui::SharedString::from(format!("prompt-edit-{pid2}")),
+                    crate::icons::PENCIL_SVG,
+                    i.t("编辑", "Edit"),
+                    false,
+                    &t,
+                    cx,
+                    move |ws, _, window, cx| {
+                        let id = pid2.clone();
+                        open_prompt_dialog(Some(id), tool, ws, cx);
+                        if let Some(dlg) = &ws.ui.prompt_dialog {
+                            dlg.name.update(cx, |name, cx| {
+                                name.focus_handle.focus(window, cx);
+                                name.start_blink(cx);
+                            });
+                        }
+                    },
+                ))
+                .child(crate::components::icon_button_svg(
+                    gpui::SharedString::from(format!("prompt-del-{pid3}")),
+                    crate::icons::TRASH_SVG,
+                    i.t("删除", "Delete"),
+                    true,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        ws.ui.confirm = Some(super::ConfirmState {
+                            title: ws.i18n.t("删除提示词", "Delete Prompt").to_string(),
+                            message: ws
+                                .i18n
+                                .t("确定要删除这条提示词吗？", "Delete this prompt?")
+                                .to_string(),
+                            action: super::ConfirmAction::DeletePrompt {
+                                tool,
+                                id: pid3.clone(),
+                            },
+                        });
+                        cx.notify();
+                    },
+                ));
 
-            list = list.child(
+            top_row = top_row.child(left).child(actions);
+
+            // Content preview / expand section
+            let content_elem = if is_expanded {
                 div()
-                    .id(gpui::SharedString::from(format!("prompt-{pid}")))
                     .flex()
+                    .flex_col()
+                    .gap(px(8.0))
                     .w_full()
-                    .min_w(px(0.0))
-                    .items_center()
-                    .justify_between()
-                    .gap(px(12.0))
-                    .p(px(12.0))
-                    .rounded(px(8.0))
-                    .bg(t.card_bg)
-                    .border_1()
-                    .border_color(if p.is_applied {
-                        t.success
-                    } else {
-                        t.card_border
-                    })
-                    .hover(|h| h.bg(t.card_hover))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.0))
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .child(status_badge)
-                            .child(badge(
-                                &t,
-                                gpui::SharedString::from(target_file_str.clone()),
-                                BadgeKind::Neutral,
-                            ))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(13.5))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(t.text_primary)
-                                            .child(p.name.clone()),
-                                    )
-                                    .children((!preview_clean.is_empty()).then(|| {
-                                        div()
-                                            .text_size(px(11.5))
-                                            .text_color(t.text_muted)
-                                            .child(preview_clean)
-                                            .into_any_element()
-                                    })),
-                            ),
+                            .p(px(10.0))
+                            .rounded(px(6.0))
+                            .bg(t.sidebar_bg)
+                            .border_1()
+                            .border_color(t.card_border)
+                            .text_size(px(12.0))
+                            .line_height(px(18.0))
+                            .text_color(t.text_secondary)
+                            .child(p.content.clone()),
                     )
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .child(if p.is_applied {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .px(px(8.0))
-                                    .h(px(28.0))
-                                    .text_size(px(12.0))
-                                    .text_color(t.success)
-                                    .child(i.t("生效中", "Active"))
-                                    .into_any_element()
-                            } else {
-                                button_l(
-                                    gpui::SharedString::from(format!("prompt-apply-{pid}")),
-                                    i.t("应用", "Apply"),
-                                    ButtonVariant::Primary,
+                            .justify_end()
+                            .child(
+                                button_with_icon_l(
+                                    gpui::SharedString::from(format!("prompt-collapse-{pid_toggle}")),
+                                    crate::icons::CHEVRON_UP_SVG,
+                                    i.t("收起 ▴", "Collapse ▴"),
+                                    ButtonVariant::Ghost,
                                     &t,
                                     cx,
-                                    move |ws, _, _, cx| apply_prompt(tool, &pid, ws, cx),
-                                )
-                            })
-                            .child(crate::components::icon_button_svg(
-                                gpui::SharedString::from(format!("prompt-copy-{pid4}")),
-                                crate::icons::COPY_SVG,
-                                i.t("复制内容", "Copy Content"),
-                                false,
-                                &t,
-                                cx,
-                                {
-                                    let content_copy = p_content.clone();
                                     move |ws, _, _, cx| {
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                            content_copy.clone(),
-                                        ));
-                                        let msg = ws
-                                            .i18n
-                                            .t(
-                                                "Prompt 内容已复制到剪贴板",
-                                                "prompt copied to clipboard",
-                                            )
-                                            .to_string();
-                                        ws.ui.toast(msg, false);
+                                        ws.ui.expanded_prompts.remove(&pid_toggle);
                                         cx.notify();
-                                    }
-                                },
-                            ))
-                            .child(crate::components::icon_button_svg(
-                                gpui::SharedString::from(format!("prompt-dup-{pid5}")),
-                                crate::icons::SPARKLES_SVG,
-                                i.t("创建副本", "Duplicate"),
-                                false,
-                                &t,
-                                cx,
-                                {
-                                    let dup_name = format!("{} (副本)", p_name);
-                                    let dup_content = p_content;
-                                    move |ws, _, _, cx| {
-                                        let _ = ws.store.update(|store| {
-                                            let s = store.tool_mut(tool);
-                                            aitoolplus_core::prompt::create(
-                                                &mut s.prompts,
-                                                &dup_name,
-                                                &dup_content,
-                                            );
-                                        });
-                                        ws.persist_store();
-                                        let msg = ws
-                                            .i18n
-                                            .t("已创建 Prompt 副本", "prompt duplicate created")
-                                            .to_string();
-                                        ws.ui.toast(msg, false);
-                                        cx.notify();
-                                    }
-                                },
-                            ))
-                            .child(crate::components::icon_button_svg(
-                                gpui::SharedString::from(format!("prompt-edit-{pid2}")),
-                                crate::icons::PENCIL_SVG,
-                                i.t("编辑", "Edit"),
-                                false,
-                                &t,
-                                cx,
-                                move |ws, _, window, cx| {
-                                    let id = pid2.clone();
-                                    open_prompt_dialog(Some(id), tool, ws, cx);
-                                    if let Some(dlg) = &ws.ui.prompt_dialog {
-                                        dlg.name.update(cx, |name, cx| {
-                                            name.focus_handle.focus(window, cx);
-                                            name.start_blink(cx);
-                                        });
-                                    }
-                                },
-                            ))
-                            .child(crate::components::icon_button_svg(
-                                gpui::SharedString::from(format!("prompt-del-{pid3}")),
-                                crate::icons::TRASH_SVG,
-                                i.t("删除", "Delete"),
-                                true,
-                                &t,
-                                cx,
-                                move |ws, _, _, cx| {
-                                    ws.ui.confirm = Some(super::ConfirmState {
-                                        title: ws
-                                            .i18n
-                                            .t("删除 Prompt", "Delete Prompt")
-                                            .to_string(),
-                                        message: ws
-                                            .i18n
-                                            .t("确定要删除这条 Prompt 吗？", "Delete this prompt?")
-                                            .to_string(),
-                                        action: super::ConfirmAction::DeletePrompt {
-                                            tool,
-                                            id: pid3.clone(),
-                                        },
-                                    });
-                                    cx.notify();
-                                },
-                            )),
-                    ),
-            );
+                                    },
+                                ),
+                            ),
+                    )
+                    .into_any_element()
+            } else {
+                let single_line: String = p
+                    .content
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(10.0))
+                    .w_full()
+                    .min_w(px(0.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(px(12.0))
+                            .text_color(t.text_muted)
+                            .child(single_line),
+                    )
+                    .child(
+                        button_with_icon_l(
+                            gpui::SharedString::from(format!("prompt-expand-{pid_toggle}")),
+                            crate::icons::CHEVRON_DOWN_SVG,
+                            i.t("展开 ▾", "Expand ▾"),
+                            ButtonVariant::Ghost,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                ws.ui.expanded_prompts.insert(pid_toggle.clone());
+                                cx.notify();
+                            },
+                        ),
+                    )
+                    .into_any_element()
+            };
+
+            let card = div()
+                .id(gpui::SharedString::from(format!("prompt-{pid}")))
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w(px(0.0))
+                .gap(px(8.0))
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(if p.is_applied {
+                    t.accent
+                } else {
+                    t.card_border
+                })
+                .child(top_row)
+                .child(content_elem);
+
+            list = list.child(card);
         }
         section = section.child(list);
     }
 
     section.into_any_element()
+}
+
+fn unapply_prompt(tool: ToolId, _id: &str, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    let i = ws.i18n;
+    let _ = ws.store.update(|store| {
+        let s = store.tool_mut(tool);
+        aitoolplus_core::prompt::unapply_all(&mut s.prompts);
+    });
+    let adapter = aitoolplus_core::adapters::adapter_for(tool);
+    if let Some(file) = adapter.prompt_file(&ws.paths) {
+        if file.exists() {
+            let _ = std::fs::remove_file(&file);
+        }
+        let msg = i.t("已停用全局提示词", "Global prompt disabled").to_string();
+        ws.ui.toast(msg, false);
+    }
+    ws.persist_store();
+    cx.notify();
 }
 
 fn apply_prompt(tool: ToolId, id: &str, ws: &mut Workspace, cx: &mut Context<Workspace>) {
@@ -1786,193 +1997,71 @@ fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
     let mut section = div()
         .flex()
         .flex_col()
-        .gap(px(10.0))
+        .gap(px(12.0))
         .p(px(14.0))
         .rounded(px(10.0))
         .bg(t.card_bg)
         .border_1()
-        .border_color(t.card_border)
-        .child(section_title(
-            &t,
-            i.t("模型设置", "Model Settings"),
-            Some(i.t(
-                "写入 settings.json 的 defaultProvider / defaultModel / defaultThinkingLevel",
-                "writes settings.json defaultProvider / defaultModel / defaultThinkingLevel",
-            )),
-        ));
+        .border_color(t.card_border);
 
     match (
         aitoolplus_core::pi_pages::read_model_settings(&ws.paths),
         aitoolplus_core::pi_pages::models_catalog(&ws.paths),
     ) {
         (Ok(current), Ok(catalog)) => {
-            let cur_provider = current.provider_key.clone();
-            let cur_model = current.model_id.clone();
-            let cur_thinking = current.thinking_level.clone();
+            if !ws.ui.pi_ms_initialized {
+                ws.ui.pi_ms_provider = current.provider_key.clone();
+                ws.ui.pi_ms_model = current.model_id.clone();
+                ws.ui.pi_ms_thinking = current.thinking_level.clone();
+                let p_str = current.provider_key.as_deref().unwrap_or("");
+                let m_str = current.model_id.as_deref().unwrap_or("");
+                let t_str = current.thinking_level.as_deref().unwrap_or("");
+                ws.ui.pi_ms_provider_input.update(cx, |inp, cx| inp.set_text_silent(p_str, cx));
+                ws.ui.pi_ms_model_input.update(cx, |inp, cx| inp.set_text_silent(m_str, cx));
+                ws.ui.pi_ms_thinking_input.update(cx, |inp, cx| inp.set_text_silent(t_str, cx));
+                ws.ui.pi_ms_initialized = true;
+            }
 
-            let mut rows = div().flex().flex_col().gap(px(8.0));
+            let selected_provider = ws.ui.pi_ms_provider.clone();
 
-            let mut provider_row = div()
+            let provider_options: Vec<String> = catalog.keys().cloned().collect();
+            let model_options: Vec<String> = if let Some(p) = &selected_provider {
+                catalog.get(p).cloned().unwrap_or_default()
+            } else {
+                vec![]
+            };
+            let thinking_options: Vec<String> = aitoolplus_core::pi_pages::KNOWN_THINKING_LEVELS
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            let header = div()
                 .flex()
+                .items_center()
+                .justify_between()
                 .w_full()
-                .min_w(px(0.0))
-                .flex_wrap()
-                .gap(px(4.0));
-            for key in catalog.keys() {
-                let is_on =
-                    ws.ui.pi_ms_provider.as_deref().or(cur_provider.as_deref()) == Some(key);
-                let key_owned = key.clone();
-                provider_row = provider_row.child(button_l(
-                    gpui::SharedString::from(format!("pi-ms-provider-{key}")),
-                    key.clone(),
-                    if is_on {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Secondary
-                    },
+                .child(section_title(
                     &t,
-                    cx,
-                    move |ws, _ev, _w, cx| {
-                        if ws.ui.pi_ms_provider.as_deref() == Some(&key_owned) {
-                            ws.ui.pi_ms_provider = None;
-                        } else {
-                            ws.ui.pi_ms_provider = Some(key_owned.clone());
-                        }
-                        ws.ui.pi_ms_model = None;
-                        cx.notify();
-                    },
-                ));
-            }
-            rows = rows
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_secondary)
-                        .child(i.t("默认供应商", "Default Provider")),
-                )
-                .child(provider_row);
-
-            let selected_provider = ws
-                .ui
-                .pi_ms_provider
-                .clone()
-                .or_else(|| cur_provider.clone());
-            if let Some(provider) = &selected_provider
-                && let Some(models) = catalog.get(provider)
-            {
-                let mut model_row = div()
-                    .flex()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .flex_wrap()
-                    .gap(px(4.0));
-                for model in models {
-                    let is_on = ws
-                        .ui
-                        .pi_ms_model
-                        .clone()
-                        .or_else(|| cur_model.clone())
-                        .as_deref()
-                        == Some(model.as_str());
-                    let m_owned = model.clone();
-                    let p_owned = provider.clone();
-                    model_row = model_row.child(button_l(
-                        gpui::SharedString::from(format!("pi-ms-model-{model}")),
-                        model.clone(),
-                        if is_on {
-                            ButtonVariant::Primary
-                        } else {
-                            ButtonVariant::Secondary
-                        },
-                        &t,
-                        cx,
-                        move |ws, _ev, _w, cx| {
-                            ws.ui.pi_ms_provider = Some(p_owned.clone());
-                            ws.ui.pi_ms_model = Some(m_owned.clone());
-                            cx.notify();
-                        },
-                    ));
-                }
-                if !models.is_empty() {
-                    rows = rows
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(t.text_secondary)
-                                .child(i.t("默认模型", "Default Model")),
-                        )
-                        .child(model_row);
-                }
-            }
-
-            let mut think_row = div()
-                .flex()
-                .w_full()
-                .min_w(px(0.0))
-                .flex_wrap()
-                .gap(px(4.0));
-            for level in aitoolplus_core::pi_pages::KNOWN_THINKING_LEVELS {
-                let is_on = ws
-                    .ui
-                    .pi_ms_thinking
-                    .clone()
-                    .or_else(|| cur_thinking.clone())
-                    .as_deref()
-                    == Some(level);
-                let l_owned = level.to_string();
-                think_row = think_row.child(button_l(
-                    gpui::SharedString::from(format!("pi-ms-think-{level}")),
-                    level,
-                    if is_on {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Secondary
-                    },
-                    &t,
-                    cx,
-                    move |ws, _ev, _w, cx| {
-                        if ws.ui.pi_ms_thinking.as_deref() == Some(&l_owned) {
-                            ws.ui.pi_ms_thinking = None;
-                        } else {
-                            ws.ui.pi_ms_thinking = Some(l_owned.clone());
-                        }
-                        cx.notify();
-                    },
-                ));
-            }
-            rows = rows
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_secondary)
-                        .child(i.t("思考等级", "Thinking Level")),
-                )
-                .child(think_row);
-
-            section = section
-                .child(rows)
-                .child(div().flex().justify_end().child(button_l(
+                    i.t("模型设置", "Model Settings"),
+                    Some(i.t(
+                        "写入 settings.json 的 defaultProvider / defaultModel / defaultThinkingLevel",
+                        "writes settings.json defaultProvider / defaultModel / defaultThinkingLevel",
+                    )),
+                ))
+                .child(button_l(
                     "pi-ms-save",
                     i.t("保存模型设置", "Save Model Settings"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
                     move |ws, _, _, cx| {
+                        let p_txt = ws.ui.pi_ms_provider_input.read(cx).text().trim().to_string();
+                        let m_txt = ws.ui.pi_ms_model_input.read(cx).text().trim().to_string();
+                        let t_txt = ws.ui.pi_ms_thinking_input.read(cx).text().trim().to_string();
                         let settings = PiModelSettings {
-                            provider_key: ws
-                                .ui
-                                .pi_ms_provider
-                                .clone()
-                                .or_else(|| cur_provider.clone()),
-                            model_id: ws.ui.pi_ms_model.clone().or_else(|| cur_model.clone()),
-                            thinking_level: ws
-                                .ui
-                                .pi_ms_thinking
-                                .clone()
-                                .or_else(|| cur_thinking.clone()),
+                            provider_key: if p_txt.is_empty() { None } else { Some(p_txt) },
+                            model_id: if m_txt.is_empty() { None } else { Some(m_txt) },
+                            thinking_level: if t_txt.is_empty() { None } else { Some(t_txt) },
                         };
                         match aitoolplus_core::pi_pages::models_catalog(&ws.paths) {
                             Ok(cat) => {
@@ -1990,17 +2079,59 @@ fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
                                 return;
                             }
                         }
-                        match aitoolplus_core::pi_pages::write_model_settings(&ws.paths, &settings)
-                        {
+                        match aitoolplus_core::pi_pages::write_model_settings(&ws.paths, &settings) {
                             Ok(_) => {
-                                let msg = ws.i18n.t("已保存", "saved").to_string();
-                                ws.ui.toast(msg, false);
+                                ws.ui.toast(
+                                    ws.i18n
+                                        .t("模型设置已保存", "Model settings saved")
+                                        .to_string(),
+                                    false,
+                                );
                             }
-                            Err(e) => ws.ui.toast(format!("save failed: {e}"), true),
+                            Err(e) => {
+                                ws.ui.toast(format!("save failed: {e}"), true);
+                            }
                         }
                         cx.notify();
                     },
-                )));
+                ));
+
+            // Single-row 3-column dropdown layout
+            let row = div()
+                .flex()
+                .flex_row()
+                .gap(px(12.0))
+                .w_full()
+                .items_start()
+                .child(pi_searchable_select(
+                    "pi-ms-prov-select",
+                    super::PiDropdownField::Provider,
+                    "默认供应商",
+                    ws.ui.pi_ms_provider_input.clone(),
+                    provider_options,
+                    ws,
+                    cx,
+                ))
+                .child(pi_searchable_select(
+                    "pi-ms-model-select",
+                    super::PiDropdownField::Model,
+                    "默认模型",
+                    ws.ui.pi_ms_model_input.clone(),
+                    model_options,
+                    ws,
+                    cx,
+                ))
+                .child(pi_searchable_select(
+                    "pi-ms-think-select",
+                    super::PiDropdownField::Thinking,
+                    "思考等级",
+                    ws.ui.pi_ms_thinking_input.clone(),
+                    thinking_options,
+                    ws,
+                    cx,
+                ));
+
+            section = section.child(header).child(row);
         }
         (Err(e), _) | (_, Err(e)) => {
             section = section.child(
@@ -2013,6 +2144,100 @@ fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
     }
 
     section.into_any_element()
+}
+
+fn pi_searchable_select(
+    id: &'static str,
+    field: super::PiDropdownField,
+    label: &'static str,
+    input_entity: gpui::Entity<TextInput>,
+    options: Vec<String>,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+    let is_open = ws.ui.pi_dropdown_open == Some(field);
+    let is_typing = ws.ui.pi_dropdown_typing;
+
+    let f = field;
+    let input_ent_open = input_entity.clone();
+    let input_ent_clear = input_entity.clone();
+    let input_ent_pick = input_entity.clone();
+
+    components::fused_combobox(
+        id,
+        Some(i.t(label, label)),
+        input_entity,
+        is_open,
+        is_typing,
+        options,
+        Some(i.t("无匹配项", "No matches found")),
+        &t,
+        cx,
+        move |ws, window, cx| {
+            ws.ui.pi_dropdown_open = Some(f);
+            ws.ui.pi_dropdown_typing = false;
+            input_ent_open.update(cx, |inp, cx| {
+                inp.focus_handle.focus(window, cx);
+                inp.start_blink(cx);
+                inp.select_all(cx);
+            });
+            cx.notify();
+        },
+        move |ws, cx| {
+            if ws.ui.pi_dropdown_open == Some(f) {
+                ws.ui.pi_dropdown_open = None;
+                ws.ui.pi_dropdown_typing = false;
+                ws.ui.pi_dropdown_just_closed = Some((f, std::time::Instant::now()));
+                cx.notify();
+            }
+        },
+        move |ws, window, cx| {
+            input_ent_clear.update(cx, |inp, cx| {
+                inp.set_text_silent("", cx);
+                inp.focus_handle.focus(window, cx);
+                inp.start_blink(cx);
+            });
+            match f {
+                super::PiDropdownField::Provider => {
+                    ws.ui.pi_ms_provider = None;
+                    ws.ui.pi_ms_model = None;
+                    ws.ui.pi_ms_model_input.update(cx, |inp, cx| inp.set_text_silent("", cx));
+                }
+                super::PiDropdownField::Model => {
+                    ws.ui.pi_ms_model = None;
+                }
+                super::PiDropdownField::Thinking => {
+                    ws.ui.pi_ms_thinking = None;
+                }
+            }
+            ws.ui.pi_dropdown_open = Some(f);
+            ws.ui.pi_dropdown_typing = true;
+            cx.notify();
+        },
+        move |ws, opt, _window, cx| {
+            input_ent_pick.update(cx, |inp, cx| {
+                inp.set_text_silent(opt.clone(), cx);
+            });
+            match f {
+                super::PiDropdownField::Provider => {
+                    ws.ui.pi_ms_provider = Some(opt.clone());
+                    ws.ui.pi_ms_model = None;
+                    ws.ui.pi_ms_model_input.update(cx, |inp, cx| inp.set_text_silent("", cx));
+                }
+                super::PiDropdownField::Model => {
+                    ws.ui.pi_ms_model = Some(opt.clone());
+                }
+                super::PiDropdownField::Thinking => {
+                    ws.ui.pi_ms_thinking = Some(opt.clone());
+                }
+            }
+            ws.ui.pi_dropdown_open = None;
+            ws.ui.pi_dropdown_typing = false;
+            cx.notify();
+        },
+    )
 }
 
 /// Other Settings: settings.json minus packages, editable + save.
@@ -2174,6 +2399,10 @@ fn spawn_tool_action<F>(
                                 workspace.ui.grok_plugins = None;
                                 load_grok_plugins(workspace, cx);
                             }
+                            ToolId::ClaudeCode => {
+                                workspace.ui.claude_plugins = None;
+                                load_claude_plugins(workspace, cx);
+                            }
                             _ => {}
                         }
                     }
@@ -2258,6 +2487,28 @@ pub fn load_grok_plugins(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     .detach();
 }
 
+pub fn load_claude_plugins(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.claude_plugins_loading {
+        return;
+    }
+    ws.ui.claude_plugins_loading = true;
+    let paths = ws.paths.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let result = cx
+            .background_spawn(async move {
+                aitoolplus_core::claude_plugins::list_all_plugins_data(&paths)
+            })
+            .await;
+        let _ = weak.update(cx, |workspace, cx| {
+            workspace.ui.claude_plugins = Some(result);
+            workspace.ui.claude_plugins_loading = false;
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
 // ---------------------------------------------------------------------------
 // Pi Extensions tab
 // ---------------------------------------------------------------------------
@@ -2267,9 +2518,11 @@ fn extensions_section(
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) -> gpui::AnyElement {
+    if !matches!(tool, ToolId::Pi | ToolId::OhMyPi) {
+        return div().into_any_element();
+    }
     let t = ws.theme.clone();
     let i = ws.i18n;
-    debug_assert!(matches!(tool, ToolId::Pi | ToolId::OhMyPi));
 
     let is_pi = tool == ToolId::Pi;
     if is_pi {
@@ -3109,7 +3362,7 @@ fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
 // Grok native Plugins tab
 // ---------------------------------------------------------------------------
 
-fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
 
@@ -3124,31 +3377,104 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         i.t("刷新", "Refresh")
     };
 
-    let mut section = div().flex().flex_col().gap(px(12.0)).child(
+    let (installed_count, can_enable_all, can_disable_all) =
+        if let Some(Ok((installed, _))) = &ws.ui.grok_plugins {
+            let inst_len = installed.len();
+            let disabled_count = installed.iter().filter(|p| !p.enabled).count();
+            let enabled_count = installed.iter().filter(|p| p.enabled).count();
+            (inst_len, disabled_count > 0, enabled_count > 0)
+        } else {
+            (0, false, false)
+        };
+
+    let mut section = div().flex().flex_col().gap(px(12.0));
+
+    let mut header_actions = div().flex().items_center().gap(px(8.0));
+
+    if can_enable_all {
+        header_actions = header_actions.child(button_l(
+            "grok-plugins-enable-all",
+            i.t("全部启用", "Enable All"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                match aitoolplus_core::grok_plugins::set_all_enabled(&ws.paths, true) {
+                    Ok(count) => {
+                        let msg = ws
+                            .i18n
+                            .t(
+                                &format!("已启用 {count} 个插件"),
+                                &format!("enabled {count} plugins"),
+                            )
+                            .to_string();
+                        ws.ui.toast(msg, false);
+                        ws.ui.grok_plugins = None;
+                        load_grok_plugins(ws, cx);
+                    }
+                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                }
+                cx.notify();
+            },
+        ));
+    }
+    if can_disable_all {
+        header_actions = header_actions.child(button_l(
+            "grok-plugins-disable-all",
+            i.t("全部停用", "Disable All"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                match aitoolplus_core::grok_plugins::set_all_enabled(&ws.paths, false) {
+                    Ok(count) => {
+                        let msg = ws
+                            .i18n
+                            .t(
+                                &format!("已停用 {count} 个插件"),
+                                &format!("disabled {count} plugins"),
+                            )
+                            .to_string();
+                        ws.ui.toast(msg, false);
+                        ws.ui.grok_plugins = None;
+                        load_grok_plugins(ws, cx);
+                    }
+                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                }
+                cx.notify();
+            },
+        ));
+    }
+
+    header_actions = header_actions.child(button_with_icon_loading_l(
+        "grok-plugins-refresh-btn",
+        crate::icons::REFRESH_SVG,
+        refresh_label,
+        ButtonVariant::Secondary,
+        is_loading,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.grok_plugins = None;
+            load_grok_plugins(ws, cx);
+            cx.notify();
+        },
+    ));
+
+    section = section.child(
         div()
             .flex()
             .items_center()
             .justify_between()
             .child(page_header(
                 &t,
-                i.t("Grok 插件", "Grok Plugins"),
+                i.t("已安装插件", "Installed Plugins"),
                 i.t(
-                    "通过 grok plugin 管理原生插件",
-                    "Manage native plugins via grok plugin",
+                    &format!("管理已安装的 {} 个 Grok 插件", installed_count),
+                    &format!("Manage {} installed Grok plugins", installed_count),
                 ),
             ))
-            .child(button_l(
-                "grok-plugins-refresh-btn",
-                refresh_label,
-                ButtonVariant::Secondary,
-                &t,
-                cx,
-                move |ws, _, _, cx| {
-                    ws.ui.grok_plugins = None;
-                    load_grok_plugins(ws, cx);
-                    cx.notify();
-                },
-            )),
+            .child(header_actions),
     );
 
     let Some(cached) = &ws.ui.grok_plugins else {
@@ -3156,197 +3482,26 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
             .child(
                 div()
                     .flex()
+                    .flex_col()
                     .items_center()
                     .justify_center()
-                    .p(px(32.0))
-                    .rounded(px(8.0))
-                    .bg(t.card_bg)
-                    .border_1()
-                    .border_color(t.card_border)
-                    .text_size(px(13.0))
-                    .text_color(t.text_secondary)
-                    .child(i.t("正在查询 Grok 插件列表…", "Loading Grok plugins…")),
+                    .p(px(48.0))
+                    .gap(px(12.0))
+                    .child(gpui_kit::component::spinner::Spinner::new().color(t.accent.into()))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.text_muted)
+                            .child(i.t("正在读取 Grok 插件…", "Loading Grok plugins…")),
+                    ),
             )
             .into_any_element();
     };
 
-    match cached {
-        Ok((installed, available)) => {
-            section = section.child(section_title(
-                &t,
-                i.t("已安装", "Installed"),
-                Some(gpui::SharedString::from(format!(
-                    "{} plugins",
-                    installed.len()
-                ))),
-            ));
-            for plugin in installed {
-                let toggle_id = plugin.plugin_id.clone();
-                let uninstall_id = plugin.plugin_id.clone();
-                let update_id = plugin.plugin_id.clone();
-                let enabled = plugin.enabled;
-                section = section.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_start()
-                        .gap(px(6.0))
-                        .p(px(10.0))
-                        .rounded(px(8.0))
-                        .bg(t.card_bg)
-                        .border_1()
-                        .border_color(if enabled { t.success } else { t.card_border })
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(t.text_primary)
-                                .child(format!("{}@{}", plugin.name, plugin.marketplace_name)),
-                        )
-                        .children(plugin.description.as_ref().map(|description| {
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(t.text_muted)
-                                .child(description.clone())
-                                .into_any_element()
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(8.0))
-                                .child(button_l(
-                                    gpui::SharedString::from(format!("grok-toggle-{toggle_id}")),
-                                    if enabled {
-                                        i.t("停用", "Disable")
-                                    } else {
-                                        i.t("启用", "Enable")
-                                    },
-                                    ButtonVariant::Secondary,
-                                    &t,
-                                    cx,
-                                    move |ws, _, _, cx| {
-                                        let id = toggle_id.clone();
-                                        spawn_tool_action(
-                                            Some(ToolId::Grok),
-                                            ws,
-                                            cx,
-                                            "插件状态已更新".into(),
-                                            "plugin state updated".into(),
-                                            move |paths| {
-                                                aitoolplus_core::grok_plugins::enable(
-                                                    &paths, &id, !enabled,
-                                                )
-                                            },
-                                        );
-                                    },
-                                ))
-                                .child(button_l(
-                                    gpui::SharedString::from(format!("grok-update-{update_id}")),
-                                    i.t("更新", "Update"),
-                                    ButtonVariant::Secondary,
-                                    &t,
-                                    cx,
-                                    move |ws, _, _, cx| {
-                                        let id = update_id.clone();
-                                        spawn_tool_action(
-                                            Some(ToolId::Grok),
-                                            ws,
-                                            cx,
-                                            "插件已更新".into(),
-                                            "plugin updated".into(),
-                                            move |paths| {
-                                                aitoolplus_core::grok_plugins::update(&paths, &id)
-                                            },
-                                        );
-                                    },
-                                ))
-                                .child(button_l(
-                                    gpui::SharedString::from(format!(
-                                        "grok-uninstall-{uninstall_id}"
-                                    )),
-                                    i.t("卸载", "Uninstall"),
-                                    ButtonVariant::Danger,
-                                    &t,
-                                    cx,
-                                    move |ws, _, _, cx| {
-                                        let id = uninstall_id.clone();
-                                        spawn_tool_action(
-                                            Some(ToolId::Grok),
-                                            ws,
-                                            cx,
-                                            "插件已卸载".into(),
-                                            "plugin uninstalled".into(),
-                                            move |paths| {
-                                                aitoolplus_core::grok_plugins::uninstall(
-                                                    &paths, &id,
-                                                )
-                                            },
-                                        );
-                                    },
-                                )),
-                        ),
-                );
-            }
-
-            let installed_ids: std::collections::HashSet<String> =
-                installed.iter().map(|plugin| plugin.plugin_id.clone()).collect();
-            let available_filtered: Vec<_> = available
-                .iter()
-                .filter(|plugin| !installed_ids.contains(&plugin.plugin_id))
-                .collect();
-            if !available_filtered.is_empty() {
-                section = section.child(section_title(&t, i.t("可安装", "Available"), None));
-                for plugin in available_filtered {
-                    let action_plugin = plugin.clone();
-                    section = section.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_start()
-                            .gap(px(6.0))
-                            .p(px(10.0))
-                            .rounded(px(8.0))
-                            .bg(t.card_bg)
-                            .border_1()
-                            .border_color(t.card_border)
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .text_color(t.text_primary)
-                                    .child(plugin.name.clone()),
-                            )
-                            .child(button_l(
-                                gpui::SharedString::from(format!("grok-install-{}", plugin.plugin_id)),
-                                i.t("安装并信任", "Install & Trust"),
-                                ButtonVariant::Primary,
-                                &t,
-                                cx,
-                                move |ws, _, _, cx| {
-                                    let plugin = action_plugin.clone();
-                                    spawn_tool_action(
-                                        Some(ToolId::Grok),
-                                        ws,
-                                        cx,
-                                        "插件已安装".into(),
-                                        "plugin installed".into(),
-                                        move |paths| {
-                                            aitoolplus_core::grok_plugins::install(&paths, &plugin)
-                                        },
-                                    );
-                                },
-                            )),
-                    );
-                }
-            }
-        }
-        Err(error) => {
-            section = section
-                .child(crate::components::empty_state_svg(
-                    &t,
-                    crate::icons::ALERT_SVG,
-                    i.t("Grok 插件列表获取失败", "Failed to list Grok plugins"),
-                    "",
-                ))
+    let (installed, _) = match cached {
+        Ok(d) => d,
+        Err(e) => {
+            return section
                 .child(
                     div()
                         .p(px(12.0))
@@ -3356,503 +3511,2108 @@ fn grok_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         .border_color(t.danger)
                         .text_size(px(12.0))
                         .text_color(t.danger)
-                        .child(error.clone()),
+                        .child(format!("{}: {e}", i.t("插件读取失败", "plugins read failed"))),
+                )
+                .into_any_element();
+        }
+    };
+
+    let filter = ws.ui.grok_installed_search.read(cx).text().trim().to_lowercase();
+    let filtered_plugins: Vec<&aitoolplus_core::grok_plugins::GrokPlugin> = installed
+        .iter()
+        .filter(|p| {
+            if filter.is_empty() {
+                return true;
+            }
+            p.name.to_lowercase().contains(&filter)
+                || p.plugin_id.to_lowercase().contains(&filter)
+                || p.marketplace_name.to_lowercase().contains(&filter)
+                || p.description.as_deref().unwrap_or_default().to_lowercase().contains(&filter)
+        })
+        .collect();
+
+    let mut tab_col = div().flex().flex_col().gap(px(10.0));
+
+    if !installed.is_empty() {
+        tab_col = tab_col.child(
+            div()
+                .w_full()
+                .child(input_container(&t, ws.ui.grok_installed_search.clone())),
+        );
+    }
+
+    if installed.is_empty() {
+        tab_col = tab_col.child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .p(px(40.0))
+                .gap(px(8.0))
+                .rounded(px(8.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.text_primary)
+                        .child(i.t("没有已安装插件", "No installed plugins")),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.text_muted)
+                        .child(i.t(
+                            "可切换至「插件市场」标签页浏览并一键安装插件",
+                            "Switch to Marketplace tab to discover and install plugins",
+                        )),
+                ),
+        );
+    } else if filtered_plugins.is_empty() {
+        tab_col = tab_col.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("未找到匹配的插件", "No matching plugins found")),
+        );
+    } else {
+        for plugin in filtered_plugins {
+            let pid = plugin.plugin_id.clone();
+            let pid_del = plugin.plugin_id.clone();
+            let enabled = plugin.enabled;
+
+            let mut card = div()
+                .id(gpui::SharedString::from(format!("grok-p-{}", plugin.plugin_id)))
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w(px(0.0))
+                .gap(px(6.0))
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(if enabled { gpui::rgba(0x22c55e44) } else { t.card_border })
+                .shadow_xs();
+
+            let mut header_row = div().flex().items_center().gap(px(8.0)).w_full();
+            header_row = header_row.child(
+                div()
+                    .text_size(px(13.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(t.text_primary)
+                    .child(plugin.name.clone()),
+            );
+            header_row = header_row.child(badge(
+                &t,
+                if enabled { i.t("已启用", "Enabled") } else { i.t("已停用", "Disabled") },
+                if enabled { BadgeKind::Success } else { BadgeKind::Neutral },
+            ));
+            header_row = header_row.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(20.0))
+                    .px(px(6.0))
+                    .rounded(px(4.0))
+                    .bg(t.sidebar_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .text_size(px(11.0))
+                    .text_color(t.text_secondary)
+                    .child(plugin.marketplace_name.clone()),
+            );
+            if let Some(v) = &plugin.version {
+                header_row = header_row.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(20.0))
+                        .px(px(6.0))
+                        .rounded(px(4.0))
+                        .bg(t.sidebar_bg)
+                        .border_1()
+                        .border_color(t.card_border)
+                        .text_size(px(11.0))
+                        .text_color(t.text_muted)
+                        .child(format!("v{v}")),
                 );
+            }
+            header_row = header_row.child(div().flex_1());
+
+            // Action buttons
+            header_row = header_row.child(button_l(
+                gpui::SharedString::from(format!("grok-toggle-{}", plugin.plugin_id)),
+                if enabled { i.t("停用", "Disable") } else { i.t("启用", "Enable") },
+                if enabled { ButtonVariant::Secondary } else { ButtonVariant::Primary },
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    let id = pid.clone();
+                    spawn_tool_action(
+                        Some(ToolId::Grok),
+                        ws,
+                        cx,
+                        "插件状态已更新".into(),
+                        "plugin state updated".into(),
+                        move |paths| aitoolplus_core::grok_plugins::enable(&paths, &id, !enabled),
+                    );
+                },
+            ));
+            header_row = header_row.child(button_with_icon_l(
+                gpui::SharedString::from(format!("grok-del-{}", plugin.plugin_id)),
+                crate::icons::TRASH_SVG,
+                i.t("卸载", "Uninstall"),
+                ButtonVariant::Danger,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    let id = pid_del.clone();
+                    spawn_tool_action(
+                        Some(ToolId::Grok),
+                        ws,
+                        cx,
+                        "插件已卸载".into(),
+                        "plugin uninstalled".into(),
+                        move |paths| aitoolplus_core::grok_plugins::uninstall(&paths, &id),
+                    );
+                },
+            ));
+
+            card = card.child(header_row);
+
+            // Row 2: Description
+            if let Some(desc) = &plugin.description {
+                card = card.child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(desc.clone()),
+                );
+            }
+
+            // Row 3: Capabilities
+            if !plugin.capabilities.is_empty() {
+                let mut caps_row = div().flex().items_center().gap(px(4.0)).flex_wrap();
+                for cap in &plugin.capabilities {
+                    caps_row = caps_row.child(plugin_tag(cap.clone(), t.accent_subtle, t.accent));
+                }
+                card = card.child(caps_row);
+            }
+
+            tab_col = tab_col.child(card);
         }
     }
+
+    section = section.child(tab_col);
     section.into_any_element()
 }
+
+fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    if ws.ui.grok_plugins.is_none() && !ws.ui.grok_plugins_loading {
+        load_grok_plugins(ws, cx);
+    }
+
+    let is_loading = ws.ui.grok_plugins_loading;
+    let refresh_label = if is_loading {
+        i.t("刷新中…", "Refreshing…")
+    } else {
+        i.t("刷新", "Refresh")
+    };
+
+    let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
+
+    let Some(cached) = &ws.ui.grok_plugins else {
+        return section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .p(px(48.0))
+                    .gap(px(12.0))
+                    .child(gpui_kit::component::spinner::Spinner::new().color(t.accent.into()))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.text_muted)
+                            .child(i.t("正在读取 Grok 插件市场…", "Loading Grok marketplace plugins…")),
+                    ),
+            )
+            .into_any_element();
+    };
+
+    let (installed, available) = match cached {
+        Ok(d) => d,
+        Err(e) => {
+            return section
+                .child(
+                    div()
+                        .p(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(t.danger_subtle)
+                        .border_1()
+                        .border_color(t.danger)
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(format!("{}: {e}", i.t("插件市场读取失败", "marketplace read failed"))),
+                )
+                .into_any_element();
+        }
+    };
+
+    let m_filter = ws.ui.grok_market_search.read(cx).text().trim().to_lowercase();
+    let installed_set: std::collections::HashSet<String> = installed
+        .iter()
+        .map(|p| p.plugin_id.clone())
+        .collect();
+
+    let filtered_mkt: Vec<&aitoolplus_core::grok_plugins::GrokPlugin> = available
+        .iter()
+        .filter(|p| {
+            if m_filter.is_empty() {
+                return true;
+            }
+            p.name.to_lowercase().contains(&m_filter)
+                || p.plugin_id.to_lowercase().contains(&m_filter)
+                || p.marketplace_name.to_lowercase().contains(&m_filter)
+                || p.description.as_deref().unwrap_or_default().to_lowercase().contains(&m_filter)
+        })
+        .collect();
+
+    // Unified Toolbar
+    let mut toolbar = div().flex().items_center().gap(px(10.0)).w_full();
+    toolbar = toolbar.child(
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(input_container(&t, ws.ui.grok_market_search.clone())),
+    );
+    toolbar = toolbar.child(
+        div()
+            .text_size(px(12.0))
+            .text_color(t.text_muted)
+            .child(format!(
+                "{} {} {}",
+                i.t("匹配到", "Matched"),
+                filtered_mkt.len(),
+                i.t("个插件", "plugins")
+            )),
+    );
+    toolbar = toolbar.child(button_with_icon_loading_l(
+        "grok-market-refresh-btn",
+        crate::icons::REFRESH_SVG,
+        refresh_label,
+        ButtonVariant::Secondary,
+        is_loading,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.grok_plugins = None;
+            load_grok_plugins(ws, cx);
+            cx.notify();
+        },
+    ));
+
+    section = section.child(toolbar);
+
+    if available.is_empty() {
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("暂无市场插件", "No marketplace plugins available")),
+        );
+    } else if filtered_mkt.is_empty() {
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("未找到匹配的市场插件", "No matching marketplace plugins found")),
+        );
+    } else {
+        let items: std::sync::Arc<Vec<aitoolplus_core::grok_plugins::GrokPlugin>> =
+            std::sync::Arc::new(filtered_mkt.into_iter().cloned().collect());
+        let items_len = items.len();
+        let items_for_list = items.clone();
+        let installed_set = std::sync::Arc::new(installed_set);
+        let ws_entity = cx.entity();
+        let t_clone = t.clone();
+        let i_clone = i.clone();
+
+        let v_list = uniform_list(
+            "grok-mkt-virtual-list",
+            items_len,
+            move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
+                let mut elements = Vec::with_capacity(range.len());
+                for idx in range {
+                    if let Some(plugin) = items_for_list.get(idx) {
+                        elements.push(render_virtual_grok_marketplace_card(
+                            plugin,
+                            &installed_set,
+                            &ws_entity,
+                            &t_clone,
+                            &i_clone,
+                        ));
+                    }
+                }
+                elements
+            },
+        )
+        .size_full();
+
+        section = section.child(
+            div()
+                .w_full()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .rounded(px(8.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .p(px(8.0))
+                .child(v_list),
+        );
+    }
+
+    section.into_any_element()
+}
+
+fn render_virtual_grok_marketplace_card(
+    plugin: &aitoolplus_core::grok_plugins::GrokPlugin,
+    installed_set: &std::collections::HashSet<String>,
+    ws_entity: &gpui::Entity<Workspace>,
+    t: &Theme,
+    i: &I18n,
+) -> gpui::AnyElement {
+    let is_installed = installed_set.contains(&plugin.plugin_id);
+    let action_plugin = plugin.clone();
+
+    let mut card = div()
+        .id(gpui::SharedString::from(format!("v-grok-card-{}", plugin.plugin_id)))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .w_full()
+        .min_w(px(0.0))
+        .h(px(90.0))
+        .p(px(10.0))
+        .rounded(px(6.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .shadow_xs()
+        .hover({
+            let bg = t.card_hover;
+            let border = t.card_border_hover;
+            move |h| h.bg(bg).border_color(border)
+        });
+
+    let mut row1 = div().flex().items_center().gap(px(8.0)).w_full();
+    row1 = row1.child(
+        div()
+            .text_size(px(13.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(t.text_primary)
+            .child(plugin.name.clone()),
+    );
+    if is_installed {
+        row1 = row1.child(badge(t, i.t("已安装", "Installed"), BadgeKind::Success));
+    }
+    row1 = row1.child(
+        div()
+            .flex()
+            .items_center()
+            .h(px(18.0))
+            .px(px(5.0))
+            .rounded(px(3.0))
+            .bg(t.sidebar_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .text_size(px(10.5))
+            .text_color(t.text_secondary)
+            .child(plugin.marketplace_name.clone()),
+    );
+    row1 = row1.child(div().flex_1());
+
+    if !is_installed {
+        let ws_entity = ws_entity.clone();
+        let bg = t.accent;
+        let hover_bg = t.accent_hover;
+        row1 = row1.child(
+            div()
+                .id(gpui::SharedString::from(format!("v-grok-inst-{}", plugin.plugin_id)))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(4.0))
+                .h(px(26.0))
+                .px(px(12.0))
+                .rounded(px(6.0))
+                .bg(bg)
+                .text_color(gpui::white())
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .shadow_xs()
+                .hover(move |h| h.bg(hover_bg))
+                .on_click(move |_ev, _win, cx| {
+                    let plugin = action_plugin.clone();
+                    let _ = ws_entity.update(cx, |ws, cx| {
+                        spawn_tool_action(
+                            Some(ToolId::Grok),
+                            ws,
+                            cx,
+                            "插件已安装".into(),
+                            "plugin installed".into(),
+                            move |paths| aitoolplus_core::grok_plugins::install(&paths, &plugin),
+                        );
+                    });
+                })
+                .child(i.t("安装并信任", "Install & Trust")),
+        );
+    } else {
+        row1 = row1.child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(26.0))
+                .px(px(10.0))
+                .rounded(px(6.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(11.5))
+                .text_color(t.text_muted)
+                .child(i.t("已安装", "Installed")),
+        );
+    }
+
+    card = card.child(row1);
+
+    if let Some(desc) = &plugin.description {
+        card = card.child(
+            div()
+                .text_size(px(11.5))
+                .text_color(t.text_secondary)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(desc.clone()),
+        );
+    }
+
+    if !plugin.capabilities.is_empty() {
+        let mut caps_row = div().flex().items_center().gap(px(4.0)).flex_wrap();
+        for cap in &plugin.capabilities {
+            caps_row = caps_row.child(plugin_tag(cap.clone(), t.accent_subtle, t.accent));
+        }
+        card = card.child(caps_row);
+    }
+
+    card.into_any_element()
+}
+
+fn load_codex_plugins(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    ws.ui.codex_plugins_loading = true;
+    let paths = ws.paths.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let res = aitoolplus_core::codex_plugins::list_all(&paths);
+        let _ = weak.update(cx, |ws, cx| {
+            ws.ui.codex_plugins = Some(res);
+            ws.ui.codex_plugins_loading = false;
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    if ws.ui.codex_plugins.is_none() && !ws.ui.codex_plugins_loading {
+        load_codex_plugins(ws, cx);
+    }
+
+    let is_loading = ws.ui.codex_plugins_loading;
+    let refresh_label = if is_loading {
+        i.t("刷新中…", "Refreshing…")
+    } else {
+        i.t("刷新", "Refresh")
+    };
+
+    let (installed_count, can_enable_all, can_disable_all) =
+        if let Some(Ok(data)) = &ws.ui.codex_plugins {
+            let inst_len = data.installed_plugins.len();
+            let disabled_count = data.installed_plugins.iter().filter(|p| !p.enabled).count();
+            let enabled_count = data.installed_plugins.iter().filter(|p| p.enabled).count();
+            (inst_len, disabled_count > 0, enabled_count > 0)
+        } else {
+            (0, false, false)
+        };
+
+    let mut section = div().flex().flex_col().gap(px(12.0));
+
+    let mut header_actions = div().flex().items_center().gap(px(8.0));
+
+    if can_enable_all {
+        header_actions = header_actions.child(button_l(
+            "codex-plugins-enable-all",
+            i.t("全部启用", "Enable All"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                match aitoolplus_core::codex_plugins::set_all_plugins_enabled(&ws.paths, true) {
+                    Ok(count) => {
+                        let msg = ws
+                            .i18n
+                            .t(
+                                &format!("已启用 {count} 个插件"),
+                                &format!("enabled {count} plugins"),
+                            )
+                            .to_string();
+                        ws.ui.toast(msg, false);
+                        ws.ui.codex_plugins = None;
+                        load_codex_plugins(ws, cx);
+                    }
+                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                }
+                cx.notify();
+            },
+        ));
+    }
+    if can_disable_all {
+        header_actions = header_actions.child(button_l(
+            "codex-plugins-disable-all",
+            i.t("全部停用", "Disable All"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                match aitoolplus_core::codex_plugins::set_all_plugins_enabled(&ws.paths, false) {
+                    Ok(count) => {
+                        let msg = ws
+                            .i18n
+                            .t(
+                                &format!("已停用 {count} 个插件"),
+                                &format!("disabled {count} plugins"),
+                            )
+                            .to_string();
+                        ws.ui.toast(msg, false);
+                        ws.ui.codex_plugins = None;
+                        load_codex_plugins(ws, cx);
+                    }
+                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                }
+                cx.notify();
+            },
+        ));
+    }
+
+    header_actions = header_actions.child(button_with_icon_loading_l(
+        "codex-plugins-refresh-btn",
+        crate::icons::REFRESH_SVG,
+        refresh_label,
+        ButtonVariant::Secondary,
+        is_loading,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.codex_plugins = None;
+            load_codex_plugins(ws, cx);
+            cx.notify();
+        },
+    ));
+
+    section = section.child(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(page_header(
+                &t,
+                i.t("已安装插件", "Installed Plugins"),
+                i.t(
+                    &format!("管理已安装的 {} 个 Codex 插件", installed_count),
+                    &format!("Manage {} installed Codex plugins", installed_count),
+                ),
+            ))
+            .child(header_actions),
+    );
+
+    let Some(cached) = &ws.ui.codex_plugins else {
+        return section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .p(px(48.0))
+                    .gap(px(12.0))
+                    .child(gpui_kit::component::spinner::Spinner::new().color(t.accent.into()))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.text_muted)
+                            .child(i.t("正在读取 Codex 插件…", "Loading Codex plugins…")),
+                    ),
+            )
+            .into_any_element();
+    };
+
+    let data = match cached {
+        Ok(d) => d,
+        Err(e) => {
+            return section
+                .child(
+                    div()
+                        .p(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(t.danger_subtle)
+                        .border_1()
+                        .border_color(t.danger)
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(format!("{}: {e}", i.t("插件读取失败", "plugins read failed"))),
+                )
+                .into_any_element();
+        }
+    };
+
+    let filter = ws.ui.codex_installed_search.read(cx).text().trim().to_lowercase();
+    let filtered_plugins: Vec<&aitoolplus_core::codex_plugins::CodexInstalledPlugin> = data
+        .installed_plugins
+        .iter()
+        .filter(|p| {
+            if filter.is_empty() {
+                return true;
+            }
+            p.name.to_lowercase().contains(&filter)
+                || p.plugin_id.to_lowercase().contains(&filter)
+                || p.marketplace_name.to_lowercase().contains(&filter)
+                || p.description.as_deref().unwrap_or_default().to_lowercase().contains(&filter)
+        })
+        .collect();
+
+    let mut tab_col = div().flex().flex_col().gap(px(10.0));
+
+    if !data.installed_plugins.is_empty() {
+        tab_col = tab_col.child(
+            div()
+                .w_full()
+                .child(input_container(&t, ws.ui.codex_installed_search.clone())),
+        );
+    }
+
+    if data.installed_plugins.is_empty() {
+        tab_col = tab_col.child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .p(px(40.0))
+                .gap(px(8.0))
+                .rounded(px(8.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.text_primary)
+                        .child(i.t("没有已安装插件", "No installed plugins")),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.text_muted)
+                        .child(i.t(
+                            "可切换至「插件市场」标签页浏览并一键安装插件",
+                            "Switch to Marketplace tab to discover and install plugins",
+                        )),
+                ),
+        );
+    } else if filtered_plugins.is_empty() {
+        tab_col = tab_col.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("未找到匹配的插件", "No matching plugins found")),
+        );
+    } else {
+        for plugin in filtered_plugins {
+            let pid = plugin.plugin_id.clone();
+            let pid_del = plugin.plugin_id.clone();
+            let enabled = plugin.enabled;
+
+            let mut card = div()
+                .id(gpui::SharedString::from(format!("codex-p-{}", plugin.plugin_id)))
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w(px(0.0))
+                .gap(px(6.0))
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(if enabled { gpui::rgba(0x22c55e44) } else { t.card_border })
+                .shadow_xs();
+
+            let mut header_row = div().flex().items_center().gap(px(8.0)).w_full();
+            header_row = header_row.child(
+                div()
+                    .text_size(px(13.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(t.text_primary)
+                    .child(plugin.name.clone()),
+            );
+            header_row = header_row.child(badge(
+                &t,
+                if enabled { i.t("已启用", "Enabled") } else { i.t("已停用", "Disabled") },
+                if enabled { BadgeKind::Success } else { BadgeKind::Neutral },
+            ));
+            header_row = header_row.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(px(20.0))
+                    .px(px(6.0))
+                    .rounded(px(4.0))
+                    .bg(t.sidebar_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .text_size(px(11.0))
+                    .text_color(t.text_secondary)
+                    .child(plugin.marketplace_name.clone()),
+            );
+            if let Some(v) = &plugin.active_version {
+                header_row = header_row.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(20.0))
+                        .px(px(6.0))
+                        .rounded(px(4.0))
+                        .bg(t.sidebar_bg)
+                        .border_1()
+                        .border_color(t.card_border)
+                        .text_size(px(11.0))
+                        .text_color(t.text_muted)
+                        .child(format!("v{v}")),
+                );
+            }
+            header_row = header_row.child(div().flex_1());
+
+            // Action buttons
+            header_row = header_row.child(button_l(
+                gpui::SharedString::from(format!("codex-toggle-{}", plugin.plugin_id)),
+                if enabled { i.t("停用", "Disable") } else { i.t("启用", "Enable") },
+                if enabled { ButtonVariant::Secondary } else { ButtonVariant::Primary },
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    let id = pid.clone();
+                    match aitoolplus_core::codex_plugins::set_plugin_enabled(&ws.paths, &id, !enabled) {
+                        Ok(_) => {
+                            let msg = if !enabled {
+                                ws.i18n.t("插件已启用", "plugin enabled")
+                            } else {
+                                ws.i18n.t("插件已停用", "plugin disabled")
+                            };
+                            ws.ui.toast(msg.to_string(), false);
+                            ws.ui.codex_plugins = None;
+                            load_codex_plugins(ws, cx);
+                        }
+                        Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                    }
+                    cx.notify();
+                },
+            ));
+            header_row = header_row.child(button_with_icon_l(
+                gpui::SharedString::from(format!("codex-del-{}", plugin.plugin_id)),
+                crate::icons::TRASH_SVG,
+                i.t("卸载", "Uninstall"),
+                ButtonVariant::Danger,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    let id = pid_del.clone();
+                    match aitoolplus_core::codex_plugins::uninstall_plugin(&ws.paths, &id) {
+                        Ok(_) => {
+                            ws.ui.toast(ws.i18n.t("插件已卸载", "plugin uninstalled").to_string(), false);
+                            ws.ui.codex_plugins = None;
+                            load_codex_plugins(ws, cx);
+                        }
+                        Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                    }
+                    cx.notify();
+                },
+            ));
+
+            card = card.child(header_row);
+
+            if let Some(desc) = &plugin.description {
+                card = card.child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(desc.clone()),
+                );
+            }
+
+            if let Some(path) = &plugin.installed_path {
+                card = card.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(t.text_muted)
+                        .child(format!("{}: {}", i.t("路径", "Path"), path)),
+                );
+            }
+
+            tab_col = tab_col.child(card);
+        }
+    }
+
+    section = section.child(tab_col);
+    section.into_any_element()
+}
+
+fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    if ws.ui.codex_plugins.is_none() && !ws.ui.codex_plugins_loading {
+        load_codex_plugins(ws, cx);
+    }
+
+    let is_loading = ws.ui.codex_plugins_loading;
+    let refresh_label = if is_loading {
+        i.t("刷新中…", "Refreshing…")
+    } else {
+        i.t("刷新", "Refresh")
+    };
+
+    let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
+
+    let Some(cached) = &ws.ui.codex_plugins else {
+        return section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .p(px(48.0))
+                    .gap(px(12.0))
+                    .child(gpui_kit::component::spinner::Spinner::new().color(t.accent.into()))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.text_muted)
+                            .child(i.t("正在读取 Codex 插件市场…", "Loading Codex marketplace plugins…")),
+                    ),
+            )
+            .into_any_element();
+    };
+
+    let data = match cached {
+        Ok(d) => d,
+        Err(e) => {
+            return section
+                .child(
+                    div()
+                        .p(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(t.danger_subtle)
+                        .border_1()
+                        .border_color(t.danger)
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(format!("{}: {e}", i.t("插件市场读取失败", "marketplace read failed"))),
+                )
+                .into_any_element();
+        }
+    };
+
+    let m_filter = ws.ui.codex_market_search.read(cx).text().trim().to_lowercase();
+    let installed_set: std::collections::HashSet<String> = data
+        .installed_plugins
+        .iter()
+        .map(|p| p.plugin_id.clone())
+        .collect();
+
+    let filtered_mkt: Vec<&aitoolplus_core::codex_plugins::CodexMarketplacePlugin> = data
+        .marketplace_plugins
+        .iter()
+        .filter(|p| {
+            if m_filter.is_empty() {
+                return true;
+            }
+            p.name.to_lowercase().contains(&m_filter)
+                || p.plugin_id.to_lowercase().contains(&m_filter)
+                || p.marketplace_name.to_lowercase().contains(&m_filter)
+                || p.description.as_deref().unwrap_or_default().to_lowercase().contains(&m_filter)
+                || p.category.as_deref().unwrap_or_default().to_lowercase().contains(&m_filter)
+                || p.capabilities.iter().any(|t| t.to_lowercase().contains(&m_filter))
+        })
+        .collect();
+
+    let mut toolbar = div().flex().items_center().gap(px(10.0)).w_full();
+    toolbar = toolbar.child(
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(input_container(&t, ws.ui.codex_market_search.clone())),
+    );
+    toolbar = toolbar.child(
+        div()
+            .text_size(px(12.0))
+            .text_color(t.text_muted)
+            .child(format!(
+                "{} {} {}",
+                i.t("匹配到", "Matched"),
+                filtered_mkt.len(),
+                i.t("个插件", "plugins")
+            )),
+    );
+    toolbar = toolbar.child(button_with_icon_loading_l(
+        "codex-market-refresh-btn",
+        crate::icons::REFRESH_SVG,
+        refresh_label,
+        ButtonVariant::Secondary,
+        is_loading,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.codex_plugins = None;
+            load_codex_plugins(ws, cx);
+            cx.notify();
+        },
+    ));
+
+    section = section.child(toolbar);
+
+    if data.marketplace_plugins.is_empty() {
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("暂无市场插件", "No marketplace plugins available")),
+        );
+    } else if filtered_mkt.is_empty() {
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("未找到匹配的市场插件", "No matching marketplace plugins found")),
+        );
+    } else {
+        let items: std::sync::Arc<Vec<aitoolplus_core::codex_plugins::CodexMarketplacePlugin>> =
+            std::sync::Arc::new(filtered_mkt.into_iter().cloned().collect());
+        let items_len = items.len();
+        let items_for_list = items.clone();
+        let installed_set = std::sync::Arc::new(installed_set);
+        let ws_entity = cx.entity();
+        let t_clone = t.clone();
+        let i_clone = i.clone();
+
+        let v_list = uniform_list(
+            "codex-mkt-virtual-list",
+            items_len,
+            move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
+                let mut elements = Vec::with_capacity(range.len());
+                for idx in range {
+                    if let Some(plugin) = items_for_list.get(idx) {
+                        elements.push(render_virtual_codex_marketplace_card(
+                            plugin,
+                            &installed_set,
+                            &ws_entity,
+                            &t_clone,
+                            &i_clone,
+                        ));
+                    }
+                }
+                elements
+            },
+        )
+        .size_full();
+
+        section = section.child(
+            div()
+                .w_full()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .rounded(px(8.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .p(px(8.0))
+                .child(v_list),
+        );
+    }
+
+    section.into_any_element()
+}
+
+fn render_virtual_codex_marketplace_card(
+    plugin: &aitoolplus_core::codex_plugins::CodexMarketplacePlugin,
+    installed_set: &std::collections::HashSet<String>,
+    ws_entity: &gpui::Entity<Workspace>,
+    t: &Theme,
+    i: &I18n,
+) -> gpui::AnyElement {
+    let is_installed = installed_set.contains(&plugin.plugin_id);
+
+    let mut card = div()
+        .id(gpui::SharedString::from(format!("v-codex-card-{}", plugin.plugin_id)))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .w_full()
+        .min_w(px(0.0))
+        .h(px(100.0))
+        .p(px(10.0))
+        .rounded(px(8.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .shadow_xs()
+        .hover({
+            let bg = t.card_hover;
+            let border = t.card_border_hover;
+            move |h| h.bg(bg).border_color(border)
+        });
+
+    let mut header_row = div().flex().items_center().gap(px(8.0)).w_full();
+    header_row = header_row.child(
+        div()
+            .text_size(px(13.5))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(t.text_primary)
+            .child(plugin.name.clone()),
+    );
+    header_row = header_row.child(
+        div()
+            .flex()
+            .items_center()
+            .h(px(20.0))
+            .px(px(6.0))
+            .rounded(px(4.0))
+            .bg(t.sidebar_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .text_size(px(11.0))
+            .text_color(t.text_secondary)
+            .child(plugin.marketplace_name.clone()),
+    );
+    if let Some(cat) = &plugin.category {
+        header_row = header_row.child(plugin_tag(cat.clone(), t.accent_subtle, t.accent));
+    }
+    if is_installed {
+        header_row = header_row.child(badge(t, i.t("已安装", "Installed"), BadgeKind::Success));
+    }
+    header_row = header_row.child(div().flex_1());
+
+    if is_installed {
+        header_row = header_row.child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(26.0))
+                .px(px(10.0))
+                .rounded(px(6.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(11.5))
+                .text_color(t.text_muted)
+                .child(i.t("已安装", "Installed")),
+        );
+    } else {
+        let ws_entity = ws_entity.clone();
+        let to_install = plugin.plugin_id.clone();
+        let bg = t.accent;
+        let hover_bg = t.accent_hover;
+        header_row = header_row.child(
+            div()
+                .id(gpui::SharedString::from(format!("v-install-codex-{}", plugin.plugin_id)))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(4.0))
+                .h(px(26.0))
+                .px(px(12.0))
+                .rounded(px(6.0))
+                .bg(bg)
+                .text_color(gpui::white())
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .shadow_xs()
+                .hover(move |h| h.bg(hover_bg))
+                .on_click(move |_event, _window, cx| {
+                    let pid = to_install.clone();
+                    let _ = ws_entity.update(cx, |ws, cx| {
+                        match aitoolplus_core::codex_plugins::install_plugin(&ws.paths, &pid) {
+                            Ok(_) => {
+                                ws.ui.toast(ws.i18n.t("插件已安装", "plugin installed").to_string(), false);
+                                ws.ui.codex_plugins = None;
+                                load_codex_plugins(ws, cx);
+                            }
+                            Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                        }
+                        cx.notify();
+                    });
+                })
+                .child(i.t("安装", "Install")),
+        );
+    }
+
+    card = card.child(header_row);
+
+    if let Some(desc) = &plugin.description {
+        card = card.child(
+            div()
+                .text_size(px(12.0))
+                .text_color(t.text_secondary)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(desc.clone()),
+        );
+    }
+
+    let mut caps_row = div().flex().items_center().gap(px(4.0)).flex_wrap();
+    for cap in &plugin.capabilities {
+        caps_row = caps_row.child(plugin_tag(cap.clone(), gpui::rgba(0x3b82f620), gpui::rgb(0x2563eb)));
+    }
+    card = card.child(caps_row);
+
+    card.into_any_element()
+}
+
+pub fn load_agent_sessions(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.agent_sessions_loading {
+        return;
+    }
+    ws.ui.agent_sessions_loading = true;
+    let paths = ws.paths.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let result = cx
+            .background_spawn(async move {
+                session::cached_scan(&paths, tool, session::DEFAULT_SESSION_PATH_LIMIT)
+            })
+            .await;
+        let _ = weak.update(cx, |workspace, cx| {
+            workspace.ui.agent_sessions = Some((tool, result));
+            workspace.ui.agent_sessions_loading = false;
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+fn agent_sessions_section(
+    tool: ToolId,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let need_load = match &ws.ui.agent_sessions {
+        Some((loaded_tool, _)) => *loaded_tool != tool,
+        None => true,
+    };
+    if need_load && !ws.ui.agent_sessions_loading {
+        load_agent_sessions(tool, ws, cx);
+    }
+
+    if let Some((open_tool, ref open_sid)) = ws.ui.open_session {
+        if open_tool == tool {
+            let maybe_meta = ws
+                .ui
+                .agent_sessions
+                .as_ref()
+                .and_then(|(_, list)| list.iter().find(|s| &s.session_id == open_sid).cloned());
+            if let Some(meta) = maybe_meta {
+                return render_agent_session_detail(tool, &meta, ws, cx);
+            }
+        }
+    }
+
+    let query = ws.ui.agent_session_search.read(cx).text().trim().to_lowercase();
+    let empty_vec = vec![];
+    let sessions = ws
+        .ui
+        .agent_sessions
+        .as_ref()
+        .filter(|(t, _)| *t == tool)
+        .map(|(_, list)| list)
+        .unwrap_or(&empty_vec);
+
+    let filtered: Vec<SessionMeta> = sessions
+        .iter()
+        .filter(|s| {
+            if query.is_empty() {
+                return true;
+            }
+            s.session_id.to_lowercase().contains(&query)
+                || s.title.as_deref().unwrap_or_default().to_lowercase().contains(&query)
+                || s.summary.as_deref().unwrap_or_default().to_lowercase().contains(&query)
+                || s.project_dir.as_deref().unwrap_or_default().to_lowercase().contains(&query)
+        })
+        .cloned()
+        .collect();
+
+    let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
+
+    // Toolbar
+    let mut toolbar = div().flex().items_center().gap(px(10.0)).w_full();
+    toolbar = toolbar.child(
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(input_container(&t, ws.ui.agent_session_search.clone())),
+    );
+    if ws.ui.agent_sessions_loading {
+        toolbar = toolbar.child(badge(&t, i.t("正在扫描会话…", "Scanning sessions…"), BadgeKind::Neutral));
+    }
+    toolbar = toolbar.child(
+        div()
+            .text_size(px(12.0))
+            .text_color(t.text_muted)
+            .child(format!(
+                "{} {} {}",
+                i.t("共", "Total"),
+                filtered.len(),
+                i.t("个会话", "sessions")
+            )),
+    );
+    toolbar = toolbar.child(button_with_icon_l(
+        "agent-sessions-refresh-btn",
+        crate::icons::REFRESH_SVG,
+        if ws.ui.agent_sessions_loading {
+            i.t("刷新中…", "Refreshing…")
+        } else {
+            i.t("刷新", "Refresh")
+        },
+        ButtonVariant::Secondary,
+        &t,
+        cx,
+        move |ws, _, _, cx| {
+            session::invalidate_cache();
+            ws.ui.agent_sessions = None;
+            load_agent_sessions(tool, ws, cx);
+            cx.notify();
+        },
+    ));
+
+    section = section.child(toolbar);
+
+    if ws.ui.agent_sessions_loading && sessions.is_empty() {
+        section = section.child(
+            crate::components::empty_state_svg(
+                &t,
+                crate::icons::REFRESH_SVG,
+                i.t("正在加载会话列表…", "Loading sessions…"),
+                i.t(
+                    "后台正在快速扫描会话历史文件，请稍候",
+                    "Scanning session history files in background, please wait",
+                ),
+            ),
+        );
+    } else if filtered.is_empty() {
+        section = section.child(
+            crate::components::empty_state_svg(
+                &t,
+                crate::icons::FOLDER_SVG,
+                i.t("没有找到会话", "No sessions found"),
+                i.t(
+                    "该 Agent 的会话目录可能为空或没有匹配的搜索结果",
+                    "This agent's session directory may be empty or no results matched",
+                ),
+            ),
+        );
+    } else {
+        let items: std::sync::Arc<Vec<SessionMeta>> = std::sync::Arc::new(filtered);
+        let items_len = items.len();
+        let items_for_list = items.clone();
+        let ws_entity = cx.entity();
+        let t_clone = t.clone();
+        let i_clone = i.clone();
+
+        let v_list = uniform_list(
+            "agent-sessions-virtual-list",
+            items_len,
+            move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
+                let mut elements = Vec::with_capacity(range.len());
+                for idx in range {
+                    if let Some(s) = items_for_list.get(idx) {
+                        elements.push(render_virtual_agent_session_card(
+                            s,
+                            tool,
+                            &ws_entity,
+                            &t_clone,
+                            &i_clone,
+                        ));
+                    }
+                }
+                elements
+            },
+        )
+        .size_full();
+
+        section = section.child(
+            div()
+                .w_full()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .rounded(px(8.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .p(px(8.0))
+                .child(v_list),
+        );
+    }
+
+    section.into_any_element()
+}
+
+fn fmt_time(ms: Option<i64>) -> String {
+    ms.and_then(|m| {
+        chrono::DateTime::from_timestamp_millis(m).map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+    })
+    .unwrap_or_else(|| "—".into())
+}
+
+fn short_session_id_tool(sid: &str) -> String {
+    if sid.len() <= 12 {
+        sid.to_string()
+    } else {
+        let prefix: String = sid.chars().take(8).collect();
+        let suffix: String = sid.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("{prefix}...{suffix}")
+    }
+}
+
+fn render_virtual_agent_session_card(
+    s: &SessionMeta,
+    tool: ToolId,
+    ws_entity: &gpui::Entity<Workspace>,
+    t: &Theme,
+    i: &I18n,
+) -> gpui::AnyElement {
+    let sid = s.session_id.clone();
+    let meta = s.clone();
+    let display_title = session::sidecar_title(s)
+        .or_else(|| s.title.clone())
+        .or_else(|| s.summary.clone())
+        .unwrap_or_else(|| s.session_id.clone());
+
+    let display_time = fmt_time(s.last_active_at.or(s.created_at));
+    let short_hash = short_session_id_tool(&sid);
+
+    let sid_click = sid.clone();
+    let ws_entity_click = ws_entity.clone();
+
+    let card = div()
+        .id(gpui::SharedString::from(format!("v-sess-{}", s.session_id)))
+        .flex()
+        .items_center()
+        .justify_between()
+        .w_full()
+        .min_w(px(0.0))
+        .gap(px(12.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .rounded(px(12.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .shadow_xs()
+        .cursor_pointer()
+        .hover({
+            let bg = t.card_hover;
+            let border = t.card_border_hover;
+            move |h| h.bg(bg).border_color(border)
+        })
+        .on_click(move |_ev, _win, cx| {
+            let sid_c = sid_click.clone();
+            let _ = ws_entity_click.update(cx, |ws, cx| {
+                ws.ui.open_session = Some((tool, sid_c));
+                cx.notify();
+            });
+        });
+
+    let left = div()
+        .id(gpui::SharedString::from(format!("v-sess-left-{}", s.session_id)))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .min_w(px(0.0))
+        .flex_1()
+        .overflow_hidden()
+        // Row 1: Title
+        .child(
+            div()
+                .text_size(px(14.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(t.text_primary)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(display_title),
+        )
+        // Row 2: Meta (Time, Hash, Directory)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .text_size(px(12.0))
+                .text_color(t.text_secondary)
+                .overflow_hidden()
+                .whitespace_nowrap()
+                // Time with Clock icon
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .flex_shrink_0()
+                        .child(crate::icons::svg_icon(crate::icons::CLOCK_SVG, px(12.0), t.text_muted))
+                        .child(display_time),
+                )
+                // Hash (short session id)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(2.0))
+                        .flex_shrink_0()
+                        .text_color(t.text_muted)
+                        .child(short_hash),
+                )
+                // Project Directory (if available)
+                .children(s.project_dir.as_ref().map(|dir| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .text_color(t.text_muted)
+                        .child(crate::icons::svg_icon(crate::icons::FOLDER_SVG, px(12.0), t.text_muted))
+                        .child(
+                            div()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(dir.clone()),
+                        )
+                        .into_any_element()
+                })),
+        );
+
+    let mut actions = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .flex_shrink_0();
+
+    // [恢复命令]
+    {
+        let ws_entity = ws_entity.clone();
+        let cmd_opt = meta.resume_command.clone();
+        actions = actions.child(
+            div()
+                .id(format!("sess-resume-{}", meta.session_id))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded(px(4.0))
+                .bg(t.card_hover)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(11.5))
+                .text_color(t.text_secondary)
+                .hover({
+                    let bg = t.row_hover;
+                    let fg = t.text_primary;
+                    move |h| h.bg(bg).text_color(fg)
+                })
+                .on_click(move |_ev, _win, cx| {
+                    cx.stop_propagation();
+                    let cmd_opt = cmd_opt.clone();
+                    let _ = ws_entity.update(cx, |ws, cx| {
+                        if let Some(cmd) = cmd_opt.as_ref() {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(cmd.clone()));
+                            ws.ui.toast(ws.i18n.t("已复制恢复命令", "Copied resume command").to_string(), false);
+                        } else {
+                            ws.ui.toast(ws.i18n.t("该会话暂不支持恢复命令", "Resume not supported for this session").to_string(), true);
+                        }
+                        cx.notify();
+                    });
+                })
+                .child(crate::icons::svg_icon(crate::icons::TERMINAL_SVG, px(11.5), t.text_secondary))
+                .child(i.t("恢复命令", "Resume")),
+        );
+    }
+
+    // [重命名]
+    {
+        let ws_entity = ws_entity.clone();
+        let meta_for_rename = meta.clone();
+        actions = actions.child(
+            div()
+                .id(format!("sess-rename-{}", meta_for_rename.session_id))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded(px(4.0))
+                .bg(t.card_hover)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(11.5))
+                .text_color(t.text_secondary)
+                .hover({
+                    let bg = t.row_hover;
+                    let fg = t.text_primary;
+                    move |h| h.bg(bg).text_color(fg)
+                })
+                .on_click(move |_ev, window, cx| {
+                    cx.stop_propagation();
+                    let current = session::sidecar_title(&meta_for_rename)
+                        .or_else(|| meta_for_rename.title.clone())
+                        .unwrap_or_default();
+                    let meta_c = meta_for_rename.clone();
+                    let _ = ws_entity.update(cx, |ws, cx| {
+                        let input = cx.new(|cx| {
+                            let mut inp = TextInput::new("输入新标题…", cx);
+                            inp.set_text_silent(current, cx);
+                            inp.focus_handle.focus(window, cx);
+                            inp.start_blink(cx);
+                            inp
+                        });
+                        ws.ui.rename_dialog = Some((meta_c, input));
+                        cx.notify();
+                    });
+                })
+                .child(crate::icons::svg_icon(crate::icons::PENCIL_SVG, px(11.5), t.text_secondary))
+                .child(i.t("重命名", "Rename")),
+        );
+    }
+
+    // [删除]
+    {
+        let ws_entity = ws_entity.clone();
+        let sid_del = sid.clone();
+        actions = actions.child(
+            div()
+                .id(format!("sess-del-{}", sid_del))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded(px(4.0))
+                .bg(t.danger_subtle)
+                .text_size(px(11.5))
+                .text_color(t.danger)
+                .hover(|h| h.bg(gpui::rgba(0xef444425)))
+                .on_click(move |_ev, _win, cx| {
+                    cx.stop_propagation();
+                    let s_id = sid_del.clone();
+                    let _ = ws_entity.update(cx, |ws, cx| {
+                        ws.ui.confirm = Some(super::ConfirmState {
+                            title: ws.i18n.t("删除会话", "Delete Session").to_string(),
+                            message: ws
+                                .i18n
+                                .t("确定要删除这条会话记录吗？此操作无法恢复。", "Delete this session? This action cannot be undone.")
+                                .to_string(),
+                            action: super::ConfirmAction::DeleteSession {
+                                tool,
+                                id: s_id,
+                            },
+                        });
+                        cx.notify();
+                    });
+                })
+                .child(crate::icons::svg_icon(crate::icons::TRASH_SVG, px(11.5), t.danger))
+                .child(i.t("删除", "Delete")),
+        );
+    }
+
+    div()
+        .w_full()
+        .pb(px(12.0))
+        .child(card.child(left).child(actions))
+        .into_any_element()
+}
+
+fn render_agent_session_detail(
+    tool: ToolId,
+    meta: &SessionMeta,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    super::session_detail::render_session_detail(tool, meta, ws, cx)
+}
+
 
 // ---------------------------------------------------------------------------
 // Claude Code Plugins tab
 // ---------------------------------------------------------------------------
 
-fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+fn plugin_tag(text: impl Into<gpui::SharedString>, bg: gpui::Rgba, fg: gpui::Rgba) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .h(px(20.0))
+        .px(px(6.0))
+        .rounded(px(4.0))
+        .text_size(px(11.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .bg(bg)
+        .text_color(fg)
+        .child(text.into())
+}
+
+fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
-    let mut section = div().flex().flex_col().gap(px(12.0)).child(page_header(
-        &t,
-        i.t("插件管理", "Plugins"),
-        i.t(
-            "installed_plugins.json + known_marketplaces.json + settings.json enabledPlugins",
-            "installed_plugins.json + known_marketplaces.json + settings.json enabledPlugins",
-        ),
-    ));
 
-    // ---- marketplaces card ----
-    match aitoolplus_core::claude_plugins::list_marketplaces(&ws.paths) {
-        Ok(markets) => {
-            let mut card_inner = div().flex().flex_col().gap(px(8.0));
-
-            if markets.is_empty() {
-                card_inner =
-                    card_inner.child(div().text_size(px(12.0)).text_color(t.text_muted).child(
-                        i.t(
-                            "还没有插件市场，在下方输入来源添加（如 anthropics/claude-code）",
-                            "No marketplaces yet; add one below (e.g. anthropics/claude-code)",
-                        ),
-                    ));
-            } else {
-                for market in &markets {
-                    let name = market.name.clone();
-                    let name2 = market.name.clone();
-                    let name2_del = market.name.clone();
-                    let auto = market.auto_update_enabled;
-                    let source_text = match &market.source {
-                        Value::String(v) => v.clone(),
-                        other => serde_json::to_string(other).unwrap_or_default(),
-                    };
-                    let meta = [
-                        market.version.clone().map(|v| format!("v{v}")),
-                        (market.plugin_count > 0)
-                            .then(|| format!("{} plugins", market.plugin_count)),
-                        (!source_text.is_empty()).then_some(source_text.clone()),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-
-                    card_inner = card_inner.child(
-                        div()
-                            .id(gpui::SharedString::from(format!("market-{}", market.name)))
-                            .flex()
-                            .flex_col()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .items_start()
-                            .gap(px(8.0))
-                            .p(px(10.0))
-                            .rounded(px(8.0))
-                            .bg(t.input_bg)
-                            .border_1()
-                            .border_color(t.card_border)
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.5))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(t.text_primary)
-                                            .child(name.clone()),
-                                    )
-                                    .children((!meta.is_empty()).then(|| {
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(t.text_muted)
-                                            .child(meta.clone())
-                                            .into_any_element()
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .text_size(px(11.0))
-                                    .text_color(t.text_secondary)
-                                    .child(i.t("自动更新", "Auto-update"))
-                                    .child(components::toggle(
-                                        gpui::SharedString::from(format!(
-                                            "mkt-auto-{}",
-                                            market.name
-                                        )),
-                                        auto,
-                                        &t,
-                                        cx,
-                                        move |ws, _, _, cx| {
-                                            let target = !auto;
-                                            match aitoolplus_core::claude_plugins::set_marketplace_auto_update(
-                                                &ws.paths,
-                                                &name,
-                                                target,
-                                            ) {
-                                                Ok(_) => {
-                                                    let msg = if target {
-                                                        ws.i18n
-                                                            .t("已开启自动更新", "auto-update on")
-                                                            .to_string()
-                                                    } else {
-                                                        ws.i18n
-                                                            .t("已关闭自动更新", "auto-update off")
-                                                            .to_string()
-                                                    };
-                                                    ws.ui.toast(msg, false);
-                                                }
-                                                Err(e) => {
-                                                    ws.ui.toast(format!("failed: {e}"), true);
-                                                }
-                                            }
-                                            cx.notify();
-                                        },
-                                    )),
-                            )
-                            .child(button_l(
-                                gpui::SharedString::from(format!("mkt-upd-{}", market.name)),
-                                i.t("更新市场", "Update"),
-                                ButtonVariant::Secondary,
-                                &t,
-                                cx,
-                                {
-                                    let name_for_update = name2.clone();
-                                    move |ws, _, _, cx| {
-                                        let operation_name = name_for_update.clone();
-                                        spawn_tool_action(
-                                            Some(ToolId::ClaudeCode),
-                                            ws,
-                                            cx,
-                                            "插件市场已更新".into(),
-                                            "marketplace updated".into(),
-                                            move |paths| {
-                                                aitoolplus_core::claude_plugins::update_marketplace(
-                                                    &paths,
-                                                    Some(&operation_name),
-                                                )
-                                                .map_err(|error| format!("update failed: {error}"))
-                                            },
-                                        );
-                                    }
-                                }
-                            ))
-                            .child(button_l(
-                                gpui::SharedString::from(format!("mkt-del-{}", market.name)),
-                                i.t("移除市场", "Remove"),
-                                ButtonVariant::Danger,
-                                &t,
-                                cx,
-                                move |ws, _, _, cx| {
-                                    let success_zh = format!("已移除 {name2}");
-                                    let success_en = format!("removed {name2}");
-                                    let operation_name = name2_del.clone();
-                                    spawn_tool_action(
-                                        Some(ToolId::ClaudeCode),
-                                        ws,
-                                        cx,
-                                        success_zh,
-                                        success_en,
-                                        move |paths| {
-                                            aitoolplus_core::claude_plugins::remove_marketplace(
-                                                &paths,
-                                                &operation_name,
-                                            )
-                                            .map_err(|error| format!("remove failed: {error}"))
-                                        },
-                                    );
-                                },
-                            )),
-                    );
-                }
-            }
-
-            let add_entity = ws.ui.claude_marketplaces_input.clone();
-            card_inner = card_inner.child(
-                div()
-                    .id("mkt-add-row")
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .p(px(8.0))
-                    .rounded(px(8.0))
-                    .bg(t.input_bg)
-                    .border_1()
-                    .border_color(t.card_border)
-                    .child(div().flex_1().min_w(px(0.0)).child(add_entity.clone()))
-                    .child(button_l(
-                        "mkt-add-btn",
-                        i.t("添加市场", "Add"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            let src: String =
-                                add_entity.update(cx, |inp, cx| {
-                                    let val = inp.text().trim().to_string();
-                                    inp.set_text("", cx);
-                                    val
-                                });
-                            if src.is_empty() {
-                                let msg = ws.i18n.t("请输入来源", "source required").to_string();
-                                ws.ui.toast(msg, true);
-                                cx.notify();
-                                return;
-                            }
-                            let success_zh = format!("已添加 {src}");
-                            let success_en = format!("added {src}");
-                            spawn_tool_action(Some(ToolId::ClaudeCode), ws, cx, success_zh, success_en, move |paths| {
-                                aitoolplus_core::claude_plugins::add_marketplace(&paths, &src)
-                                    .map_err(|error| format!("add failed: {error}"))
-                            });
-                        },
-                    )),
-            );
-
-            section = section.child(section_title(&t, i.t("插件市场", "Marketplaces"), None));
-            section = section.child(card_inner);
-        }
-        Err(e) => {
-            section = section.child(
-                div()
-                    .p(px(12.0))
-                    .rounded(px(8.0))
-                    .bg(t.danger_subtle)
-                    .border_1()
-                    .border_color(t.danger)
-                    .text_size(px(12.0))
-                    .text_color(t.danger)
-                    .child(format!(
-                        "{}: {e}",
-                        i.t("市场读取失败", "marketplaces read failed")
-                    )),
-            );
-        }
+    if ws.ui.claude_plugins.is_none() && !ws.ui.claude_plugins_loading {
+        load_claude_plugins(ws, cx);
     }
 
-    // ---- marketplace-available plugins ----
-    if let (Ok(available), Ok(installed)) = (
-        aitoolplus_core::claude_plugins::list_marketplace_plugins(&ws.paths),
-        aitoolplus_core::claude_plugins::list_installed_plugins(&ws.paths),
-    ) {
-        let installed_ids: std::collections::HashSet<String> = installed
-            .iter()
-            .map(|plugin| plugin.plugin_id.clone())
-            .collect();
-        let available: Vec<_> = available
-            .into_iter()
-            .filter(|plugin| !installed_ids.contains(&plugin.plugin_id))
-            .collect();
-        if !available.is_empty() {
-            section = section.child(section_title(
+    let is_loading = ws.ui.claude_plugins_loading;
+    let refresh_label = if is_loading {
+        i.t("刷新中…", "Refreshing…")
+    } else {
+        i.t("刷新", "Refresh")
+    };
+
+    let (installed_count, can_enable_all, can_disable_all) =
+        if let Some(Ok(data)) = &ws.ui.claude_plugins {
+            let inst_len = data.installed_plugins.len();
+            let disabled_count = data
+                .installed_plugins
+                .iter()
+                .filter(|p| p.user_scope_installed && !p.user_scope_enabled)
+                .count();
+            let enabled_count = data
+                .installed_plugins
+                .iter()
+                .filter(|p| p.user_scope_installed && p.user_scope_enabled)
+                .count();
+            (inst_len, disabled_count > 0, enabled_count > 0)
+        } else {
+            (0, false, false)
+        };
+
+    let mut section = div().flex().flex_col().gap(px(12.0));
+
+    // ---- Top Header with Actions ----
+    let mut header_actions = div().flex().items_center().gap(px(8.0));
+
+    if can_enable_all {
+        header_actions = header_actions.child(button_l(
+            "plugins-enable-all-top",
+            i.t("全部启用", "Enable All"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                match aitoolplus_core::claude_plugins::set_all_plugins_enabled(&ws.paths, true) {
+                    Ok((count, _)) => {
+                        let msg = ws
+                            .i18n
+                            .t(
+                                &format!("已启用 {count} 个插件"),
+                                &format!("enabled {count} plugins"),
+                            )
+                            .to_string();
+                        ws.ui.toast(msg, false);
+                        ws.ui.claude_plugins = None;
+                        load_claude_plugins(ws, cx);
+                    }
+                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                }
+                cx.notify();
+            },
+        ));
+    }
+    if can_disable_all {
+        header_actions = header_actions.child(button_l(
+            "plugins-disable-all-top",
+            i.t("全部停用", "Disable All"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                match aitoolplus_core::claude_plugins::set_all_plugins_enabled(&ws.paths, false) {
+                    Ok((count, _)) => {
+                        let msg = ws
+                            .i18n
+                            .t(
+                                &format!("已停用 {count} 个插件"),
+                                &format!("disabled {count} plugins"),
+                            )
+                            .to_string();
+                        ws.ui.toast(msg, false);
+                        ws.ui.claude_plugins = None;
+                        load_claude_plugins(ws, cx);
+                    }
+                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                }
+                cx.notify();
+            },
+        ));
+    }
+
+    header_actions = header_actions.child(button_with_icon_loading_l(
+        "claude-plugins-refresh-btn",
+        crate::icons::REFRESH_SVG,
+        refresh_label,
+        ButtonVariant::Secondary,
+        is_loading,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.claude_plugins = None;
+            load_claude_plugins(ws, cx);
+            cx.notify();
+        },
+    ));
+
+    header_actions = header_actions.child(button_with_icon_l(
+        "claude-plugins-docs-btn",
+        crate::icons::BOOK_OPEN_SVG,
+        i.t("插件文档", "Docs"),
+        ButtonVariant::Ghost,
+        &t,
+        cx,
+        |_ws, _, _, _| {
+            open_in_browser("https://code.claude.com/docs/en/discover-plugins");
+        },
+    ));
+
+    section = section.child(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(page_header(
                 &t,
-                i.t("可安装插件", "Available Plugins"),
-                Some(i.t(
-                    "来自已添加市场的插件",
-                    "Plugins from configured marketplaces",
-                )),
-            ));
-            let mut panel = div().flex().flex_col().gap(px(6.0));
-            for plugin in available {
-                let plugin_id = plugin.plugin_id.clone();
-                panel = panel.child(
+                i.t("已安装插件", "Installed Plugins"),
+                i.t(
+                    &format!("管理已安装的 {} 个 Claude Code 插件", installed_count),
+                    &format!("Manage {} installed Claude Code plugins", installed_count),
+                ),
+            ))
+            .child(header_actions),
+    );
+
+    // ---- Content Body ----
+    let Some(cached) = &ws.ui.claude_plugins else {
+        return section
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .p(px(48.0))
+                    .gap(px(12.0))
+                    .child(gpui_kit::component::spinner::Spinner::new().color(t.accent.into()))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.text_muted)
+                            .child(i.t("正在读取插件信息…", "Loading plugins…")),
+                    ),
+            )
+            .into_any_element();
+    };
+
+    let data = match cached {
+        Ok(d) => d,
+        Err(e) => {
+            return section
+                .child(
+                    div()
+                        .p(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(t.danger_subtle)
+                        .border_1()
+                        .border_color(t.danger)
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(format!(
+                            "{}: {e}",
+                            i.t("插件读取失败", "plugins read failed")
+                        )),
+                )
+                .into_any_element();
+        }
+    };
+
+    let filter = ws
+        .ui
+        .claude_installed_search
+        .read(cx)
+        .text()
+        .trim()
+        .to_lowercase();
+
+            let filtered_plugins: Vec<&aitoolplus_core::claude_plugins::InstalledPlugin> = data
+                .installed_plugins
+                .iter()
+                .filter(|p| {
+                    if filter.is_empty() {
+                        return true;
+                    }
+                    p.name.to_lowercase().contains(&filter)
+                        || p.plugin_id.to_lowercase().contains(&filter)
+                        || p.marketplace_name.to_lowercase().contains(&filter)
+                        || p.description
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase()
+                            .contains(&filter)
+                })
+                .collect();
+
+            let mut tab_col = div().flex().flex_col().gap(px(10.0));
+
+            // Search toolbar
+            if !data.installed_plugins.is_empty() {
+                tab_col = tab_col.child(
+                    div()
+                        .w_full()
+                        .child(input_container(&t, ws.ui.claude_installed_search.clone())),
+                );
+            }
+
+            if data.installed_plugins.is_empty() {
+                tab_col = tab_col.child(
                     div()
                         .flex()
                         .flex_col()
-                        .items_start()
-                        .gap(px(6.0))
-                        .p(px(8.0))
+                        .items_center()
+                        .justify_center()
+                        .p(px(40.0))
+                        .gap(px(8.0))
                         .rounded(px(8.0))
-                        .bg(t.input_bg)
+                        .bg(t.card_bg)
                         .border_1()
                         .border_color(t.card_border)
                         .child(
                             div()
-                                .text_size(px(12.5))
+                                .text_size(px(14.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
-                                .child(format!("{}@{}", plugin.name, plugin.marketplace_name)),
+                                .child(i.t("没有已安装插件", "No installed plugins")),
                         )
-                        .children(plugin.description.map(|description| {
+                        .child(
                             div()
-                                .text_size(px(11.0))
+                                .text_size(px(12.0))
                                 .text_color(t.text_muted)
-                                .child(description)
-                                .into_any_element()
-                        }))
-                        .child(button_l(
-                            gpui::SharedString::from(format!("plugin-install-{plugin_id}")),
-                            i.t("安装", "Install"),
-                            ButtonVariant::Primary,
-                            &t,
-                            cx,
-                            move |_ws, _, _, cx| {
-                                let id = plugin_id.clone();
-                                let weak = cx.entity().downgrade();
-                                let paths =
-                                    weak.update(cx, |workspace, _| workspace.paths.clone()).ok();
-                                if let Some(paths) = paths {
-                                    cx.spawn(async move |_this, cx| {
-                                        let result = cx
-                                            .background_spawn(async move {
-                                                aitoolplus_core::claude_plugins::install_plugin(
-                                                    &paths, &id,
-                                                )
-                                            })
-                                            .await;
-                                        let _ = weak.update(cx, |workspace, cx| {
-                                            match result {
-                                                Ok(()) => workspace.ui.toast(
-                                                    workspace
-                                                        .i18n
-                                                        .t("插件已安装", "plugin installed")
-                                                        .to_string(),
-                                                    false,
-                                                ),
-                                                Err(error) => workspace.ui.toast(
-                                                    format!("install failed: {error}"),
-                                                    true,
-                                                ),
-                                            }
-                                            cx.notify();
-                                        });
-                                    })
-                                    .detach();
-                                }
-                            },
-                        )),
-                );
-            }
-            section = section.child(panel);
-        }
-    }
-
-    // ---- installed plugins card ----
-    match aitoolplus_core::claude_plugins::list_installed_plugins(&ws.paths) {
-        Ok(plugins) => {
-            let mut card_inner = div().flex().flex_col().gap(px(8.0));
-
-            if plugins.is_empty() {
-                card_inner =
-                    card_inner.child(div().text_size(px(12.0)).text_color(t.text_muted).child(
-                        i.t(
-                            "没有已安装插件（先添加市场，再用 claude plugin install 安装）",
-                            "No installed plugins (add a marketplace, then claude plugin install)",
+                                .child(i.t(
+                                    "可切换至「插件市场」标签页浏览并一键安装插件",
+                                    "Switch to Marketplaces tab to discover and install plugins",
+                                )),
                         ),
-                    ));
+                );
+            } else if filtered_plugins.is_empty() {
+                tab_col = tab_col.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .p(px(32.0))
+                        .text_size(px(12.5))
+                        .text_color(t.text_muted)
+                        .child(i.t("未找到匹配的插件", "No matching plugins found")),
+                );
             } else {
-                for plugin in &plugins {
+                for plugin in filtered_plugins {
                     let pid = plugin.plugin_id.clone();
                     let pid2 = plugin.plugin_id.clone();
                     let enabled = plugin.user_scope_enabled;
+                    let user_installed = plugin.user_scope_installed;
 
-                    let mut caps = div().flex().gap(px(4.0)).flex_wrap();
-                    for (has, label) in [
-                        (plugin.has_skills, "skills"),
-                        (plugin.has_agents, "agents"),
-                        (plugin.has_hooks, "hooks"),
-                        (plugin.has_mcp_servers, "mcp"),
-                        (plugin.has_lsp_servers, "lsp"),
-                    ] {
-                        if has {
-                            let t2 = t.clone();
-                            let label: gpui::SharedString = label.into();
-                            caps = caps.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .h(px(18.0))
-                                    .px(px(6.0))
-                                    .rounded(px(4.0))
-                                    .text_size(px(10.0))
-                                    .bg(t2.success_subtle)
-                                    .text_color(t2.success)
-                                    .child(label),
-                            );
-                        }
+                    let mut card = div()
+                        .id(gpui::SharedString::from(format!("plugin-card-{}", plugin.plugin_id)))
+                        .flex()
+                        .flex_col()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .gap(px(6.0))
+                        .p(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(t.card_bg)
+                        .border_1()
+                        .border_color(if enabled {
+                            gpui::rgba(0x22c55e44)
+                        } else {
+                            t.card_border
+                        })
+                        .shadow_xs();
+
+                    // Row 1: Title, Status Badge, Marketplace Tag, Version Tag, Spacer, Actions
+                    let mut header_row = div().flex().items_center().gap(px(8.0)).w_full();
+
+                    header_row = header_row.child(
+                        div()
+                            .text_size(px(13.5))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(t.text_primary)
+                            .child(plugin.name.clone()),
+                    );
+
+                    if user_installed && enabled {
+                        header_row = header_row.child(badge(&t, i.t("已启用", "Enabled"), BadgeKind::Success));
+                    } else if user_installed && !enabled {
+                        header_row = header_row.child(badge(&t, i.t("已停用", "Disabled"), BadgeKind::Neutral));
+                    } else {
+                        header_row = header_row.child(badge(&t, i.t("非用户级", "Non-user scope"), BadgeKind::Warning));
                     }
 
-                    let version_line = [
-                        plugin.version.clone().map(|v| format!("v{v}")),
-                        plugin.install_path.clone(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-
-                    card_inner = card_inner.child(
+                    header_row = header_row.child(
                         div()
-                            .id(gpui::SharedString::from(format!(
-                                "plugin-{}",
-                                plugin.plugin_id
-                            )))
                             .flex()
-                            .flex_col()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .items_start()
-                            .gap(px(8.0))
-                            .p(px(10.0))
-                            .rounded(px(8.0))
-                            .bg(t.input_bg)
+                            .items_center()
+                            .h(px(20.0))
+                            .px(px(6.0))
+                            .rounded(px(4.0))
+                            .bg(t.sidebar_bg)
                             .border_1()
-                            .border_color(if enabled { t.success } else { t.card_border })
-                            .child(components::toggle(
-                                gpui::SharedString::from(format!(
-                                    "plugin-toggle-{}",
-                                    plugin.plugin_id
-                                )),
-                                enabled,
-                                &t,
-                                cx,
+                            .border_color(t.card_border)
+                            .text_size(px(11.0))
+                            .text_color(t.text_secondary)
+                            .child(plugin.marketplace_name.clone()),
+                    );
+
+                    if let Some(v) = &plugin.version {
+                        header_row = header_row.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .h(px(20.0))
+                                .px(px(6.0))
+                                .rounded(px(4.0))
+                                .bg(t.sidebar_bg)
+                                .border_1()
+                                .border_color(t.card_border)
+                                .text_size(px(11.0))
+                                .text_color(t.text_muted)
+                                .child(format!("v{v}")),
+                        );
+                    }
+
+                    header_row = header_row.child(div().flex_1());
+
+                    // Actions: Enable/Disable button + Uninstall button
+                    if user_installed {
+                        header_row = header_row.child(button_l(
+                            gpui::SharedString::from(format!("plugin-toggle-{}", plugin.plugin_id)),
+                            if enabled { i.t("停用", "Disable") } else { i.t("启用", "Enable") },
+                            if enabled { ButtonVariant::Secondary } else { ButtonVariant::Primary },
+                            &t,
+                            cx,
+                            {
+                                let pid = pid.clone();
+                                let target = !enabled;
                                 move |ws, _, _, cx| {
-                                    let target = !enabled;
                                     match aitoolplus_core::claude_plugins::set_plugin_enabled(
                                         &ws.paths, &pid, target,
                                     ) {
                                         Ok(_) => {
                                             let msg = if target {
-                                                ws.i18n.t("已启用", "enabled").to_string()
+                                                ws.i18n.t("已启用插件", "Plugin enabled")
                                             } else {
-                                                ws.i18n.t("已停用", "disabled").to_string()
+                                                ws.i18n.t("已停用插件", "Plugin disabled")
                                             };
-                                            ws.ui.toast(msg, false);
+                                            ws.ui.toast(msg.to_string(), false);
+                                            ws.ui.claude_plugins = None;
+                                            load_claude_plugins(ws, cx);
                                         }
                                         Err(e) => ws.ui.toast(format!("failed: {e}"), true),
                                     }
                                     cx.notify();
-                                },
-                            ))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .child(
-                                        div()
-                                            .text_size(px(12.5))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(t.text_primary)
-                                            .child(format!(
-                                                "{}@{}",
-                                                plugin.name, plugin.marketplace_name
-                                            )),
-                                    )
-                                    .children(plugin.description.clone().map(|d| {
-                                        div()
-                                            .text_size(px(11.0))
-                                            .text_color(t.text_muted)
-                                            .child(d)
-                                            .into_any_element()
-                                    }))
-                                    .when(!version_line.is_empty(), |el| {
-                                        el.child(
-                                            div()
-                                                .text_size(px(10.5))
-                                                .text_color(t.text_muted)
-                                                .child(version_line.clone()),
-                                        )
-                                    }),
-                            )
-                            .child(caps)
-                            .child(button_l(
-                                gpui::SharedString::from(format!(
-                                    "plugin-del-{}",
-                                    plugin.plugin_id
-                                )),
-                                i.t("卸载", "Uninstall"),
-                                ButtonVariant::Danger,
-                                &t,
-                                cx,
+                                }
+                            },
+                        ));
+
+                        header_row = header_row.child(button_with_icon_l(
+                            gpui::SharedString::from(format!("plugin-del-{}", plugin.plugin_id)),
+                            crate::icons::TRASH_SVG,
+                            i.t("卸载", "Uninstall"),
+                            ButtonVariant::Danger,
+                            &t,
+                            cx,
+                            {
+                                let pid2 = pid2.clone();
                                 move |ws, _, _, cx| {
-                                    let success_zh = format!("已卸载 {pid2}");
-                                    let success_en = format!("uninstalled {pid2}");
                                     let operation_id = pid2.clone();
+                                    let success_zh = format!("已卸载 {operation_id}");
+                                    let success_en = format!("uninstalled {operation_id}");
                                     spawn_tool_action(
                                         Some(ToolId::ClaudeCode),
                                         ws,
@@ -3867,95 +5627,737 @@ fn plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                                             .map_err(|error| format!("uninstall failed: {error}"))
                                         },
                                     );
-                                },
-                            )),
-                    );
-                }
+                                }
+                            },
+                        ));
+                    }
 
-                card_inner = card_inner.child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.0))
-                        .child(button_l(
-                            "plugins-disable-all",
-                            i.t("全部停用", "Disable All"),
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            move |ws, _, _, cx| {
-                                match aitoolplus_core::claude_plugins::set_all_plugins_enabled(
-                                    &ws.paths, false,
-                                ) {
-                                    Ok((count, _)) => {
-                                        let msg = ws
-                                            .i18n
-                                            .t(
-                                                &format!("已停用 {count} 个插件"),
-                                                &format!("disabled {count} plugins"),
-                                            )
-                                            .to_string();
-                                        ws.ui.toast(msg, false);
-                                    }
-                                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
-                                }
-                                cx.notify();
-                            },
-                        ))
-                        .child(button_l(
-                            "plugins-enable-all",
-                            i.t("全部启用", "Enable All"),
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            move |ws, _, _, cx| {
-                                match aitoolplus_core::claude_plugins::set_all_plugins_enabled(
-                                    &ws.paths, true,
-                                ) {
-                                    Ok((count, _)) => {
-                                        let msg = ws
-                                            .i18n
-                                            .t(
-                                                &format!("已启用 {count} 个插件"),
-                                                &format!("enabled {count} plugins"),
-                                            )
-                                            .to_string();
-                                        ws.ui.toast(msg, false);
-                                    }
-                                    Err(e) => ws.ui.toast(format!("failed: {e}"), true),
-                                }
-                                cx.notify();
-                            },
-                        )),
-                );
+                    card = card.child(header_row);
+
+                    // Row 2: Plugin ID
+                    card = card.child(
+                        div()
+                            .text_size(px(11.0))
+                            .font_family("Consolas, monospace")
+                            .text_color(t.text_muted)
+                            .child(plugin.plugin_id.clone()),
+                    );
+
+                    // Row 3: Description
+                    if let Some(desc) = &plugin.description {
+                        card = card.child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(t.text_secondary)
+                                .child(desc.clone()),
+                        );
+                    }
+
+                    // Row 4: Meta info (Scopes + Install Path)
+                    let mut meta_items = vec![];
+                    if !plugin.install_scopes.is_empty() {
+                        meta_items.push(format!("{}: {}", i.t("作用域", "Scopes"), plugin.install_scopes.join(", ")));
+                    }
+                    if let Some(path) = &plugin.install_path {
+                        meta_items.push(format!("{}: {}", i.t("路径", "Path"), path));
+                    }
+                    if !meta_items.is_empty() {
+                        card = card.child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(t.text_muted)
+                                .child(meta_items.join(" · ")),
+                        );
+                    }
+
+                    // Row 5: Capabilities & Homepage
+                    let mut caps_row = div().flex().items_center().gap(px(4.0)).flex_wrap();
+                    if plugin.has_skills {
+                        caps_row = caps_row.child(plugin_tag("skills", t.accent_subtle, t.accent));
+                    }
+                    if plugin.has_agents {
+                        caps_row = caps_row.child(plugin_tag("agents", gpui::rgba(0x06b6d420), gpui::rgb(0x0891b2)));
+                    }
+                    if plugin.has_hooks {
+                        caps_row = caps_row.child(plugin_tag("hooks", gpui::rgba(0xf59e0b20), gpui::rgb(0xd97706)));
+                    }
+                    if plugin.has_mcp_servers {
+                        caps_row = caps_row.child(plugin_tag("MCP", gpui::rgba(0xa855f720), gpui::rgb(0x9333ea)));
+                    }
+                    if plugin.has_lsp_servers {
+                        caps_row = caps_row.child(plugin_tag("LSP", gpui::rgba(0x3b82f620), gpui::rgb(0x2563eb)));
+                    }
+
+                    card = card.child(caps_row);
+                    tab_col = tab_col.child(card);
+                }
             }
 
-            section = section.child(section_title(
-                &t,
-                i.t("已安装插件", "Installed Plugins"),
-                None,
-            ));
-            section = section.child(card_inner);
-        }
-        Err(e) => {
-            section = section.child(
+    section = section.child(tab_col);
+    section.into_any_element()
+}
+
+fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    if ws.ui.claude_plugins.is_none() && !ws.ui.claude_plugins_loading {
+        load_claude_plugins(ws, cx);
+    }
+
+    let is_loading = ws.ui.claude_plugins_loading;
+    let refresh_label = if is_loading {
+        i.t("刷新中…", "Refreshing…")
+    } else {
+        i.t("刷新", "Refresh")
+    };
+
+    let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
+
+    let Some(cached) = &ws.ui.claude_plugins else {
+        return section
+            .child(
                 div()
-                    .p(px(12.0))
-                    .rounded(px(8.0))
-                    .bg(t.danger_subtle)
-                    .border_1()
-                    .border_color(t.danger)
-                    .text_size(px(12.0))
-                    .text_color(t.danger)
-                    .child(format!(
-                        "{}: {e}",
-                        i.t("插件读取失败", "plugins read failed")
-                    )),
-            );
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .p(px(48.0))
+                    .gap(px(12.0))
+                    .child(gpui_kit::component::spinner::Spinner::new().color(t.accent.into()))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.text_muted)
+                            .child(i.t("正在读取插件市场…", "Loading marketplace plugins…")),
+                    ),
+            )
+            .into_any_element();
+    };
+
+    let data = match cached {
+        Ok(d) => d,
+        Err(e) => {
+            return section
+                .child(
+                    div()
+                        .p(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(t.danger_subtle)
+                        .border_1()
+                        .border_color(t.danger)
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(format!(
+                            "{}: {e}",
+                            i.t("插件市场读取失败", "marketplace read failed")
+                        )),
+                )
+                .into_any_element();
         }
+    };
+
+    let is_expanded = ws.ui.claude_marketplaces_expanded;
+    let m_filter = ws.ui.claude_market_search.read(cx).text().trim().to_lowercase();
+    let installed_set: std::collections::HashSet<String> = data
+        .installed_plugins
+        .iter()
+        .map(|p| p.plugin_id.clone())
+        .collect();
+    let user_scope_set: std::collections::HashSet<String> = data
+        .installed_plugins
+        .iter()
+        .filter(|p| p.user_scope_installed)
+        .map(|p| p.plugin_id.clone())
+        .collect();
+
+    let filtered_mkt: Vec<&aitoolplus_core::claude_plugins::MarketplacePlugin> = data
+        .marketplace_plugins
+        .iter()
+        .filter(|p| {
+            if m_filter.is_empty() {
+                return true;
+            }
+            p.name.to_lowercase().contains(&m_filter)
+                || p.plugin_id.to_lowercase().contains(&m_filter)
+                || p.marketplace_name.to_lowercase().contains(&m_filter)
+                || p.description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(&m_filter)
+                || p.category
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(&m_filter)
+                || p.tags.iter().any(|t| t.to_lowercase().contains(&m_filter))
+        })
+        .collect();
+
+    // ---- Single Unified Toolbar Row ----
+    let mut toolbar = div().flex().items_center().gap(px(10.0)).w_full();
+
+    toolbar = toolbar.child(
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(input_container(&t, ws.ui.claude_market_search.clone())),
+    );
+
+    toolbar = toolbar.child(
+        div()
+            .text_size(px(12.0))
+            .text_color(t.text_muted)
+            .child(format!(
+                "{} {} {}",
+                i.t("匹配到", "Matched"),
+                filtered_mkt.len(),
+                i.t("个插件", "plugins")
+            )),
+    );
+
+    let mkt_btn_label = if is_expanded {
+        i.t("收起市场源 ▴", "Collapse Sources ▴")
+    } else {
+        i.t(
+            &format!("管理市场源 ({}) ▾", data.marketplaces.len()),
+            &format!("Manage Sources ({}) ▾", data.marketplaces.len()),
+        )
+    };
+    toolbar = toolbar.child(
+        button_l(
+            "btn-toggle-marketplaces",
+            mkt_btn_label,
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                ws.ui.claude_marketplaces_expanded = !ws.ui.claude_marketplaces_expanded;
+                cx.notify();
+            },
+        ),
+    );
+
+    toolbar = toolbar.child(
+        button_with_icon_loading_l(
+            "claude-market-refresh-btn",
+            crate::icons::REFRESH_SVG,
+            refresh_label,
+            ButtonVariant::Secondary,
+            is_loading,
+            &t,
+            cx,
+            |ws, _, _, cx| {
+                ws.ui.claude_plugins = None;
+                load_claude_plugins(ws, cx);
+                cx.notify();
+            },
+        ),
+    );
+
+    section = section.child(toolbar);
+
+    // ---- Optional Expanded Marketplace Sources Panel ----
+    if is_expanded {
+        let mut mkt_sec = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .p(px(10.0))
+            .rounded(px(8.0))
+            .bg(t.card_bg)
+            .border_1()
+            .border_color(t.card_border);
+
+        let add_entity = ws.ui.claude_marketplaces_input.clone();
+        for market in &data.marketplaces {
+            let name = market.name.clone();
+            let name2 = market.name.clone();
+            let name2_del = market.name.clone();
+            let auto = market.auto_update_enabled;
+
+            let mut m_row = div().flex().items_center().justify_between().w_full();
+            let left = div().flex().items_center().gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child(name.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(20.0))
+                        .px(px(6.0))
+                        .rounded(px(4.0))
+                        .bg(t.sidebar_bg)
+                        .border_1()
+                        .border_color(t.card_border)
+                        .text_size(px(11.0))
+                        .text_color(t.text_secondary)
+                        .child(format!("{} plugins", market.plugin_count)),
+                );
+            m_row = m_row.child(left);
+
+            let mut actions = div().flex().items_center().gap(px(6.0));
+            actions = actions.child(
+                crate::components::toggle(
+                    gpui::SharedString::from(format!("mkt-auto-{}", market.name)),
+                    auto,
+                    &t,
+                    cx,
+                    {
+                        let name = name.clone();
+                        let target = !auto;
+                        move |ws, _, _, cx| {
+                            match aitoolplus_core::claude_plugins::set_marketplace_auto_update(
+                                &ws.paths, &name, target,
+                            ) {
+                                Ok(_) => {
+                                    let msg = if target {
+                                        ws.i18n.t("已开启自动更新", "Auto-update enabled")
+                                    } else {
+                                        ws.i18n.t("已关闭自动更新", "Auto-update disabled")
+                                    };
+                                    ws.ui.toast(msg.to_string(), false);
+                                    ws.ui.claude_plugins = None;
+                                    load_claude_plugins(ws, cx);
+                                }
+                                Err(e) => ws.ui.toast(format!("failed: {e}"), true),
+                            }
+                            cx.notify();
+                        }
+                    },
+                ),
+            );
+
+            actions = actions.child(button_l(
+                gpui::SharedString::from(format!("mkt-upd-{}", market.name)),
+                i.t("更新", "Update"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                {
+                    let name_for_update = name2.clone();
+                    move |ws, _, _, cx| {
+                        let operation_name = name_for_update.clone();
+                        spawn_tool_action(
+                            Some(ToolId::ClaudeCode),
+                            ws,
+                            cx,
+                            format!("已更新市场 {operation_name}"),
+                            format!("updated marketplace {operation_name}"),
+                            move |paths| {
+                                aitoolplus_core::claude_plugins::update_marketplace(
+                                    &paths,
+                                    Some(&operation_name),
+                                )
+                                .map_err(|error| format!("update failed: {error}"))
+                            },
+                        );
+                    }
+                },
+            ));
+
+            actions = actions.child(button_with_icon_l(
+                gpui::SharedString::from(format!("mkt-del-{}", market.name)),
+                crate::icons::TRASH_SVG,
+                i.t("移除", "Remove"),
+                ButtonVariant::Danger,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    let operation_name = name2_del.clone();
+                    let success_zh = format!("已移除市场 {operation_name}");
+                    let success_en = format!("removed marketplace {operation_name}");
+                    spawn_tool_action(
+                        Some(ToolId::ClaudeCode),
+                        ws,
+                        cx,
+                        success_zh,
+                        success_en,
+                        move |paths| {
+                            aitoolplus_core::claude_plugins::remove_marketplace(
+                                &paths,
+                                &operation_name,
+                            )
+                            .map_err(|error| format!("remove failed: {error}"))
+                        },
+                    );
+                },
+            ));
+
+            m_row = m_row.child(actions);
+            mkt_sec = mkt_sec.child(m_row);
+        }
+
+        mkt_sec = mkt_sec.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .w_full()
+                .child(div().flex_1().min_w(px(0.0)).child(input_container(&t, add_entity.clone())))
+                .child(button_with_icon_l(
+                    "mkt-add-btn",
+                    crate::icons::PLUS_SVG,
+                    i.t("添加市场", "Add"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let src: String = add_entity.update(cx, |inp, cx| {
+                            let val = inp.text().trim().to_string();
+                            inp.set_text("", cx);
+                            val
+                        });
+                        if src.is_empty() {
+                            let msg = ws.i18n.t("请输入来源", "source required").to_string();
+                            ws.ui.toast(msg, true);
+                            cx.notify();
+                            return;
+                        }
+                        let success_zh = format!("已添加市场 {src}");
+                        let success_en = format!("added marketplace {src}");
+                        spawn_tool_action(
+                            Some(ToolId::ClaudeCode),
+                            ws,
+                            cx,
+                            success_zh,
+                            success_en,
+                            move |paths| {
+                                aitoolplus_core::claude_plugins::add_marketplace(&paths, &src)
+                                    .map_err(|error| format!("add failed: {error}"))
+                            },
+                        );
+                    },
+                )),
+        );
+
+        section = section.child(mkt_sec);
+    }
+
+    // ---- Virtual List (Remaining 100% Height) ----
+    if data.marketplace_plugins.is_empty() {
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("暂无市场插件", "No marketplace plugins available")),
+        );
+    } else if filtered_mkt.is_empty() {
+        section = section.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(32.0))
+                .text_size(px(12.5))
+                .text_color(t.text_muted)
+                .child(i.t("未找到匹配的市场插件", "No matching marketplace plugins found")),
+        );
+    } else {
+        let items: std::sync::Arc<Vec<aitoolplus_core::claude_plugins::MarketplacePlugin>> =
+            std::sync::Arc::new(filtered_mkt.into_iter().cloned().collect());
+        let items_len = items.len();
+        let items_for_list = items.clone();
+        let installed_set = std::sync::Arc::new(installed_set);
+        let user_scope_set = std::sync::Arc::new(user_scope_set);
+        let ws_entity = cx.entity();
+        let t_clone = t.clone();
+        let i_clone = i.clone();
+
+        let v_list = uniform_list(
+            "mkt-plugins-virtual-list",
+            items_len,
+            move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
+                let mut elements = Vec::with_capacity(range.len());
+                for idx in range {
+                    if let Some(plugin) = items_for_list.get(idx) {
+                        elements.push(render_virtual_marketplace_card(
+                            plugin,
+                            &installed_set,
+                            &user_scope_set,
+                            &ws_entity,
+                            &t_clone,
+                            &i_clone,
+                        ));
+                    }
+                }
+                elements
+            },
+        )
+        .track_scroll(&ws.ui.claude_market_scroll_handle)
+        .size_full();
+
+        section = section.child(
+            div()
+                .w_full()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .rounded(px(8.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .p(px(8.0))
+                .child(v_list),
+        );
     }
 
     section.into_any_element()
+}
+
+fn render_virtual_marketplace_card(
+    plugin: &aitoolplus_core::claude_plugins::MarketplacePlugin,
+    installed_set: &std::collections::HashSet<String>,
+    user_scope_set: &std::collections::HashSet<String>,
+    ws_entity: &gpui::Entity<Workspace>,
+    t: &Theme,
+    i: &I18n,
+) -> gpui::AnyElement {
+    let is_installed = installed_set.contains(&plugin.plugin_id);
+    let is_user_installed = user_scope_set.contains(&plugin.plugin_id);
+
+    let mut card = div()
+        .id(gpui::SharedString::from(format!("v-card-{}", plugin.plugin_id)))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .w_full()
+        .min_w(px(0.0))
+        .h(px(100.0))
+        .p(px(10.0))
+        .rounded(px(8.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .shadow_xs()
+        .hover({
+            let bg = t.card_hover;
+            let border = t.card_border_hover;
+            move |h| h.bg(bg).border_color(border)
+        });
+
+    // Row 1: Title, Tags, Spacer, Action Button
+    let mut header_row = div().flex().items_center().gap(px(8.0)).w_full();
+
+    header_row = header_row.child(
+        div()
+            .text_size(px(13.5))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(t.text_primary)
+            .child(plugin.name.clone()),
+    );
+
+    header_row = header_row.child(
+        div()
+            .flex()
+            .items_center()
+            .h(px(20.0))
+            .px(px(6.0))
+            .rounded(px(4.0))
+            .bg(t.sidebar_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .text_size(px(11.0))
+            .text_color(t.text_secondary)
+            .child(plugin.marketplace_name.clone()),
+    );
+
+    if let Some(v) = &plugin.version {
+        header_row = header_row.child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(20.0))
+                .px(px(6.0))
+                .rounded(px(4.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(11.0))
+                .text_color(t.text_muted)
+                .child(format!("v{v}")),
+        );
+    }
+
+    if let Some(cat) = &plugin.category {
+        header_row = header_row.child(plugin_tag(cat.clone(), t.accent_subtle, t.accent));
+    }
+
+    if is_installed {
+        header_row = header_row.child(badge(
+            t,
+            if is_user_installed {
+                i.t("已安装", "Installed")
+            } else {
+                i.t("项目级已安装", "Installed (other scope)")
+            },
+            BadgeKind::Success,
+        ));
+    }
+
+    header_row = header_row.child(div().flex_1());
+
+    // Action button
+    if is_user_installed {
+        header_row = header_row.child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(26.0))
+                .px(px(10.0))
+                .rounded(px(6.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(11.5))
+                .text_color(t.text_muted)
+                .child(i.t("已安装", "Installed")),
+        );
+    } else {
+        let ws_entity = ws_entity.clone();
+        let to_install = plugin.plugin_id.clone();
+        let bg = t.accent;
+        let hover_bg = t.accent_hover;
+        header_row = header_row.child(
+            div()
+                .id(gpui::SharedString::from(format!("v-install-{}", plugin.plugin_id)))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(4.0))
+                .h(px(26.0))
+                .px(px(12.0))
+                .rounded(px(6.0))
+                .bg(bg)
+                .text_color(gpui::white())
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .shadow_xs()
+                .hover(move |h| h.bg(hover_bg))
+                .active(move |a| a.opacity(0.88))
+                .child(
+                    gpui::svg()
+                        .data(crate::icons::DOWNLOAD_SVG)
+                        .size(px(13.0))
+                        .text_color(gpui::white()),
+                )
+                .child(i.t("安装", "Install"))
+                .on_click(move |_ev, _win, cx| {
+                    let id = to_install.clone();
+                    let success_zh = format!("插件 {id} 已安装");
+                    let success_en = format!("plugin {id} installed");
+                    let _ = ws_entity.update(cx, |ws, cx| {
+                        spawn_tool_action(
+                            Some(ToolId::ClaudeCode),
+                            ws,
+                            cx,
+                            success_zh,
+                            success_en,
+                            move |paths| {
+                                aitoolplus_core::claude_plugins::install_plugin(&paths, &id)
+                                    .map_err(|error| format!("install failed: {error}"))
+                            },
+                        );
+                    });
+                }),
+        );
+    }
+
+    card = card.child(header_row);
+
+    // Row 2: ID and Description
+    let mut row2 = div().flex().items_center().gap(px(8.0)).w_full().overflow_hidden();
+    row2 = row2.child(
+        div()
+            .flex_none()
+            .text_size(px(11.0))
+            .font_family("Consolas, monospace")
+            .text_color(t.text_muted)
+            .child(plugin.plugin_id.clone()),
+    );
+    if let Some(desc) = &plugin.description {
+        row2 = row2.child(
+            div()
+                .flex_1()
+                .text_size(px(11.5))
+                .text_color(t.text_secondary)
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(desc.clone()),
+        );
+    }
+    card = card.child(row2);
+
+    // Row 3: Tags & Homepage
+    let mut row3 = div().flex().items_center().gap(px(4.0)).w_full().overflow_hidden();
+    for tag in plugin.tags.iter().take(5) {
+        row3 = row3.child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .h(px(18.0))
+                .px(px(5.0))
+                .rounded(px(4.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(10.0))
+                .text_color(t.text_secondary)
+                .child(tag.clone()),
+        );
+    }
+    if let Some(hp) = &plugin.homepage {
+        let hp_clone = hp.clone();
+        let hover_bg = t.card_hover;
+        row3 = row3.child(
+            div()
+                .id(gpui::SharedString::from(format!("v-hp-{}", plugin.plugin_id)))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(3.0))
+                .h(px(18.0))
+                .px(px(6.0))
+                .rounded(px(4.0))
+                .text_size(px(10.5))
+                .text_color(t.text_secondary)
+                .hover(move |h| h.bg(hover_bg).text_color(t.text_primary))
+                .child(
+                    gpui::svg()
+                        .data(crate::icons::BOOK_OPEN_SVG)
+                        .size(px(11.0))
+                        .text_color(t.text_secondary),
+                )
+                .child(i.t("主页", "Homepage"))
+                .on_click(move |_ev, _win, _cx| {
+                    open_in_browser(&hp_clone);
+                }),
+        );
+    }
+    card = card.child(row3);
+
+    // Outer slot: exactly 108px high with 8px bottom margin
+    div()
+        .id(gpui::SharedString::from(format!("v-slot-{}", plugin.plugin_id)))
+        .w_full()
+        .h(px(108.0))
+        .pb(px(8.0))
+        .child(card)
+        .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -5318,7 +7720,8 @@ pub fn render_provider_dialog(
                     .flex()
                     .items_center()
                     .gap(px(4.0))
-                    .child(div().flex_1().child(input_container(&t2, model_ent.clone())))
+                    .w_full()
+                    .child(div().flex_1().min_w(px(0.0)).child(input_container(&t2, model_ent.clone())))
                     .on_prepaint({
                         let target_id = target_id.clone();
                         let entity = cx.entity().clone();
@@ -5373,7 +7776,7 @@ pub fn render_provider_dialog(
                     );
                 }
 
-                let mut col = div().flex().flex_col().gap(px(4.0)).flex_1();
+                let mut col = div().flex().flex_col().gap(px(4.0)).flex_1().min_w(px(0.0));
                 col = col.child(input_row);
 
                 if is_open && has_models {
@@ -5891,6 +8294,7 @@ pub fn render_provider_dialog(
                     top_row = top_row.child(
                         div()
                             .flex_1()
+                            .min_w(px(0.0))
                             .child(input_container(&t2, draft.name.clone()))
                     );
 
@@ -6177,8 +8581,8 @@ pub fn render_provider_dialog(
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_secondary)
                         .child(div().w(px(80.0)).child(i.t("模型角色", "Role")))
-                        .child(div().flex_1().child(i.t("显示名称", "Display Name")))
-                        .child(div().flex_1().child(i.t("实际请求模型", "Request Model")))
+                        .child(div().flex_1().min_w(px(0.0)).child(i.t("显示名称", "Display Name")))
+                        .child(div().flex_1().min_w(px(0.0)).child(i.t("实际请求模型", "Request Model")))
                         .child(div().w(px(64.0)).text_center().child(i.t("1M 模式", "1M Mode")))
                 );
 
@@ -6207,21 +8611,29 @@ pub fn render_provider_dialog(
                         .child(role_lbl);
 
                     let display_name_cell = match &display_name_ent {
-                        Some(dn) => div().flex_1().child(input_container(&t2, dn.clone())).into_any_element(),
-                        None => div()
-                            .flex_1()
-                            .h(px(32.0))
-                            .flex()
-                            .items_center()
-                            .px(px(8.0))
-                            .rounded(px(6.0))
-                            .bg(t2.sidebar_bg)
-                            .border_1()
-                            .border_color(t2.card_border)
-                            .text_size(px(11.0))
-                            .text_color(t2.text_muted)
-                            .child(i.t("后台子代理，不显示在菜单", "Subagent (not in menu)"))
-                            .into_any_element(),
+                        Some(dn) => div().flex_1().min_w(px(0.0)).child(input_container(&t2, dn.clone())).into_any_element(),
+                        None => {
+                            let disabled_box = div()
+                                .w_full()
+                                .h(px(32.0))
+                                .flex()
+                                .items_center()
+                                .px(px(10.0))
+                                .rounded(px(6.0))
+                                .bg(t2.sidebar_bg)
+                                .border_1()
+                                .border_color(t2.card_border)
+                                .shadow_xs()
+                                .cursor_not_allowed()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(t2.text_muted)
+                                        .child(i.t("后台子代理，不显示在菜单", "Subagent (not in menu)"))
+                                );
+                            div().flex_1().min_w(px(0.0)).child(disabled_box).into_any_element()
+                        }
                     };
 
                     let one_m_cell = match toggle_1m {
@@ -6239,7 +8651,7 @@ pub fn render_provider_dialog(
                                         .checked(is_1m)
                                         .label("1M")
                                         .on_click(move |_checked, _window, cx| {
-                                            let toggle = toggle.clone();
+                                             let toggle = toggle.clone();
                                             entity.update(cx, |ws, cx| {
                                                 toggle(ws, cx);
                                             });
@@ -6261,6 +8673,7 @@ pub fn render_provider_dialog(
                         .flex()
                         .items_start()
                         .gap(px(8.0))
+                        .w_full()
                         .child(role_badge)
                         .child(display_name_cell)
                         .child(req_model_cell)
@@ -7892,9 +10305,9 @@ pub fn render_prompt_dialog(
     } = state;
 
     let title = if editing_id.is_some() {
-        i.t("编辑 Prompt", "Edit Prompt")
+        i.t("编辑全局提示词", "Edit Global Prompt")
     } else {
-        i.t("新增 Prompt", "Add Prompt")
+        i.t("添加全局提示词", "Add Global Prompt")
     };
 
     let field_label = |label: gpui::SharedString| -> gpui::AnyElement {
@@ -7939,7 +10352,7 @@ pub fn render_prompt_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("名称", "Name")))
+                .child(field_label(i.t("提示词名称", "Prompt Name")))
                 .child(input_container(&t, name.clone())),
         )
         .child(
@@ -7947,7 +10360,7 @@ pub fn render_prompt_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("内容（Markdown）", "Content (Markdown)")))
+                .child(field_label(i.t("提示词内容（Markdown）", "Prompt Content (Markdown)")))
                 .child(textarea_container(&t, content.clone())),
         )
         .child(

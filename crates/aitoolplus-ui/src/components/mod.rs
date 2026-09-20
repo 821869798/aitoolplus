@@ -851,3 +851,261 @@ pub fn textarea_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
         .hover(move |h| h.border_color(t.card_border_hover))
         .child(child)
 }
+
+// ---------------------------------------------------------------------------
+// Fused Combobox (Searchable Select / Autocomplete)
+// ---------------------------------------------------------------------------
+
+/// A reusable fused combobox component (input field + dropdown options fused into one).
+/// The trigger box itself is the editable text input with clear '✕' and toggle chevron '∨'/'∧'.
+/// The floating options list uses `gpui::deferred` to overlay above all subsequent content
+/// without pushing down elements below.
+pub fn fused_combobox<V: 'static>(
+    id: impl Into<SharedString>,
+    label: Option<impl Into<SharedString>>,
+    input_entity: gpui::Entity<crate::text_input::TextInput>,
+    is_open: bool,
+    is_typing: bool,
+    options: Vec<String>,
+    empty_hint: Option<impl Into<SharedString>>,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_open: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    on_close: impl Fn(&mut V, &mut Context<V>) + 'static,
+    on_clear: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    on_select: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let id_str: SharedString = id.into();
+    let current_text = input_entity.read(cx).text().trim().to_string();
+    let has_val = !current_text.is_empty();
+
+    let on_open = std::rc::Rc::new(on_open);
+    let on_close = std::rc::Rc::new(on_close);
+    let on_clear = std::rc::Rc::new(on_clear);
+    let on_select = std::rc::Rc::new(on_select);
+
+    let mut col = div()
+        .id(SharedString::from(format!("{id_str}-col")))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .flex_1()
+        .min_w(px(0.0))
+        .relative();
+
+    if let Some(lbl) = label {
+        col = col.child(
+            div()
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(t.text_secondary)
+                .child(lbl.into()),
+        );
+    }
+
+    let on_open_click = on_open.clone();
+    let mut trigger_box = div()
+        .id(id_str.clone())
+        .h(px(34.0))
+        .w_full()
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(if is_open { t.accent } else { t.input_border })
+        .bg(t.input_bg)
+        .flex()
+        .items_center()
+        .justify_between()
+        .hover(|h| h.border_color(if is_open { t.accent } else { t.card_border_hover }))
+        .on_click(cx.listener(move |view, _, window, cx| {
+            if !is_open {
+                on_open_click(view, window, cx);
+            }
+        }));
+
+    let input_wrapper = div()
+        .flex_1()
+        .min_w(px(0.0))
+        .h_full()
+        .flex()
+        .items_center()
+        .child(input_entity.clone());
+
+    let mut right_icons = div()
+        .flex()
+        .items_center()
+        .gap(px(2.0))
+        .pr(px(6.0))
+        .flex_none();
+
+    if has_val {
+        let on_clear_click = on_clear.clone();
+        right_icons = right_icons.child(
+            div()
+                .id(SharedString::from(format!("{id_str}-clear-btn")))
+                .cursor_pointer()
+                .px(px(4.0))
+                .py(px(2.0))
+                .rounded(px(3.0))
+                .text_size(px(12.0))
+                .text_color(t.text_muted)
+                .hover(|h| h.text_color(t.text_primary))
+                .child("✕")
+                .on_click(cx.listener(move |view, _, window, cx| {
+                    cx.stop_propagation();
+                    on_clear_click(view, window, cx);
+                })),
+        );
+    }
+
+    let on_open_chevron = on_open.clone();
+    let on_close_chevron = on_close.clone();
+    right_icons = right_icons.child(
+        div()
+            .id(SharedString::from(format!("{id_str}-chevron-btn")))
+            .cursor_pointer()
+            .px(px(4.0))
+            .py(px(4.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                gpui::svg()
+                    .data(if is_open {
+                        crate::icons::CHEVRON_UP_SVG
+                    } else {
+                        crate::icons::CHEVRON_DOWN_SVG
+                    })
+                    .size(px(12.0))
+                    .text_color(if is_open { t.accent } else { t.text_muted }),
+            )
+            .on_click(cx.listener(move |view, _, window, cx| {
+                cx.stop_propagation();
+                if is_open {
+                    on_close_chevron(view, cx);
+                } else {
+                    on_open_chevron(view, window, cx);
+                }
+            })),
+    );
+
+    trigger_box = trigger_box.child(input_wrapper).child(right_icons);
+    col = col.child(trigger_box);
+
+    if is_open {
+        let on_close_out = on_close.clone();
+        let mut dropdown_menu = div()
+            .id(SharedString::from(format!("{id_str}-menu")))
+            .occlude()
+            .absolute()
+            .top(px(60.0))
+            .left_0()
+            .w_full()
+            .rounded(px(8.0))
+            .bg(t.card_bg)
+            .border_1()
+            .border_color(t.accent)
+            .shadow_xl()
+            .p(px(6.0))
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .on_mouse_down_out({
+                let entity = cx.entity().clone();
+                move |_ev, _window, cx| {
+                    entity.update(cx, |view, cx| {
+                        on_close_out(view, cx);
+                    });
+                }
+            });
+
+        let filtered_options: Vec<String> = if !is_typing {
+            options
+        } else {
+            let search_lower = current_text.to_lowercase();
+            options
+                .into_iter()
+                .filter(|opt| search_lower.is_empty() || opt.to_lowercase().contains(&search_lower))
+                .collect()
+        };
+
+        let mut list_container = div()
+            .id(SharedString::from(format!("{id_str}-list")))
+            .max_h(px(200.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(2.0));
+
+        if filtered_options.is_empty() {
+            let no_matches = empty_hint
+                .map(|h| h.into())
+                .unwrap_or_else(|| SharedString::from("无匹配项"));
+            list_container = list_container.child(
+                div()
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.0))
+                    .text_color(t.text_muted)
+                    .child(no_matches),
+            );
+        } else {
+            for (idx, opt) in filtered_options.into_iter().enumerate() {
+                let is_sel = current_text == opt;
+                let opt_for_click = opt.clone();
+                let on_select_click = on_select.clone();
+                let mut opt_row = div()
+                    .id(SharedString::from(format!("{id_str}-opt-{idx}")))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .text_size(px(12.5))
+                    .text_color(if is_sel { t.accent } else { t.text_primary })
+                    .bg(if is_sel { t.accent_subtle } else { t.card_bg })
+                    .hover(|h| h.bg(t.row_hover))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .font_weight(if is_sel {
+                                gpui::FontWeight::SEMIBOLD
+                            } else {
+                                gpui::FontWeight::NORMAL
+                            })
+                            .child(opt.clone()),
+                    );
+
+                if is_sel {
+                    opt_row = opt_row.child(
+                        gpui::svg()
+                            .data(crate::icons::CHECK_SVG)
+                            .size(px(12.0))
+                            .text_color(t.accent)
+                            .flex_none(),
+                    );
+                }
+
+                opt_row = opt_row.on_click(cx.listener(move |view, _, window, cx| {
+                    on_select_click(view, opt_for_click.clone(), window, cx);
+                }));
+
+                list_container = list_container.child(opt_row);
+            }
+        }
+
+        dropdown_menu = dropdown_menu.child(list_container);
+        col = col.child(gpui::deferred(dropdown_menu));
+    }
+
+    col.into_any_element()
+}
