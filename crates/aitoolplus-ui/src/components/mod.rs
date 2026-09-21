@@ -292,18 +292,29 @@ pub fn icon_button_l<V: 'static>(
 
 pub struct Tooltip {
     text: SharedString,
+    max_w: Option<gpui::Pixels>,
 }
 
 impl Tooltip {
     pub fn new(text: impl Into<SharedString>) -> Self {
-        Self { text: text.into() }
+        Self {
+            text: text.into(),
+            max_w: None,
+        }
+    }
+
+    pub fn with_max_width(text: impl Into<SharedString>, max_w: gpui::Pixels) -> Self {
+        Self {
+            text: text.into(),
+            max_w: Some(max_w),
+        }
     }
 }
 
 impl gpui::Render for Tooltip {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let bg = crate::rgba_const(0x18181be6);
-        div()
+        let bg = crate::rgba_const(0x18181bee);
+        let mut el = div()
             .px(px(8.0))
             .py(px(4.0))
             .rounded(px(6.0))
@@ -313,10 +324,469 @@ impl gpui::Render for Tooltip {
             .text_size(px(11.5))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(WHITE)
-            .shadow_md()
-            .whitespace_nowrap()
-            .child(self.text.clone())
+            .shadow_md();
+
+        if let Some(max_w) = self.max_w {
+            el = el.max_w(max_w).whitespace_normal().line_height(gpui::relative(1.35));
+        } else {
+            el = el.whitespace_nowrap();
+        }
+
+        el.child(self.text.clone())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Universal Error Floating Tooltip & Banners
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct ParsedGenericError {
+    /// 1-line short summary suitable for badges and single-line strips.
+    pub summary: String,
+    /// Formatted multi-line detail for floating tooltips.
+    pub detail: String,
+    /// Extracted URL for actions (e.g. appeal link or docs).
+    pub action_url: Option<String>,
+    /// Raw unparsed error text.
+    pub raw: String,
+}
+
+/// Parse any raw error string (JSON or plaintext) into a structured summary, detail, and optional link.
+pub fn parse_generic_error(raw: &str) -> ParsedGenericError {
+    let raw_trimmed = raw.trim();
+    if raw_trimmed.is_empty() {
+        return ParsedGenericError {
+            summary: "未知错误".to_string(),
+            detail: "未知错误，未返回具体错误内容。".to_string(),
+            action_url: None,
+            raw: String::new(),
+        };
+    }
+
+    // 1. Try parsing as JSON (Google Cloud Quota, OpenAI, Anthropic, or standard JSON API)
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw_trimmed) {
+        let mut reason_code = String::new();
+        let mut message = String::new();
+        let mut appeal_url = None;
+
+        if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
+            message = msg.to_string();
+        } else if let Some(msg) = v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+            message = msg.to_string();
+        } else if let Some(msg) = v.get("error").and_then(|e| e.as_str()) {
+            message = msg.to_string();
+        }
+
+        if let Some(status) = v.get("status").and_then(|s| s.as_str()) {
+            reason_code = status.to_string();
+        } else if let Some(status) = v.get("error").and_then(|e| e.get("status")).and_then(|s| s.as_str()) {
+            reason_code = status.to_string();
+        } else if let Some(code) = v.get("error").and_then(|e| e.get("code")).and_then(|c| c.as_str()) {
+            reason_code = code.to_string();
+        } else if let Some(code) = v.get("code").and_then(|c| c.as_str()) {
+            reason_code = code.to_string();
+        } else if let Some(code) = v.get("error").and_then(|e| e.get("type")).and_then(|t| t.as_str()) {
+            reason_code = code.to_string();
+        }
+
+        let details = v.get("details")
+            .or_else(|| v.get("error").and_then(|e| e.get("details")))
+            .and_then(|d| d.as_array());
+        if let Some(details) = details {
+            for d in details {
+                if let Some(r) = d.get("reason").and_then(|r| r.as_str()) {
+                    if !r.is_empty() {
+                        reason_code = r.to_string();
+                    }
+                }
+                if let Some(meta) = d.get("metadata") {
+                    if let Some(url) = meta.get("appeal_url").and_then(|u| u.as_str()) {
+                        appeal_url = Some(url.to_string());
+                    }
+                }
+            }
+        }
+
+        if appeal_url.is_none() {
+            if let Some(url) = v.get("appeal_url").and_then(|u| u.as_str()) {
+                appeal_url = Some(url.to_string());
+            } else {
+                appeal_url = extract_first_url(raw_trimmed);
+            }
+        }
+
+        let summary = if reason_code == "TOS_VIOLATION" || message.contains("Terms of Service") {
+            "违反服务条款被封禁 (TOS_VIOLATION)".to_string()
+        } else if reason_code == "PERMISSION_DENIED" || message.contains("does not have permission") {
+            "权限不足或凭据失效 (PERMISSION_DENIED)".to_string()
+        } else if reason_code == "RESOURCE_EXHAUSTED" || message.contains("Quota exceeded") || message.contains("rate_limit_exceeded") {
+            "配额已耗尽 (RESOURCE_EXHAUSTED)".to_string()
+        } else if reason_code == "UNAUTHENTICATED" || message.contains("invalid_token") {
+            "未认证或凭证无效 (UNAUTHENTICATED)".to_string()
+        } else if !reason_code.is_empty() {
+            if !message.is_empty() {
+                format!("{reason_code}: {}", message.chars().take(36).collect::<String>())
+            } else {
+                format!("接口受限 ({reason_code})")
+            }
+        } else if !message.is_empty() {
+            message.chars().take(40).collect()
+        } else {
+            "接口响应异常".to_string()
+        };
+
+        let mut detail = format!("【错误分类】{}", if reason_code.is_empty() { "API_ERROR" } else { &reason_code });
+        if !message.is_empty() {
+            detail.push_str(&format!("\n【详细说明】{message}"));
+        }
+        if let Some(url) = &appeal_url {
+            detail.push_str(&format!("\n【官方链接】{url}"));
+        }
+        detail.push_str("\n\n(提示：点击错误条可复制完整错误信息)");
+
+        return ParsedGenericError {
+            summary,
+            detail,
+            action_url: appeal_url,
+            raw: raw_trimmed.to_string(),
+        };
+    }
+
+    // 2. Text error parsing
+    let action_url = extract_first_url(raw_trimmed);
+    let first_line = raw_trimmed.lines().next().unwrap_or("未知错误").trim();
+
+    let summary = if raw_trimmed.contains("timed out") || raw_trimmed.contains("Timeout") || raw_trimmed.contains("DeadlineExceeded") {
+        "网络请求超时 (Timeout)".to_string()
+    } else if raw_trimmed.contains("Connection refused") || raw_trimmed.contains("Failed to connect") {
+        "连接被拒绝，服务未启动或地址不可达".to_string()
+    } else if raw_trimmed.contains("dns error") || raw_trimmed.contains("Could not resolve host") {
+        "DNS 解析失败，请检查网络或域名".to_string()
+    } else if raw_trimmed.contains("certificate") || raw_trimmed.contains("SSL") || raw_trimmed.contains("tls") {
+        "SSL/TLS 证书验证失败".to_string()
+    } else if raw_trimmed.contains("401") || raw_trimmed.contains("Unauthorized") {
+        "身份认证失败 (401 Unauthorized)".to_string()
+    } else if raw_trimmed.contains("403") || raw_trimmed.contains("Forbidden") {
+        "访问被拒绝 (403 Forbidden)".to_string()
+    } else if raw_trimmed.contains("404") || raw_trimmed.contains("Not Found") {
+        "资源不存在 (404 Not Found)".to_string()
+    } else if raw_trimmed.contains("429") || raw_trimmed.contains("Too Many Requests") {
+        "请求过频 (429 Too Many Requests)".to_string()
+    } else if raw_trimmed.contains("500") || raw_trimmed.contains("Internal Server Error") {
+        "服务器内部错误 (500 Internal Error)".to_string()
+    } else if raw_trimmed.contains("502") || raw_trimmed.contains("Bad Gateway") {
+        "网关错误 (502 Bad Gateway)".to_string()
+    } else if raw_trimmed.contains("503") || raw_trimmed.contains("Service Unavailable") {
+        "服务暂时不可用 (503 Service Unavailable)".to_string()
+    } else if raw_trimmed.contains("504") || raw_trimmed.contains("Gateway Timeout") {
+        "网关超时 (504 Gateway Timeout)".to_string()
+    } else {
+        first_line.chars().take(42).collect::<String>()
+    };
+
+    let mut detail = format!("【错误摘要】{summary}\n【完整信息】\n{raw_trimmed}");
+    if let Some(url) = &action_url {
+        detail.push_str(&format!("\n\n【相关链接】{url}"));
+    }
+    detail.push_str("\n\n(提示：点击错误条可复制完整错误信息)");
+
+    ParsedGenericError {
+        summary,
+        detail,
+        action_url,
+        raw: raw_trimmed.to_string(),
+    }
+}
+
+fn extract_first_url(text: &str) -> Option<String> {
+    for word in text.split_whitespace() {
+        let clean = word.trim_matches(|c| {
+            c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}'
+                || c == '<' || c == '>' || c == '"' || c == '\'' || c == ','
+                || c == ';' || c == ':' || c == '.'
+        });
+        if clean.starts_with("https://") || clean.starts_with("http://") {
+            return Some(clean.to_string());
+        }
+    }
+    None
+}
+
+/// Compact inline error badge with warning icon and floating tooltip.
+pub fn error_badge_tooltip(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    theme: &Theme,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let label: SharedString = label.into();
+    let detail: SharedString = detail.into();
+
+    div()
+        .id(id.into())
+        .h(px(22.0))
+        .px(px(6.0))
+        .rounded(px(4.0))
+        .bg(t.danger_subtle)
+        .border_1()
+        .border_color(t.danger.opacity(0.35))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.0))
+        .text_size(px(11.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(t.danger)
+        .cursor_pointer()
+        .overflow_hidden()
+        .tooltip(move |_window, cx| {
+            cx.new(|_| Tooltip::with_max_width(detail.clone(), px(380.0))).into()
+        })
+        .child(
+            gpui::svg()
+                .data(crate::icons::ALERT_SVG)
+                .size(px(11.0))
+                .text_color(t.danger)
+                .flex_none(),
+        )
+        .child(
+            div()
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(label),
+        )
+        .into_any_element()
+}
+
+/// Single-line error strip with strict height limit (26px), truncation, floating tooltip on hover,
+/// one-click copy of full error details, and optional action button.
+pub fn error_strip<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    prefix: impl Into<SharedString>,
+    raw_error: &str,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    action_button: Option<gpui::AnyElement>,
+) -> gpui::AnyElement {
+    error_strip_action(id, prefix, raw_error, theme, cx, action_button, |_view, _raw, _cx| {})
+}
+
+/// Single-line error strip with custom on_copy callback (e.g. for toast notifications).
+pub fn error_strip_action<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    prefix: impl Into<SharedString>,
+    raw_error: &str,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    action_button: Option<gpui::AnyElement>,
+    on_copy: impl Fn(&mut V, &str, &mut Context<V>) + 'static,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let prefix: SharedString = prefix.into();
+    let parsed = parse_generic_error(raw_error);
+    let tooltip_detail = parsed.detail.clone();
+    let raw_for_copy = parsed.raw.clone();
+    let on_copy = std::rc::Rc::new(on_copy);
+
+    let mut strip = div()
+        .id(id.into())
+        .h(px(26.0))
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(8.0))
+        .px(px(8.0))
+        .rounded(px(6.0))
+        .bg(t.danger_subtle)
+        .border_1()
+        .border_color(t.danger.opacity(0.40))
+        .overflow_hidden()
+        .cursor_pointer()
+        .hover(move |h| h.bg(t.danger.opacity(0.18)))
+        .tooltip(move |_window, cx| {
+            cx.new(|_| Tooltip::with_max_width(tooltip_detail.clone(), px(440.0))).into()
+        })
+        .on_click(cx.listener(move |view, _, _, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(raw_for_copy.clone()));
+            on_copy(view, &raw_for_copy, cx);
+        }))
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .overflow_hidden()
+                .child(
+                    gpui::svg()
+                        .data(crate::icons::ALERT_SVG)
+                        .size(px(12.0))
+                        .text_color(t.danger)
+                        .flex_none(),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(t.danger)
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(format!("{}: {}", prefix, parsed.summary)),
+                ),
+        );
+
+    if let Some(btn) = action_button {
+        strip = strip.child(
+            div()
+                .id(gpui::ElementId::NamedInteger("err-strip-act".into(), 1))
+                .flex_none()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .child(btn),
+        );
+    }
+
+    strip.into_any_element()
+}
+
+/// Helper button to open external links (e.g. appeal or documentation URL) from error components.
+pub fn error_action_link_button<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    url: String,
+    theme: &Theme,
+    cx: &mut Context<V>,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let label: SharedString = label.into();
+    div()
+        .id(id.into())
+        .cursor_pointer()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(3.0))
+        .px(px(6.0))
+        .py(px(2.0))
+        .rounded(px(4.0))
+        .bg(t.danger.opacity(0.18))
+        .hover(move |h| h.bg(t.danger.opacity(0.32)))
+        .text_size(px(10.5))
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(t.danger)
+        .child(label)
+        .on_click(cx.listener(move |_view, _, _, cx| {
+            cx.open_url(&url);
+        }))
+        .into_any_element()
+}
+
+/// Block-level error banner for dialogs or details modals.
+/// Displays structured error title, summary, action buttons (e.g. appeal or dismiss),
+/// copy button, and a bounded monospace scrollable detail container.
+pub fn error_banner<V: 'static>(
+    id_prefix: impl Into<SharedString>,
+    title: impl Into<SharedString>,
+    raw_error: &str,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    action_button: Option<gpui::AnyElement>,
+) -> gpui::AnyElement {
+    let t = theme.clone();
+    let id_str: SharedString = id_prefix.into();
+    let title: SharedString = title.into();
+    let parsed = parse_generic_error(raw_error);
+    let raw_for_copy = parsed.raw.clone();
+    let tooltip_detail = parsed.detail.clone();
+
+    div()
+        .id(gpui::ElementId::Name(format!("{id_str}-banner").into()))
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(12.0))
+        .rounded(px(8.0))
+        .bg(t.danger_subtle)
+        .border_1()
+        .border_color(t.danger.opacity(0.45))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(t.danger)
+                        .child(
+                            gpui::svg()
+                                .data(crate::icons::ALERT_SVG)
+                                .size(px(14.0))
+                                .text_color(t.danger)
+                                .flex_none(),
+                        )
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .children(action_button)
+                        .child(button_l(
+                            format!("{id_str}-copy-btn"),
+                            "复制完整错误",
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            move |_view, _, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(raw_for_copy.clone()));
+                            },
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .id(gpui::ElementId::Name(format!("{id_str}-status-row").into()))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .text_size(px(12.0))
+                .text_color(t.danger)
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .tooltip(move |_window, cx| {
+                    cx.new(|_| Tooltip::with_max_width(tooltip_detail.clone(), px(440.0))).into()
+                })
+                .child(format!("错误状态: {}", parsed.summary)),
+        )
+        .child(
+            div()
+                .id(gpui::ElementId::Name(format!("{id_str}-detail-scroll").into()))
+                .max_h(px(110.0))
+                .overflow_y_scroll()
+                .p(px(8.0))
+                .rounded(px(6.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(11.0))
+                .font_family("Consolas, monospace")
+                .text_color(t.text_secondary)
+                .child(parsed.detail),
+        )
+        .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -833,6 +1303,7 @@ pub fn input_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
         .border_1()
         .border_color(t.input_border)
         .shadow_xs()
+        .overflow_hidden()
         .cursor_text()
         .hover(move |h| h.border_color(t.card_border_hover))
         .child(child)
@@ -842,6 +1313,8 @@ pub fn textarea_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
     let t = theme.clone();
     div()
         .w_full()
+        .min_h(px(120.0))
+        .max_h(px(320.0))
         .rounded(px(6.0))
         .bg(t.input_bg)
         .border_1()
@@ -1109,3 +1582,90 @@ pub fn fused_combobox<V: 'static>(
 
     col.into_any_element()
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_google_cloud_tos_violation() {
+        let json_err = r#"{
+            "error": {
+                "code": 403,
+                "message": "User is prohibited from accessing the service due to Terms of Service violations.",
+                "status": "PERMISSION_DENIED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "TOS_VIOLATION",
+                        "domain": "googleapis.com",
+                        "metadata": {
+                            "appeal_url": "https://support.google.com/accounts/contact/suspended"
+                        }
+                    }
+                ]
+            }
+        }"#;
+        let parsed = parse_generic_error(json_err);
+        assert!(parsed.summary.contains("TOS_VIOLATION"));
+        assert!(parsed.detail.contains("TOS_VIOLATION") || parsed.detail.contains("API_ERROR"));
+        assert_eq!(
+            parsed.action_url.as_deref(),
+            Some("https://support.google.com/accounts/contact/suspended")
+        );
+    }
+
+    #[test]
+    fn test_parse_google_cloud_permission_denied() {
+        let json_err = r#"{
+            "error": {
+                "code": 403,
+                "message": "The caller does not have permission",
+                "status": "PERMISSION_DENIED"
+            }
+        }"#;
+        let parsed = parse_generic_error(json_err);
+        assert!(parsed.summary.contains("PERMISSION_DENIED"));
+        assert!(parsed.action_url.is_none());
+    }
+
+    #[test]
+    fn test_parse_openai_error() {
+        let json_err = r#"{
+            "error": {
+                "message": "You exceeded your current quota, please check your plan and billing details.",
+                "type": "insufficient_quota",
+                "code": "insufficient_quota"
+            }
+        }"#;
+        let parsed = parse_generic_error(json_err);
+        assert!(parsed.summary.contains("RESOURCE_EXHAUSTED") || parsed.summary.contains("quota"));
+        assert!(parsed.detail.contains("insufficient_quota"));
+    }
+
+    #[test]
+    fn test_parse_plaintext_timeout() {
+        let err = "error sending request for url (https://api.openai.com/v1/models): operation timed out after 30000ms";
+        let parsed = parse_generic_error(err);
+        assert!(parsed.summary.contains("超时") || parsed.summary.contains("Timeout"));
+        assert_eq!(parsed.action_url.as_deref(), Some("https://api.openai.com/v1/models"));
+    }
+
+    #[test]
+    fn test_parse_plaintext_connection_refused() {
+        let err = "Failed to connect to 127.0.0.1:11434: Connection refused";
+        let parsed = parse_generic_error(err);
+        assert!(parsed.summary.contains("连接被拒绝"));
+    }
+
+    #[test]
+    fn test_parse_empty_error() {
+        let parsed = parse_generic_error("");
+        assert_eq!(parsed.summary, "未知错误");
+    }
+}
+

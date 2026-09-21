@@ -175,11 +175,30 @@ impl Workspace {
                     _ => pages::SettingsTab::General,
                 };
             }
+            if page == Page::Skills {
+                ui.skills_page_tab = match tab.as_str() {
+                    "store" => pages::SkillsPageTab::Store,
+                    _ => pages::SkillsPageTab::Installed,
+                };
+            }
+            if page == Page::Antigravity {
+                ui.antigravity_tab = match tab.as_str() {
+                    "sessions" => pages::AntigravityPageTab::Sessions,
+                    _ => pages::AntigravityPageTab::Accounts,
+                };
+            }
         }
         if let Ok(sess_id) = std::env::var("AITOOLPLUS_START_SESSION") {
             match page {
                 Page::Tool(tool) => ui.open_session = Some((tool, sess_id)),
                 Page::Sessions => ui.open_session = Some((ui.sessions_tool, sess_id)),
+                Page::Antigravity => {
+                    let sessions = aitoolplus_core::antigravity::scan_antigravity_sessions(&paths.home, 200);
+                    if let Some(s) = sessions.iter().find(|s| s.session_id == sess_id).cloned() {
+                        ui.antigravity_tab = pages::AntigravityPageTab::Sessions;
+                        ui.antigravity_open_session = Some(s);
+                    }
+                }
                 _ => {}
             }
         }
@@ -197,8 +216,44 @@ impl Workspace {
             root_focus,
         };
 
+        if let Ok(skill_name_or_id) = std::env::var("AITOOLPLUS_OPEN_SKILL") {
+            if skill_name_or_id == "first" {
+                if let Some(s) = ws.store.store().skills.skills.first() {
+                    ws.ui.selected_skill_id = Some(s.id.clone());
+                }
+            } else if let Some(s) = ws.store.store().skills.skills.iter().find(|s| s.id == skill_name_or_id || s.name == skill_name_or_id) {
+                ws.ui.selected_skill_id = Some(s.id.clone());
+            }
+        }
+
+        if let Ok(mcp_name_or_id) = std::env::var("AITOOLPLUS_OPEN_MCP") {
+            if mcp_name_or_id == "first" {
+                if let Some(s) = ws.store.store().mcp.servers.first() {
+                    ws.ui.selected_mcp_id = Some(s.id.clone());
+                }
+            } else if let Some(s) = ws.store.store().mcp.servers.iter().find(|s| s.id == mcp_name_or_id || s.name == mcp_name_or_id) {
+                ws.ui.selected_mcp_id = Some(s.id.clone());
+            }
+        }
+
+        if std::env::var("AITOOLPLUS_OPEN_MCP_IMPORT_JSON").ok().as_deref() == Some("1") {
+            let default_json = "{\n  \"mcpServers\": {\n    \n  }\n}";
+            let editor = cx.new(|cx| crate::text_area::TextArea::new(default_json, cx));
+            ws.ui.mcp_import_json_modal = Some(editor);
+        }
+
+        if std::env::var("AITOOLPLUS_OPEN_SKILL_GIT_MODAL").ok().as_deref() == Some("1") {
+            let git_input = cx.new(|cx| TextInput::new("https://github.com/owner/repo.git", cx));
+            ws.ui.skill_git_modal = Some(git_input);
+        }
+
         if std::env::var("AITOOLPLUS_OPEN_SESSION_ACTIONS").ok().as_deref() == Some("1") {
             ws.ui.session_actions_menu_open = true;
+        }
+
+        if let Ok(toast_msg) = std::env::var("AITOOLPLUS_TEST_TOAST") {
+            let is_error = std::env::var("AITOOLPLUS_TEST_TOAST_ERROR").ok().as_deref() == Some("1");
+            ws.ui.toast(toast_msg, is_error);
         }
 
         if std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_DIALOG").ok().as_deref() == Some("1") {
@@ -217,6 +272,34 @@ impl Workspace {
                 is_authorizing: false,
                 error_message: None,
             });
+        }
+
+        if let Ok(email) = std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_DETAILS") {
+            let store = aitoolplus_core::antigravity::load_store(&ws.paths.app_data);
+            if let Some(acc) = store.accounts.iter().find(|a| a.email == email).or_else(|| store.accounts.first()).cloned() {
+                ws.ui.antigravity_details_account = Some(acc);
+            }
+        }
+
+        if let Ok(email) = std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_DEVICE") {
+            let store = aitoolplus_core::antigravity::load_store(&ws.paths.app_data);
+            if let Some(acc) = store.accounts.iter().find(|a| a.email == email).or_else(|| store.accounts.first()).cloned() {
+                let prof = acc.device_profile.clone().unwrap_or_else(aitoolplus_core::antigravity::DeviceProfile::generate_random);
+                ws.ui.antigravity_device_account = Some((acc, prof));
+            }
+        }
+
+        if let Ok(email) = std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_LABEL") {
+            let store = aitoolplus_core::antigravity::load_store(&ws.paths.app_data);
+            if let Some(acc) = store.accounts.iter().find(|a| a.email == email).or_else(|| store.accounts.first()).cloned() {
+                let initial = acc.custom_label.clone().unwrap_or_default();
+                let input = cx.new(|cx| {
+                    let mut inp = TextInput::new("输入自定义备注/标签…", cx);
+                    inp.set_text_silent(initial, cx);
+                    inp
+                });
+                ws.ui.antigravity_editing_label = Some((acc.id, input));
+            }
         }
 
         if let Ok(target_tool) = std::env::var("AITOOLPLUS_OPEN_PROVIDER") {
@@ -439,11 +522,15 @@ impl Workspace {
 
     /// The scrollable content area for the current page.
     pub(crate) fn page_content(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let is_session_open = self.ui.open_session.is_some();
+        let is_session_open = self.ui.open_session.is_some() || self.ui.antigravity_open_session.is_some();
         let is_custom_scroll = is_session_open
             || (matches!(self.page, Page::Tool(_))
                 && matches!(self.ui.tool_tab, pages::ToolTab::Marketplace | pages::ToolTab::Sessions))
-            || matches!(self.page, Page::Sessions);
+            || matches!(self.page, Page::Sessions)
+            || matches!(self.page, Page::Skills)
+            || matches!(self.page, Page::Mcp)
+            || (matches!(self.page, Page::Antigravity)
+                && matches!(self.ui.antigravity_tab, pages::AntigravityPageTab::Sessions));
 
         let mut pane = if is_session_open {
             div()
@@ -718,7 +805,19 @@ impl Render for Workspace {
             let renames = self.ui.rename_dialog.clone();
             let runtime_edits = self.ui.runtime_edit_dialog.clone();
             let skill_details = self.ui.skill_detail_dialog.clone();
+            let selected_skill_id = self.ui.selected_skill_id.clone();
+            let skill_editing_metadata = self.ui.skill_editing_metadata.clone();
+            let skill_adding_tag = self.ui.skill_adding_tag.clone();
+            let skill_git_modal = self.ui.skill_git_modal.clone();
+            let selected_mcp_id = self.ui.selected_mcp_id.clone();
+            let mcp_import_json = self.ui.mcp_import_json_modal.clone();
+            let mcp_import_existing = self.ui.mcp_import_existing_modal;
+            let mcp_editing_metadata = self.ui.mcp_editing_metadata.clone();
+            let mcp_adding_tag = self.ui.mcp_adding_tag.clone();
             let antigravity_dialog = self.ui.antigravity_dialog.clone();
+            let antigravity_details = self.ui.antigravity_details_account.clone();
+            let antigravity_device = self.ui.antigravity_device_account.clone();
+            let antigravity_label_edit = self.ui.antigravity_editing_label.clone();
             let mut out = vec![];
             if let Some(d) = dialogs {
                 out.push(pages::tool_page::render_provider_dialog(d, self, cx));
@@ -747,8 +846,62 @@ impl Render for Workspace {
                     detail, self, cx,
                 ));
             }
+            if let Some(selected_id) = selected_skill_id {
+                out.push(pages::skills_page::render_skill_detail_drawer(
+                    &selected_id, self, cx,
+                ));
+            }
+            if let Some((skill_id, group_input, note_input)) = skill_editing_metadata {
+                out.push(pages::skills_page::render_skill_metadata_modal(
+                    skill_id, group_input, note_input, self, cx,
+                ));
+            }
+            if let Some((skill_id, tag_input)) = skill_adding_tag {
+                out.push(pages::skills_page::render_skill_add_tag_modal(
+                    skill_id, tag_input, self, cx,
+                ));
+            }
+            if let Some(input) = skill_git_modal {
+                out.push(pages::skills_page::render_skill_git_modal(
+                    input, self, cx,
+                ));
+            }
+            if let Some(mcp_id) = selected_mcp_id {
+                out.push(pages::mcp_page::render_mcp_detail_drawer(
+                    &mcp_id, self, cx,
+                ));
+            }
+            if let Some(json_editor) = mcp_import_json {
+                out.push(pages::mcp_page::render_mcp_import_json_modal(
+                    json_editor, self, cx,
+                ));
+            }
+            if mcp_import_existing {
+                out.push(pages::mcp_page::render_mcp_import_existing_modal(
+                    self, cx,
+                ));
+            }
+            if let Some((mcp_id, group_input, note_input)) = mcp_editing_metadata {
+                out.push(pages::mcp_page::render_mcp_metadata_modal(
+                    mcp_id, group_input, note_input, self, cx,
+                ));
+            }
+            if let Some((mcp_id, tag_input)) = mcp_adding_tag {
+                out.push(pages::mcp_page::render_mcp_add_tag_modal(
+                    mcp_id, tag_input, self, cx,
+                ));
+            }
             if let Some(d) = antigravity_dialog {
                 out.push(pages::antigravity_page::render_add_account_dialog(&d, self, cx));
+            }
+            if let Some(acc) = antigravity_details {
+                out.push(pages::antigravity_page::render_account_details_dialog(&acc, self, cx));
+            }
+            if let Some((acc, prof)) = antigravity_device {
+                out.push(pages::antigravity_page::render_device_fingerprint_dialog(&acc, prof, self, cx));
+            }
+            if let Some((id, input)) = antigravity_label_edit {
+                out.push(pages::antigravity_page::render_label_edit_dialog(&id, input, self, cx));
             }
             out
         } else {

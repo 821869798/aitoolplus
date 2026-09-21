@@ -39,7 +39,13 @@ Section "MainSection" SecMain
     ; Store installation folder
     WriteRegStr HKCU "Software\AIToolPlus" "InstallDir" "$INSTDIR"
 
-    ; Register URL Protocol aitoolbox://
+    ; Register URL Protocol aitoolplus:// (primary)
+    WriteRegStr HKCU "Software\Classes\aitoolplus" "" "URL:AI ToolPlus Protocol"
+    WriteRegStr HKCU "Software\Classes\aitoolplus" "URL Protocol" ""
+    WriteRegStr HKCU "Software\Classes\aitoolplus\DefaultIcon" "" "$INSTDIR\aitoolplus.exe,0"
+    WriteRegStr HKCU "Software\Classes\aitoolplus\shell\open\command" "" '"$INSTDIR\aitoolplus.exe" "%1"'
+
+    ; Register URL Protocol aitoolbox:// (legacy compatibility)
     WriteRegStr HKCU "Software\Classes\aitoolbox" "" "URL:AI ToolPlus Protocol"
     WriteRegStr HKCU "Software\Classes\aitoolbox" "URL Protocol" ""
     WriteRegStr HKCU "Software\Classes\aitoolbox\DefaultIcon" "" "$INSTDIR\aitoolplus.exe,0"
@@ -81,6 +87,7 @@ Section "Uninstall"
     Delete "$DESKTOP\AI ToolPlus.lnk"
 
     ; Delete Registry Keys
+    DeleteRegKey HKCU "Software\Classes\aitoolplus"
     DeleteRegKey HKCU "Software\Classes\aitoolbox"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus"
     DeleteRegKey HKCU "Software\AIToolPlus"

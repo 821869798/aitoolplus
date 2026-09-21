@@ -36,8 +36,9 @@ unicode-segmentation = "1.12"
 opt-level = 1
 
 [profile.release]
-opt-level = "s"
-lto = "thin"
-codegen-units = 4
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 strip = true
 

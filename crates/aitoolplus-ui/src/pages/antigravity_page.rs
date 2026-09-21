@@ -5,25 +5,34 @@
 
 use std::time::Duration;
 use aitoolplus_core::antigravity::{
-    AntigravityAccount, AntigravityStore, ModelQuotaInfo, OAuthServerSession,
+    AntigravityAccount, AntigravitySessionMeta, AntigravityStore, DeviceProfile, OAuthServerSession,
     build_account_from_refresh_token, exchange_auth_code, fetch_project_and_tier,
     fetch_quota, fetch_user_info, import_from_local_system, load_store, open_browser,
-    save_store, switch_account,
+    save_store, scan_antigravity_sessions, switch_account_target, toggle_account_disabled,
+    update_account_device_profile, update_account_label,
 };
-use gpui::{Context, IntoElement, SharedString, div, prelude::*, px};
-use chrono::{DateTime, Utc};
+use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, uniform_list};
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 use crate::components::{
-    BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l, empty_state_svg,
-    input_container, section_title,
+    ButtonVariant, Tooltip, button_l, button_with_icon_l, empty_state_svg,
+    error_action_link_button, error_banner, error_strip, error_strip_action,
+    icon_button_svg, input_container, parse_generic_error,
 };
 use crate::icons::{
-    CHECK_SVG, COPY_SVG, DOWNLOAD_SVG, GEMINI_SVG, PLUS_SVG, REFRESH_SVG, TRASH_SVG,
+    ARROW_LEFT_SVG, ARROW_RIGHT_LEFT_SVG, CLOCK_SVG, CODE_SVG, COPY_SVG, DOWNLOAD_SVG,
+    FINGERPRINT_SVG, FOLDER_SVG, GEMINI_SVG, HISTORY_SVG, INFO_SVG, PLUS_SVG, REFRESH_SVG,
+    REPEAT_SVG, TAG_SVG, TERMINAL_SVG, TOGGLE_LEFT_SVG, TOGGLE_RIGHT_SVG, TRASH_SVG,
+    USER_SVG, WAND_SVG,
 };
 use crate::text_input::TextInput;
+use crate::theme::Theme;
 use crate::workspace::Workspace;
 
-use super::{ConfirmAction, ConfirmState, modal_scaffold};
+use super::{
+    AntigravityPageTab, AntigravityQuotaWindow, AntigravitySessionFilter,
+    ConfirmAction, ConfirmState, modal_scaffold, modal_scaffold_custom,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AntigravityDialogTab {
@@ -47,6 +56,72 @@ pub fn render_antigravity_page(ws: &mut Workspace, cx: &mut Context<Workspace>) 
     let t = ws.theme.clone();
     let i = ws.i18n;
 
+    let tab_selector = crate::components::segmented_pill_selector(
+        "ag-page-tab",
+        vec![
+            (
+                AntigravityPageTab::Accounts,
+                Some(USER_SVG),
+                i.t("账号与配额", "Accounts & Quota"),
+            ),
+            (
+                AntigravityPageTab::Sessions,
+                Some(HISTORY_SVG),
+                i.t("会话管理", "Sessions"),
+            ),
+        ],
+        ws.ui.antigravity_tab,
+        &t,
+        cx,
+        |ws, tab, _, cx| {
+            ws.ui.antigravity_tab = tab;
+            cx.notify();
+        },
+    );
+
+    let content = match ws.ui.antigravity_tab {
+        AntigravityPageTab::Accounts => render_accounts_tab(ws, cx),
+        AntigravityPageTab::Sessions => {
+            if let Some(ref open_meta) = ws.ui.antigravity_open_session.clone() {
+                render_antigravity_session_detail(open_meta, ws, cx)
+            } else {
+                render_antigravity_sessions_tab(ws, cx)
+            }
+        }
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .h_full()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .gap(px(12.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .flex_shrink_0()
+                .child(tab_selector),
+        )
+        .child(
+            div()
+                .w_full()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.0))
+                .child(content),
+        )
+        .into_any_element()
+}
+
+pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
     // Lazily load store from disk if not loaded yet
     if ws.ui.antigravity_store.is_none() {
         let store = load_store(&ws.paths.app_data);
@@ -60,20 +135,14 @@ pub fn render_antigravity_page(ws: &mut Workspace, cx: &mut Context<Workspace>) 
     let import_label = i.t("从本机导入", "Import Local");
     let refresh_all_label = i.t("刷新全部用量", "Refresh All Quotas");
 
+    let cur_window = ws.ui.antigravity_quota_window;
+
     let mut section = div()
         .flex()
         .flex_col()
         .w_full()
         .min_w(px(0.0))
-        .gap(px(14.0))
-        .child(section_title(
-            &t,
-            i.t("Antigravity 账号管理", "Antigravity Accounts"),
-            Some(i.t(
-                &format!("共 {} 个账号", accounts.len()),
-                &format!("{} accounts total", accounts.len()),
-            )),
-        ))
+        .gap(px(12.0))
         .child(
             div()
                 .flex()
@@ -130,12 +199,74 @@ pub fn render_antigravity_page(ws: &mut Workspace, cx: &mut Context<Workspace>) 
                             |ws, _, _, cx| {
                                 refresh_all_quotas_action(ws, cx);
                             },
-                        )),
+                        ))
+                        .child(
+                            div()
+                                .px(px(8.0))
+                                .py(px(4.0))
+                                .rounded(px(6.0))
+                                .bg(t.sidebar_bg)
+                                .text_size(px(12.0))
+                                .text_color(t.text_secondary)
+                                .child(format!("共 {} 个账号", accounts.len())),
+                        ),
                 )
                 .child(
                     div()
-                        .w(px(280.0))
-                        .child(input_container(&t, ws.ui.antigravity_search.clone())),
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        // 5h vs Weekly toggle
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .p(px(2.0))
+                                .rounded(px(7.0))
+                                .bg(t.input_bg)
+                                .border_1()
+                                .border_color(t.card_border)
+                                .child(
+                                    div()
+                                        .id("toggle-win-5h")
+                                        .px(px(10.0))
+                                        .py(px(3.5))
+                                        .rounded(px(5.0))
+                                        .cursor_pointer()
+                                        .text_size(px(11.5))
+                                        .font_weight(if cur_window == AntigravityQuotaWindow::FiveHours { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                        .text_color(if cur_window == AntigravityQuotaWindow::FiveHours { t.accent } else { t.text_secondary })
+                                        .when(cur_window == AntigravityQuotaWindow::FiveHours, |s| s.bg(t.card_bg).shadow_xs())
+                                        .child(i.t("5小时配额", "5-Hour Quota"))
+                                        .on_click(cx.listener(|ws, _, _, cx| {
+                                            ws.ui.antigravity_quota_window = AntigravityQuotaWindow::FiveHours;
+                                            cx.notify();
+                                        }))
+                                )
+                                .child(
+                                    div()
+                                        .id("toggle-win-weekly")
+                                        .px(px(10.0))
+                                        .py(px(3.5))
+                                        .rounded(px(5.0))
+                                        .cursor_pointer()
+                                        .text_size(px(11.5))
+                                        .font_weight(if cur_window == AntigravityQuotaWindow::Weekly { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                                        .text_color(if cur_window == AntigravityQuotaWindow::Weekly { t.accent } else { t.text_secondary })
+                                        .when(cur_window == AntigravityQuotaWindow::Weekly, |s| s.bg(t.card_bg).shadow_xs())
+                                        .child(i.t("周配额", "Weekly Quota"))
+                                        .on_click(cx.listener(|ws, _, _, cx| {
+                                            ws.ui.antigravity_quota_window = AntigravityQuotaWindow::Weekly;
+                                            cx.notify();
+                                        }))
+                                )
+                        )
+                        // Search bar
+                        .child(
+                            div()
+                                .w(px(240.0))
+                                .child(input_container(&t, ws.ui.antigravity_search.clone())),
+                        ),
                 ),
         );
 
@@ -181,7 +312,1114 @@ pub fn render_antigravity_page(ws: &mut Workspace, cx: &mut Context<Workspace>) 
     section.into_any_element()
 }
 
-/// Render an individual account card with credentials, tier, and quota dashboard.
+pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    // Lazily scan sessions
+    if ws.ui.antigravity_sessions.is_none() {
+        let sessions = scan_antigravity_sessions(&ws.paths.home, 200);
+        ws.ui.antigravity_sessions = Some(sessions);
+    }
+
+    let sessions = ws.ui.antigravity_sessions.clone().unwrap_or_default();
+    let filter = ws.ui.antigravity_session_filter;
+    let query = ws.ui.antigravity_session_search.read(cx).text().trim().to_lowercase();
+
+    let filtered: Vec<AntigravitySessionMeta> = sessions
+        .into_iter()
+        .filter(|s| {
+            let match_filter = match filter {
+                AntigravitySessionFilter::All => true,
+                AntigravitySessionFilter::Cli => s.source == "cli",
+                AntigravitySessionFilter::App => s.source == "app",
+            };
+            if !match_filter {
+                return false;
+            }
+            if query.is_empty() {
+                return true;
+            }
+            s.title.to_lowercase().contains(&query)
+                || s.session_id.to_lowercase().contains(&query)
+                || s.preview.to_lowercase().contains(&query)
+                || s.project_dir.as_deref().unwrap_or("").to_lowercase().contains(&query)
+        })
+        .collect();
+
+    let total_count = filtered.len();
+
+    // Toolbar
+    let filter_selector = crate::components::segmented_pill_selector(
+        "ag-sess-filter",
+        vec![
+            (
+                AntigravitySessionFilter::All,
+                None,
+                i.t("全部", "All"),
+            ),
+            (
+                AntigravitySessionFilter::Cli,
+                Some(TERMINAL_SVG),
+                i.t("终端 CLI", "Terminal CLI"),
+            ),
+            (
+                AntigravitySessionFilter::App,
+                Some(CODE_SVG),
+                i.t("桌面 App", "Desktop App"),
+            ),
+        ],
+        filter,
+        &t,
+        cx,
+        |ws, f, _, cx| {
+            ws.ui.antigravity_session_filter = f;
+            cx.notify();
+        },
+    );
+
+    let search_input = ws.ui.antigravity_session_search.clone();
+
+    let refresh_btn = button_with_icon_l(
+        "ag-sess-refresh-btn",
+        REFRESH_SVG,
+        i.t("刷新", "Refresh"),
+        ButtonVariant::Secondary,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            let s = scan_antigravity_sessions(&ws.paths.home, 200);
+            ws.ui.antigravity_sessions = Some(s);
+            ws.ui.toast(ws.i18n.t("已刷新会话列表", "Refreshed session list").to_string(), false);
+            cx.notify();
+        },
+    );
+
+    let toolbar = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(10.0))
+        .flex_wrap()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .flex_wrap()
+                .child(filter_selector)
+                .child(div().w(px(280.0)).child(input_container(&t, search_input)))
+                .child(refresh_btn)
+        )
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(t.text_muted)
+                .child(format!("{}: {}", i.t("共计", "Total"), total_count))
+        );
+
+    // List of sessions
+    if filtered.is_empty() {
+        return div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .gap(px(12.0))
+            .child(toolbar)
+            .child(
+                empty_state_svg(
+                    &t,
+                    HISTORY_SVG,
+                    i.t("暂无 Antigravity 会话记录", "No Antigravity sessions found"),
+                    if query.is_empty() {
+                        i.t("在终端中使用 agy，或在 Antigravity 桌面端中开始对话后，历史会话将自动显示在此处",
+                            "Conversations started in agy CLI or Antigravity IDE will automatically appear here.")
+                    } else {
+                        i.t("没有找到匹配的会话，请尝试更换关键词", "No matching sessions found, try a different keyword.")
+                    }
+                )
+            )
+            .into_any_element();
+    }
+
+    let filtered_arc = std::sync::Arc::new(filtered);
+    let items_len = filtered_arc.len();
+    let ws_entity = cx.entity();
+    let t_clone = t.clone();
+    let i_clone = i;
+    let open_id = ws.ui.antigravity_open_session.as_ref().map(|s| s.session_id.clone());
+
+    let v_list = uniform_list(
+        "antigravity-sessions-vlist",
+        items_len,
+        move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
+            let mut elements = Vec::with_capacity(range.len());
+            for idx in range {
+                if let Some(sess) = filtered_arc.get(idx) {
+                    let is_open = open_id.as_deref() == Some(&sess.session_id);
+                    elements.push(render_virtual_antigravity_session_row(
+                        sess,
+                        is_open,
+                        &ws_entity,
+                        &t_clone,
+                        &i_clone,
+                    ));
+                }
+            }
+            elements
+        },
+    )
+    .track_scroll(&ws.ui.antigravity_session_scroll_handle)
+    .size_full();
+
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .h_full()
+        .min_h(px(0.0))
+        .gap(px(12.0))
+        .child(toolbar)
+        .child(
+            div()
+                .w_full()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .child(v_list),
+        )
+        .into_any_element()
+}
+
+fn short_session_id(sid: &str) -> String {
+    if sid.len() <= 12 {
+        sid.to_string()
+    } else {
+        let prefix: String = sid.chars().take(8).collect();
+        let suffix: String = sid.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("{prefix}...{suffix}")
+    }
+}
+
+fn render_virtual_antigravity_session_row(
+    session: &AntigravitySessionMeta,
+    is_open: bool,
+    ws_entity: &gpui::Entity<Workspace>,
+    t: &Theme,
+    i: &crate::i18n::I18n,
+) -> gpui::AnyElement {
+    let sid = session.session_id.clone();
+    let display_title = if session.title.trim().is_empty() {
+        if !session.preview.trim().is_empty() {
+            session.preview.clone()
+        } else {
+            session.session_id.clone()
+        }
+    } else {
+        session.title.clone()
+    };
+
+    let display_time = session.last_active_at
+        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+        .map(|dt| {
+            let local: chrono::DateTime<chrono::Local> = chrono::DateTime::from(dt);
+            local.format("%Y-%m-%d %H:%M").to_string()
+        })
+        .unwrap_or_else(|| "—".into());
+
+    let short_hash = short_session_id(&sid);
+
+    let (badge_text, badge_bg, badge_border, badge_text_color) = if session.source == "cli" {
+        ("CLI", t.accent.opacity(0.12), t.accent.opacity(0.3), t.accent)
+    } else {
+        ("App", t.sidebar_bg, t.card_border, t.text_secondary)
+    };
+
+    let source_badge = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(18.0))
+        .px(px(6.0))
+        .rounded(px(4.0))
+        .bg(badge_bg)
+        .border_1()
+        .border_color(badge_border)
+        .text_size(px(11.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(badge_text_color)
+        .flex_shrink_0()
+        .child(badge_text);
+
+    let mut meta_row = div()
+        .flex()
+        .items_center()
+        .gap(px(12.0))
+        .text_size(px(12.0))
+        .text_color(t.text_secondary)
+        .overflow_hidden()
+        .whitespace_nowrap();
+
+    // Time with Clock icon
+    meta_row = meta_row.child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .flex_shrink_0()
+            .child(crate::icons::svg_icon(CLOCK_SVG, px(12.0), t.text_muted))
+            .child(display_time),
+    );
+
+    // Hash (short session id)
+    meta_row = meta_row.child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .flex_shrink_0()
+            .text_color(t.text_muted)
+            .child(short_hash),
+    );
+
+    // Project Directory (if available)
+    if let Some(dir) = &session.project_dir {
+        meta_row = meta_row.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_color(t.text_muted)
+                .child(crate::icons::svg_icon(FOLDER_SVG, px(12.0), t.text_muted))
+                .child(
+                    div()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(dir.clone()),
+                ),
+        );
+    }
+
+    let left_info = div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .flex_1()
+        .min_w(px(0.0))
+        .overflow_hidden()
+        // Row 1: Source badge + Title
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .w_full()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .child(source_badge)
+                .child(
+                    div()
+                        .text_size(px(13.5))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(display_title),
+                ),
+        )
+        // Row 2: Meta
+        .child(meta_row);
+
+    // Right actions
+    let mut right_actions = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .flex_shrink_0();
+
+    if let Some(ref cmd) = session.resume_command {
+        let ws_entity = ws_entity.clone();
+        let cmd_to_copy = cmd.clone();
+        right_actions = right_actions.child(
+            div()
+                .id(gpui::SharedString::from(format!("ag-resume-{}", session.session_id)))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .h(px(28.0))
+                .px(px(10.0))
+                .rounded(px(6.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_size(px(12.0))
+                .text_color(t.text_secondary)
+                .hover({
+                    let bg = t.card_hover;
+                    let border = t.card_border_hover;
+                    let text = t.text_primary;
+                    move |h| h.bg(bg).border_color(border).text_color(text)
+                })
+                .child(crate::icons::svg_icon(TERMINAL_SVG, px(12.0), t.text_muted))
+                .child(i.t("恢复命令", "Resume"))
+                .on_click(move |_ev, _win, cx| {
+                    cx.stop_propagation();
+                    let cmd_str = cmd_to_copy.clone();
+                    let _ = ws_entity.update(cx, |ws, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(cmd_str.clone()));
+                        ws.ui.toast(format!("已复制命令: {}", cmd_str), false);
+                        cx.notify();
+                    });
+                }),
+        );
+    }
+
+    let ws_entity_del = ws_entity.clone();
+    let sess_for_del = session.clone();
+    right_actions = right_actions.child(
+        div()
+            .id(gpui::SharedString::from(format!("ag-del-{}", session.session_id)))
+            .cursor_pointer()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .h(px(28.0))
+            .px(px(10.0))
+            .rounded(px(6.0))
+            .bg(t.sidebar_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .text_size(px(12.0))
+            .text_color(t.danger)
+            .hover({
+                let bg = t.danger_subtle;
+                let border = t.danger;
+                move |h| h.bg(bg).border_color(border)
+            })
+            .child(crate::icons::svg_icon(TRASH_SVG, px(12.0), t.danger))
+            .child(i.t("删除", "Delete"))
+            .on_click(move |_ev, _win, cx| {
+                cx.stop_propagation();
+                let sess_del = sess_for_del.clone();
+                let _ = ws_entity_del.update(cx, |ws, cx| {
+                    let msg = format!("确定要删除此会话记录 ({}) 吗？磁盘上的相关数据将被永久移除。", sess_del.session_id);
+                    ws.ui.confirm = Some(ConfirmState {
+                        title: ws.i18n.t("删除 Antigravity 会话", "Delete Antigravity Session").to_string(),
+                        message: msg,
+                        action: ConfirmAction::DeleteAntigravitySession { session: sess_del },
+                    });
+                    cx.notify();
+                });
+            }),
+    );
+
+    let sess_to_open = session.clone();
+    let ws_entity_card = ws_entity.clone();
+
+    let card = div()
+        .id(gpui::SharedString::from(format!("ag-v-sess-{}", sid)))
+        .flex()
+        .items_center()
+        .justify_between()
+        .w_full()
+        .h_full()
+        .min_w(px(0.0))
+        .gap(px(12.0))
+        .px(px(16.0))
+        .py(px(8.0))
+        .rounded(px(10.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(if is_open { t.accent } else { t.card_border })
+        .shadow_xs()
+        .cursor_pointer()
+        .hover({
+            let bg = t.card_hover;
+            let border = if is_open { t.accent } else { t.card_border_hover };
+            move |h| h.bg(bg).border_color(border)
+        })
+        .on_click(move |_ev, _win, cx| {
+            let sess = sess_to_open.clone();
+            let _ = ws_entity_card.update(cx, |ws, cx| {
+                ws.ui.antigravity_open_session = Some(sess);
+                cx.notify();
+            });
+        })
+        .child(left_info)
+        .child(right_actions);
+
+    div()
+        .h(px(66.0))
+        .pb(px(6.0))
+        .flex()
+        .w_full()
+        .child(card)
+        .into_any_element()
+}
+
+fn render_antigravity_session_detail(
+    session: &AntigravitySessionMeta,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+    let source_path_buf = std::path::PathBuf::from(&session.source_path);
+
+    let session_meta: aitoolplus_core::session::SessionMeta = session.clone().into();
+    let messages = aitoolplus_core::session::load_messages(&ws.paths, &session_meta).unwrap_or_default();
+
+    let formatted_time = session.last_active_at
+        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+        .map(|dt| {
+            let local: chrono::DateTime<chrono::Local> = chrono::DateTime::from(dt);
+            local.format("%Y-%m-%d %H:%M").to_string()
+        })
+        .unwrap_or_else(|| "—".into());
+
+    let top_bar = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(10.0))
+        .p(px(8.0))
+        .rounded(px(8.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .flex_1()
+                .min_w(px(0.0))
+                .child(button_with_icon_l(
+                    "ag-detail-back",
+                    ARROW_LEFT_SVG,
+                    i.t("返回列表", "Back"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.antigravity_open_session = None;
+                        cx.notify();
+                    }
+                ))
+                .child(
+                    if session.source == "cli" {
+                        crate::components::badge(&t, "CLI", crate::components::BadgeKind::Accent)
+                    } else {
+                        crate::components::badge(&t, "App", crate::components::BadgeKind::Neutral)
+                    }
+                )
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(t.text_primary)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(session.title.clone())
+                )
+                .child(crate::components::badge(&t, formatted_time, crate::components::BadgeKind::Neutral))
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .flex_shrink_0()
+                .child(button_with_icon_l(
+                    "ag-detail-reveal",
+                    FOLDER_SVG,
+                    i.t("定位文件", "Reveal File"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    move |_, _, _, _| {
+                        #[cfg(target_os = "windows")]
+                        {
+                            let _ = std::process::Command::new("explorer")
+                                .arg(format!("/select,{}", source_path_buf.display()))
+                                .spawn();
+                        }
+                    }
+                ))
+        );
+
+    let mut message_list = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap(px(12.0))
+        .p(px(8.0));
+
+    if messages.is_empty() {
+        message_list = message_list.child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .p(px(40.0))
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(t.text_secondary)
+                        .child(if session.source == "app" {
+                            i.t("此桌面 App 会话历史仅保存于本地 Protocol Buffers 二进制缓存中，无明文对话记录。",
+                                "This Desktop App session history is stored in binary protocol buffers (.pb).")
+                        } else {
+                            i.t("此会话暂未记录明文消息。", "No text transcript messages recorded for this session.")
+                        })
+                )
+        );
+    } else {
+        for (idx, msg) in messages.iter().enumerate() {
+            let is_user = msg.role == "user";
+            let role_label: gpui::SharedString = if is_user { i.t("用户", "User") } else { "Antigravity".into() };
+            let copy_text = msg.content.clone();
+
+            let mut msg_box = div()
+                .id(gpui::SharedString::from(format!("ag-msg-{}", idx)))
+                .flex()
+                .flex_col()
+                .w_full()
+                .gap(px(6.0))
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .border_1();
+
+            if is_user {
+                msg_box = msg_box
+                    .bg(t.card_bg)
+                    .border_color(t.accent.opacity(0.3));
+            } else {
+                msg_box = msg_box
+                    .bg(t.sidebar_bg)
+                    .border_color(t.card_border);
+            }
+
+            // Header
+            let header = div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .w_full()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(if is_user { t.accent } else { t.text_primary })
+                                .child(role_label)
+                        )
+                )
+                .child(
+                    button_with_icon_l(
+                        gpui::SharedString::from(format!("ag-cp-msg-{}", idx)),
+                        COPY_SVG,
+                        i.t("复制", "Copy"),
+                        ButtonVariant::Ghost,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_text.clone()));
+                            ws.ui.toast(ws.i18n.t("已复制内容", "Copied").to_string(), false);
+                            cx.notify();
+                        }
+                    )
+                );
+
+            msg_box = msg_box.child(header);
+
+            // Blocks or content
+            for block in msg.blocks.iter() {
+                if block.kind == "thinking" {
+                    if let Some(ref text) = block.text {
+                        msg_box = msg_box.child(
+                            div()
+                                .p(px(8.0))
+                                .rounded(px(6.0))
+                                .bg(t.card_bg)
+                                .border_1()
+                                .border_color(t.card_border)
+                                .text_size(px(12.0))
+                                .text_color(t.text_muted)
+                                .child(format!("💭 思考过程:\n{}", text))
+                        );
+                    }
+                } else if block.kind == "tool_call" || block.kind == "command" {
+                    let tool_name = block.tool_name.as_deref().unwrap_or("tool");
+                    let args = block.text.as_deref().unwrap_or("");
+                    msg_box = msg_box.child(
+                        div()
+                            .p(px(6.0))
+                            .rounded(px(6.0))
+                            .bg(t.card_bg)
+                            .border_1()
+                            .border_color(t.card_border)
+                            .text_size(px(12.0))
+                            .text_color(t.text_secondary)
+                            .child(format!("🔧 调用工具 {}: {}", tool_name, args))
+                    );
+                } else if let Some(ref text) = block.text {
+                    msg_box = msg_box.child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(t.text_primary)
+                            .child(text.clone())
+                    );
+                }
+            }
+
+            if msg.blocks.is_empty() && !msg.content.is_empty() {
+                msg_box = msg_box.child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(t.text_primary)
+                        .child(msg.content.clone())
+                );
+            }
+
+            message_list = message_list.child(msg_box);
+        }
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .h_full()
+        .min_h(px(0.0))
+        .gap(px(10.0))
+        .child(top_bar)
+        .child(message_list)
+        .into_any_element()
+}
+
+///// Core usage summary item (Gemini or Claude/GPT).
+#[derive(Clone, Debug)]
+pub struct CoreUsageItem {
+    pub title: &'static str,
+    pub percentage: i32,
+    pub reset_time: String,
+    pub icon_svg: &'static [u8],
+}
+
+/// Extract the two fundamental usages from an Antigravity account:
+/// 1) Gemini usage
+/// 2) Claude / GPT usage
+/// Supports 5h and weekly quota window selection.
+pub fn extract_core_usages(
+    account: &AntigravityAccount,
+    window: AntigravityQuotaWindow,
+) -> (Option<CoreUsageItem>, Option<CoreUsageItem>) {
+    let quota = match &account.quota {
+        Some(q) => q,
+        None => return (None, None),
+    };
+
+    let window_str = match window {
+        AntigravityQuotaWindow::FiveHours => "5h",
+        AntigravityQuotaWindow::Weekly => "week",
+    };
+
+    // Helper to find a fallback reset time from models if bucket reset time is empty
+    let find_model_reset_time = |keyword: &str| -> String {
+        quota.models.iter()
+            .find(|m| m.name.to_lowercase().contains(keyword) && !m.reset_time.trim().is_empty())
+            .map(|m| m.reset_time.clone())
+            .unwrap_or_default()
+    };
+
+    // 1. Gemini usage: find in quota_groups with matching window, or fallback
+    let gemini = quota.quota_groups.iter()
+        .find(|g| {
+            let d = g.display_name.to_lowercase();
+            let is_gem = d.contains("gemini") || (!d.contains("claude") && !d.contains("gpt") && !d.contains("3p"));
+            let is_win = g.window.to_lowercase().contains(window_str)
+                || (window_str == "week" && (g.window.to_lowercase().contains("week") || g.window.to_lowercase().contains("7d")));
+            is_gem && is_win
+        })
+        .or_else(|| {
+            quota.quota_groups.iter()
+                .find(|g| g.display_name.to_lowercase().contains("gemini"))
+        })
+        .map(|g| {
+            let mut reset_time = g.reset_time.clone();
+            if reset_time.trim().is_empty() {
+                reset_time = find_model_reset_time("gemini");
+            }
+            CoreUsageItem {
+                title: "Gemini",
+                percentage: (g.remaining_fraction * 100.0).round() as i32,
+                reset_time,
+                icon_svg: crate::icons::GEMINI_SVG,
+            }
+        })
+        .or_else(|| {
+            quota.models.iter()
+                .find(|m| m.name.to_lowercase().contains("gemini"))
+                .map(|m| CoreUsageItem {
+                    title: "Gemini",
+                    percentage: m.percentage,
+                    reset_time: m.reset_time.clone(),
+                    icon_svg: crate::icons::GEMINI_SVG,
+                })
+        });
+
+    // 2. Claude / GPT usage: find in quota_groups with matching window, or fallback
+    let claude = quota.quota_groups.iter()
+        .find(|g| {
+            let d = g.display_name.to_lowercase();
+            let is_3p = d.contains("claude") || d.contains("gpt") || d.contains("3p");
+            let is_win = g.window.to_lowercase().contains(window_str)
+                || (window_str == "week" && (g.window.to_lowercase().contains("week") || g.window.to_lowercase().contains("7d")));
+            is_3p && is_win
+        })
+        .or_else(|| {
+            quota.quota_groups.iter()
+                .find(|g| {
+                    let d = g.display_name.to_lowercase();
+                    d.contains("claude") || d.contains("gpt") || d.contains("3p")
+                })
+        })
+        .map(|g| {
+            let mut reset_time = g.reset_time.clone();
+            if reset_time.trim().is_empty() {
+                reset_time = find_model_reset_time("claude");
+                if reset_time.is_empty() {
+                    reset_time = find_model_reset_time("gpt");
+                }
+            }
+            CoreUsageItem {
+                title: "Claude / GPT",
+                percentage: (g.remaining_fraction * 100.0).round() as i32,
+                reset_time,
+                icon_svg: crate::icons::CLAUDE_SVG,
+            }
+        })
+        .or_else(|| {
+            quota.models.iter()
+                .find(|m| {
+                    let n = m.name.to_lowercase();
+                    n.contains("claude") || n.contains("gpt")
+                })
+                .map(|m| CoreUsageItem {
+                    title: "Claude / GPT",
+                    percentage: m.percentage,
+                    reset_time: m.reset_time.clone(),
+                    icon_svg: crate::icons::CLAUDE_SVG,
+                })
+        });
+
+    (gemini, claude)
+}
+
+/// Parse flexible date strings (RFC3339, standard date formats, Unix timestamps).
+pub fn parse_flexible_date(s: &str) -> Option<DateTime<Utc>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // 1. Try RFC3339 / ISO-8601 (e.g. 2026-09-20T14:23:38Z)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+
+    // 2. Try pure integer Unix timestamp (seconds or milliseconds)
+    if let Ok(ts) = s.parse::<i64>() {
+        let secs = if ts > 10_000_000_000 { ts / 1000 } else { ts };
+        return DateTime::from_timestamp(secs, 0);
+    }
+
+    // 3. Try common date-time strings
+    let naive_formats = [
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%d/%m/%Y %H:%M:%S",
+    ];
+    for fmt in naive_formats {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc());
+        }
+    }
+
+    None
+}
+
+/// Format reset time into remaining duration (e.g. "3h 24m", "2d 5h", "已重置").
+pub fn format_time_remaining(reset_time: &str) -> (String, &'static str) {
+    let target_date = match parse_flexible_date(reset_time) {
+        Some(dt) => dt,
+        None => return ("—".to_string(), "neutral"),
+    };
+
+    let now = Utc::now();
+    let diff = target_date.signed_duration_since(now);
+    let total_secs = diff.num_seconds();
+    if total_secs <= 0 {
+        return ("已重置".to_string(), "success");
+    }
+
+    let diff_hrs = diff.num_hours();
+    let diff_mins = diff.num_minutes() % 60;
+    if diff_hrs >= 24 {
+        let days = diff_hrs / 24;
+        let rem_hrs = diff_hrs % 24;
+        (format!("{}d {}h", days, rem_hrs), "neutral")
+    } else {
+        let color = if diff_hrs < 1 {
+            "success"
+        } else if diff_hrs < 6 {
+            "warning"
+        } else {
+            "neutral"
+        };
+        (format!("{}h {}m", diff_hrs, diff_mins), color)
+    }
+}
+
+/// Render the two core usages for the homepage card (Gemini and Claude/GPT only).
+fn render_account_two_usages(
+    account: &AntigravityAccount,
+    ws: &Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = &ws.theme;
+    let i = &ws.i18n;
+
+    let quota = match &account.quota {
+        Some(q) => q,
+        None => {
+            return div()
+                .h(px(24.0))
+                .flex()
+                .items_center()
+                .px(px(8.0))
+                .rounded(px(6.0))
+                .bg(t.sidebar_bg)
+                .text_size(px(11.0))
+                .text_color(t.text_muted)
+                .child(i.t(
+                    "暂未获取配额信息，点击右侧「刷新用量」获取当前额度。",
+                    "No quota data yet. Click 'Refresh' to check current limits.",
+                ))
+                .into_any_element();
+        }
+    };
+
+    if quota.is_forbidden {
+        let raw_reason = quota.forbidden_reason.as_deref().unwrap_or("API 403 Forbidden");
+        let parsed = parse_generic_error(raw_reason);
+        let appeal_btn = parsed.action_url.as_ref().map(|url| {
+            error_action_link_button(
+                format!("ag-appeal-btn-{}", account.id),
+                "前往申诉 ↗",
+                url.clone(),
+                t,
+                cx,
+            )
+        });
+        return error_strip_action(
+            format!("ag-quota-err-{}", account.id),
+            i.t("配额受限 (403)", "Quota 403"),
+            raw_reason,
+            t,
+            cx,
+            appeal_btn,
+            |ws: &mut Workspace, _raw, cx| {
+                ws.ui.toast("已复制错误详情到剪贴板".to_string(), false);
+                cx.notify();
+            },
+        );
+    }
+
+    let (gemini_opt, claude_opt) = extract_core_usages(account, ws.ui.antigravity_quota_window);
+
+    let render_quota_item = |opt: Option<CoreUsageItem>, default_label: &'static str, svg_data: &'static [u8]| -> gpui::AnyElement {
+        let (pct, reset_str, time_color_kind) = if let Some(item) = opt {
+            let (t_str, t_color) = format_time_remaining(&item.reset_time);
+            (item.percentage.clamp(0, 100), t_str, t_color)
+        } else {
+            (100, "—".to_string(), "neutral")
+        };
+
+        let bar_color = if pct >= 50 {
+            t.success
+        } else if pct >= 20 {
+            t.warning
+        } else {
+            t.danger
+        };
+
+        let time_color = match time_color_kind {
+            "success" => t.success,
+            "warning" => t.warning,
+            _ => t.text_muted,
+        };
+
+        div()
+            .relative()
+            .h(px(24.0))
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .items_center()
+            .px(px(8.0))
+            .rounded(px(6.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .overflow_hidden()
+            // Background progress fill (18% opacity)
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(gpui::relative(pct as f32 / 100.0))
+                    .bg(bar_color)
+                    .opacity(0.18),
+            )
+            // Foreground content
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(6.0))
+                    .text_size(px(11.0))
+                    .font_family("Consolas, monospace")
+                    // Left: Icon + Label
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(t.text_primary)
+                            .child(gpui::svg().data(svg_data).size(px(12.0)).text_color(t.accent))
+                            .child(default_label),
+                    )
+                    // Middle: Clock + Reset countdown
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(3.0))
+                            .text_size(px(10.5))
+                            .text_color(time_color)
+                            .child(gpui::svg().data(crate::icons::CLOCK_SVG).size(px(10.0)).text_color(time_color))
+                            .child(reset_str),
+                    )
+                    // Right: Percentage
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(bar_color)
+                            .child(format!("{}%", pct)),
+                    ),
+            )
+            .into_any_element()
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(render_quota_item(gemini_opt, "Gemini", crate::icons::GEMINI_SVG))
+        .child(render_quota_item(claude_opt, "Claude / GPT", crate::icons::CLAUDE_SVG))
+        .into_any_element()
+}
+
+/// Render a distinctive subscription tier badge (e.g. emerald PRO with diamond, violet ULTRA, or subtle FREE).
+pub fn render_tier_badge(theme: &Theme, tier_str: &str) -> gpui::AnyElement {
+    let t = theme;
+    match tier_str {
+        "PRO" => div()
+            .flex()
+            .items_center()
+            .gap(px(3.0))
+            .px(px(6.5))
+            .py(px(1.5))
+            .rounded(px(4.0))
+            .bg(gpui::rgb(0x10b981))
+            .text_size(px(10.5))
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(gpui::rgb(0xffffff))
+            .shadow_xs()
+            .child("◆ PRO")
+            .into_any_element(),
+        "ULTRA" => div()
+            .flex()
+            .items_center()
+            .gap(px(3.0))
+            .px(px(6.5))
+            .py(px(1.5))
+            .rounded(px(4.0))
+            .bg(gpui::rgb(0x8b5cf6))
+            .text_size(px(10.5))
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(gpui::rgb(0xffffff))
+            .shadow_xs()
+            .child("★ ULTRA")
+            .into_any_element(),
+        "ENTERPRISE" => div()
+            .flex()
+            .items_center()
+            .gap(px(3.0))
+            .px(px(6.5))
+            .py(px(1.5))
+            .rounded(px(4.0))
+            .bg(gpui::rgb(0x6366f1))
+            .text_size(px(10.5))
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(gpui::rgb(0xffffff))
+            .shadow_xs()
+            .child("🏢 ENTERPRISE")
+            .into_any_element(),
+        _ => div()
+            .flex()
+            .items_center()
+            .gap(px(3.0))
+            .px(px(6.0))
+            .py(px(1.5))
+            .rounded(px(4.0))
+            .bg(t.tab_bar_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .text_size(px(10.5))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(t.text_muted)
+            .child("○ FREE")
+            .into_any_element(),
+    }
+}
+
+/// Render an individual account card with credentials, tier, two-usage meters, and action buttons.
 fn render_account_card(
     account: &AntigravityAccount,
     ws: &mut Workspace,
@@ -192,422 +1430,887 @@ fn render_account_card(
     let acc_id = account.id.clone();
     let email = account.email.clone();
     let is_active = account.is_active;
+    let is_disabled = account.disabled;
 
-    // Tier badge kind and text
-    let tier_str = account.tier.as_deref().unwrap_or("FREE");
-    let (tier_kind, tier_text) = match tier_str {
-        "ULTRA" => (BadgeKind::Warning, "ULTRA"),
-        "PRO" => (BadgeKind::Success, "PRO"),
-        "ENTERPRISE" => (BadgeKind::Accent, "ENTERPRISE"),
-        _ => (BadgeKind::Neutral, "FREE"),
-    };
+    let last_used_str = DateTime::from_timestamp(account.last_used, 0)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default();
 
-    // Header row
+    // 1. Header row: Email + Badges + Project ID + Last used (Compact, no big avatar)
     let header_row = div()
         .flex()
         .items_center()
         .justify_between()
-        .gap(px(10.0))
-        .flex_wrap()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .size(px(36.0))
-                        .rounded_full()
-                        .bg(crate::rgba_const(0x3186ff22))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_shrink_0()
-                        .child(
-                            gpui::svg()
-                                .data(GEMINI_SVG)
-                                .size(px(20.0))
-                                .text_color(crate::rgba_const(0x3186ffff)),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.0))
-                                .child(
-                                    div()
-                                        .text_size(px(14.0))
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .text_color(t.text_primary)
-                                        .child(account.email.clone()),
-                                )
-                                .child(badge(&t, tier_text, tier_kind))
-                                .when(is_active, |s| {
-                                    s.child(badge(&t, i.t("当前活动", "Active"), BadgeKind::Success))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.0))
-                                .text_size(px(12.0))
-                                .text_color(t.text_muted)
-                                .child(
-                                    account.name.as_deref().unwrap_or("Google User").to_string(),
-                                )
-                                .when_some(account.custom_label.as_ref(), |s, label| {
-                                    s.child(format!("• {}", label))
-                                })
-                                .when_some(account.project_id.as_ref(), |s, pid| {
-                                    s.child(format!("• 项目: {}", pid))
-                                }),
-                        ),
-                ),
-        )
+        .gap(px(8.0))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .when(!is_active, |s| {
-                    let switch_id = acc_id.clone();
-                    s.child(button_with_icon_l(
-                        SharedString::from(format!("switch-{}", switch_id)),
-                        CHECK_SVG,
-                        i.t("切换为此账号", "Switch to this"),
-                        ButtonVariant::Primary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            switch_account_action(&switch_id, ws, cx);
-                        },
-                    ))
-                })
-                .child({
-                    let ref_id = acc_id.clone();
-                    button_with_icon_l(
-                        SharedString::from(format!("refresh-{}", ref_id)),
-                        REFRESH_SVG,
-                        i.t("刷新用量", "Refresh"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            refresh_account_quota_action(&ref_id, ws, cx);
-                        },
+                .flex_wrap()
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(if is_active { t.accent } else if is_disabled { t.text_muted } else { t.text_primary })
+                        .child(account.email.clone()),
+                )
+                .child(render_tier_badge(&t, account.get_tier()))
+                .when(is_active, |s| {
+                    s.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.5))
+                            .px(px(7.0))
+                            .py(px(2.0))
+                            .rounded(px(10.0))
+                            .bg(t.accent_subtle)
+                            .border_1()
+                            .border_color(t.accent.opacity(0.35))
+                            .text_size(px(11.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(t.accent)
+                            .child(
+                                div()
+                                    .size(px(5.5))
+                                    .rounded_full()
+                                    .bg(t.accent),
+                            )
+                            .child(i.t("当前活动", "Active")),
                     )
                 })
-                .child({
-                    let r_token = account.refresh_token.clone();
-                    button_with_icon_l(
-                        SharedString::from(format!("copy-{}", acc_id)),
-                        COPY_SVG,
-                        i.t("复制 Token", "Copy Token"),
-                        ButtonVariant::Ghost,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(r_token.clone()));
-                            let msg = ws.i18n.t("已复制 Refresh Token 到剪贴板", "Refresh token copied to clipboard").to_string();
-                            ws.ui.toast(msg, false);
-                            cx.notify();
-                        },
+                .when(is_disabled, |s| {
+                    let disabled_reason = account.disabled_reason.clone();
+                    let d_acc_id = acc_id.clone();
+                    let mut badge = div()
+                        .id(SharedString::from(format!("ag-disabled-badge-{}", d_acc_id)))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.5))
+                        .px(px(7.0))
+                        .py(px(2.0))
+                        .rounded(px(10.0))
+                        .bg(t.danger_subtle)
+                        .border_1()
+                        .border_color(t.danger.opacity(0.35))
+                        .text_size(px(11.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.danger)
+                        .child(
+                            div()
+                                .size(px(5.5))
+                                .rounded_full()
+                                .bg(t.danger),
+                        )
+                        .child(i.t("已禁用", "Disabled"));
+
+                    if let Some(reason) = disabled_reason {
+                        badge = badge.tooltip(move |_window, cx| {
+                            cx.new(|_| Tooltip::with_max_width(format!("禁用原因: {reason}"), px(320.0))).into()
+                        });
+                    }
+
+                    s.child(badge)
+                })
+                .when_some(account.custom_label.as_ref(), |s, label| {
+                    let trimmed = label.trim();
+                    if trimmed.is_empty()
+                        || trimmed.contains("Antigravity Manager")
+                        || trimmed.contains("Manager")
+                        || trimmed.contains("已从")
+                        || trimmed.contains("迁移")
+                        || trimmed.contains("导入")
+                    {
+                        return s;
+                    }
+                    s.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(3.0))
+                            .px(px(5.0))
+                            .py(px(1.5))
+                            .rounded(px(4.0))
+                            .bg(t.warning_subtle)
+                            .text_size(px(10.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(t.warning)
+                            .child(gpui::svg().data(TAG_SVG).size(px(9.5)).text_color(t.warning))
+                            .child(trimmed.to_string()),
                     )
                 })
-                .child({
-                    let del_id = acc_id.clone();
-                    let del_email = email.clone();
-                    button_with_icon_l(
-                        SharedString::from(format!("delete-{}", del_id)),
-                        TRASH_SVG,
-                        i.t("删除", "Delete"),
-                        ButtonVariant::Danger,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            delete_account_action(&del_id, &del_email, ws, cx);
-                        },
+                .when_some(account.project_id.as_ref(), |s, pid| {
+                    s.child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(t.text_muted)
+                            .child(format!("• {}", pid)),
                     )
                 }),
+        )
+        .child(
+            div()
+                .text_size(px(10.5))
+                .font_family("Consolas, monospace")
+                .text_color(t.text_muted)
+                .child(last_used_str),
         );
 
-    // Quota section
-    let quota_view = render_account_quota(account, ws);
+    // 2. Two core usages
+    let usages_view = render_account_two_usages(account, ws, cx);
+
+    // 3. Actions icon bar (matching Antigravity-Manager: compact icon-only buttons with tooltips)
+    let account_for_details = account.clone();
+    let account_for_device = account.clone();
+    let account_id_for_label = acc_id.clone();
+    let current_label = account.custom_label.clone();
+    let r_token = account.refresh_token.clone();
+    let account_for_export = account.clone();
+    let del_id = acc_id.clone();
+    let del_email = email.clone();
+
+    let actions_bar = div()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(px(2.0))
+        .pt(px(6.0))
+        .border_t_1()
+        .border_color(t.card_border)
+        // 1. 详情 (Info)
+        .child(icon_button_svg(
+            SharedString::from(format!("details-{}", acc_id)),
+            INFO_SVG,
+            i.t("详情", "Details"),
+            false,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                ws.ui.antigravity_details_account = Some(account_for_details.clone());
+                cx.notify();
+            },
+        ))
+        // 2. 设备指纹 (Fingerprint)
+        .child(icon_button_svg(
+            SharedString::from(format!("device-{}", acc_id)),
+            FINGERPRINT_SVG,
+            i.t("设备指纹", "Device Fingerprint"),
+            false,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                let prof = account_for_device.device_profile.clone().unwrap_or_else(DeviceProfile::generate_random);
+                ws.ui.antigravity_device_account = Some((account_for_device.clone(), prof));
+                cx.notify();
+            },
+        ))
+        // 3. 自定义标签 (Tag)
+        .child(icon_button_svg(
+            SharedString::from(format!("tag-{}", acc_id)),
+            TAG_SVG,
+            i.t("编辑标签", "Edit Label"),
+            false,
+            &t,
+            cx,
+            move |ws, _, window, cx| {
+                let initial = current_label.clone().unwrap_or_default();
+                let input = cx.new(|cx| {
+                    let mut inp = TextInput::new("输入自定义备注/标签…", cx);
+                    inp.set_text_silent(initial, cx);
+                    inp
+                });
+                input.update(cx, |inp, cx| {
+                    inp.focus_handle.focus(window, cx);
+                    inp.start_blink(cx);
+                });
+                ws.ui.antigravity_editing_label = Some((account_id_for_label.clone(), input));
+                cx.notify();
+            },
+        ))
+        // 4. 切换到 App (ArrowRightLeft)
+        .child({
+            let switch_id = acc_id.clone();
+            icon_button_svg(
+                SharedString::from(format!("switch-app-{}", switch_id)),
+                ARROW_RIGHT_LEFT_SVG,
+                i.t("切换到 Antigravity App", "Switch to Antigravity App"),
+                false,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    switch_account_target_action(&switch_id, None, ws, cx);
+                },
+            )
+        })
+        // 5. 切换到 IDE (Repeat)
+        .child({
+            let switch_id = acc_id.clone();
+            icon_button_svg(
+                SharedString::from(format!("switch-ide-{}", switch_id)),
+                REPEAT_SVG,
+                i.t("切换到 Antigravity IDE", "Switch to Antigravity IDE"),
+                false,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    switch_account_target_action(&switch_id, Some("ide"), ws, cx);
+                },
+            )
+        })
+        // 6. 切换到 CLI (Terminal)
+        .child({
+            let switch_id = acc_id.clone();
+            icon_button_svg(
+                SharedString::from(format!("switch-cli-{}", switch_id)),
+                TERMINAL_SVG,
+                i.t("切换到 CLI (agy)", "Switch to CLI (agy)"),
+                false,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    switch_account_target_action(&switch_id, Some("agy"), ws, cx);
+                },
+            )
+        })
+        // 7. 刷新用量 (Refresh)
+        .child({
+            let ref_id = acc_id.clone();
+            icon_button_svg(
+                SharedString::from(format!("refresh-{}", ref_id)),
+                REFRESH_SVG,
+                i.t("刷新配额", "Refresh Quota"),
+                false,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    refresh_account_quota_action(&ref_id, ws, cx);
+                },
+            )
+        })
+        // 8. 导出 (Download)
+        .child(icon_button_svg(
+            SharedString::from(format!("export-{}", acc_id)),
+            DOWNLOAD_SVG,
+            i.t("导出凭据", "Export Credentials"),
+            false,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                export_account_action(&account_for_export, ws, cx);
+            },
+        ))
+        // 9. 复制 Token (Copy)
+        .child(icon_button_svg(
+            SharedString::from(format!("copy-{}", acc_id)),
+            COPY_SVG,
+            i.t("复制 Refresh Token", "Copy Refresh Token"),
+            false,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(r_token.clone()));
+                let msg = ws.i18n.t("已复制 Refresh Token 到剪贴板", "Refresh token copied to clipboard").to_string();
+                ws.ui.toast(msg, false);
+                cx.notify();
+            },
+        ))
+        // 10. 启用 / 禁用 (Toggle)
+        .child({
+            let tog_id = acc_id.clone();
+            icon_button_svg(
+                SharedString::from(format!("toggle-{}", tog_id)),
+                if is_disabled { TOGGLE_LEFT_SVG } else { TOGGLE_RIGHT_SVG },
+                if is_disabled { i.t("启用账号", "Enable Account") } else { i.t("禁用账号", "Disable Account") },
+                false,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    toggle_disabled_action(&tog_id, ws, cx);
+                },
+            )
+        })
+        // 11. 删除 (Delete)
+        .child(icon_button_svg(
+            SharedString::from(format!("delete-{}", del_id)),
+            TRASH_SVG,
+            i.t("删除账号", "Delete Account"),
+            true,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                delete_account_action(&del_id, &del_email, ws, cx);
+            },
+        ));
 
     div()
         .id(SharedString::from(format!("account-card-{}", account.id)))
         .flex()
         .flex_col()
-        .gap(px(12.0))
-        .p(px(16.0))
-        .rounded(px(10.0))
+        .gap(px(8.0))
+        .p(px(10.0))
+        .rounded(px(8.0))
         .bg(t.card_bg)
         .border_1()
         .border_color(if is_active { t.accent } else { t.card_border })
-        .shadow_sm()
+        .shadow_xs()
         .child(header_row)
-        .child(quota_view)
+        .child(usages_view)
+        .child(actions_bar)
         .into_any_element()
 }
 
-/// Render the quota dashboard inside an account card.
-fn render_account_quota(account: &AntigravityAccount, ws: &Workspace) -> gpui::AnyElement {
-    let t = &ws.theme;
-    let i = &ws.i18n;
+/// Render the Account Details Dialog (displaying all specific models, thinking budgets, and quota groups).
+pub fn render_account_details_dialog(
+    account: &AntigravityAccount,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
 
-    let quota = match &account.quota {
-        Some(q) => q,
-        None => {
-            return div()
-                .p(px(12.0))
-                .rounded(px(8.0))
-                .bg(t.sidebar_bg)
-                .text_size(px(12.0))
-                .text_color(t.text_muted)
-                .child(i.t(
-                    "暂未获取配额信息，可点击右上角「刷新用量」查询实时额度。",
-                    "No quota information yet. Click 'Refresh' to check current limits.",
-                ))
-                .into_any_element();
+    let header_info = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(8.0))
+        .p(px(12.0))
+        .rounded(px(8.0))
+        .bg(t.input_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(t.text_primary)
+                        .child(account.email.clone()),
+                )
+                .child(render_tier_badge(&t, account.get_tier()))
+                .when_some(account.project_id.as_ref(), |s, pid| {
+                    s.child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(t.text_muted)
+                            .child(format!("项目: {}", pid)),
+                    )
+                }),
+        );
+
+    let quota = account.quota.as_ref();
+    let models = quota.map(|q| &q.models[..]).unwrap_or(&[]);
+    let quota_groups = quota.map(|q| &q.quota_groups[..]).unwrap_or(&[]);
+
+    let mut models_grid = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0));
+
+    if let Some(q) = quota {
+        if q.is_forbidden {
+            let raw_reason = q.forbidden_reason.as_deref().unwrap_or("API 403 Forbidden");
+            let parsed = parse_generic_error(raw_reason);
+            let appeal_btn = parsed.action_url.as_ref().map(|url| {
+                let u = url.clone();
+                button_l(
+                    "ag-modal-appeal",
+                    "前往官方申诉 ↗",
+                    ButtonVariant::Danger,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        cx.open_url(&u);
+                        ws.ui.toast("已在浏览器中打开官方申诉表单".to_string(), false);
+                        cx.notify();
+                    },
+                )
+            });
+
+            models_grid = models_grid.child(error_banner(
+                "ag-modal-err",
+                "配额接口受限 (HTTP 403 Forbidden)",
+                raw_reason,
+                &t,
+                cx,
+                appeal_btn,
+            ));
         }
-    };
+    }
 
-    if quota.is_forbidden {
-        let reason = quota.forbidden_reason.as_deref().unwrap_or("API 403 Forbidden");
-        return div()
-            .p(px(12.0))
-            .rounded(px(8.0))
-            .bg(t.danger_subtle)
-            .border_1()
-            .border_color(t.danger)
+    if models.is_empty() {
+        if quota.map(|q| !q.is_forbidden).unwrap_or(true) {
+            models_grid = models_grid.child(
+                div()
+                    .p(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.5))
+                    .text_color(t.text_muted)
+                    .child(i.t("暂无各模型配额数据", "No detailed model quotas available")),
+            );
+        }
+    } else {
+        let mut grid = div().flex().flex_wrap().gap(px(8.0));
+        for m in models {
+            let pct = m.percentage.clamp(0, 100);
+            let bar_color = if pct > 50 {
+                t.success
+            } else if pct > 20 {
+                t.warning
+            } else {
+                t.danger
+            };
+            let name = m.display_name.as_deref().unwrap_or(&m.name);
+            let (reset_countdown, _) = format_time_remaining(&m.reset_time);
+
+            grid = grid.child(
+                div()
+                    .w(px(260.0))
+                    .p(px(10.0))
+                    .rounded(px(6.0))
+                    .bg(t.card_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(t.text_primary)
+                                    .child(name.to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(bar_color)
+                                    .child(format!("{}%", pct)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(5.0))
+                            .rounded(px(2.5))
+                            .bg(t.card_border)
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .w(gpui::relative(pct as f32 / 100.0))
+                                    .h_full()
+                                    .bg(bar_color)
+                                    .rounded(px(2.5)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .text_size(px(10.5))
+                            .text_color(t.text_muted)
+                            .child(if reset_countdown.is_empty() {
+                                div()
+                            } else {
+                                div().child(reset_countdown)
+                            })
+                            .when(m.supports_thinking, |s| {
+                                s.child(
+                                    div()
+                                        .px(px(4.0))
+                                        .py(px(1.0))
+                                        .rounded(px(3.0))
+                                        .bg(t.accent_subtle)
+                                        .text_color(t.accent)
+                                        .child("Thinking"),
+                                )
+                            }),
+                    ),
+            );
+        }
+        models_grid = models_grid.child(grid);
+    }
+
+    // Quota groups summary
+    let mut groups_view = div().flex().flex_col().gap(px(8.0));
+    if !quota_groups.is_empty() {
+        let mut grp_row = div().flex().items_center().gap(px(10.0)).flex_wrap();
+        for g in quota_groups {
+            let pct = (g.remaining_fraction * 100.0).round() as i32;
+            let bar_color = if pct > 50 { t.success } else if pct > 20 { t.warning } else { t.danger };
+            grp_row = grp_row.child(
+                div()
+                    .p(px(8.0))
+                    .rounded(px(6.0))
+                    .bg(t.input_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(t.text_secondary)
+                            .child(format!("{} ({})", g.display_name, g.window)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(bar_color)
+                            .child(format!("{}%", pct)),
+                    ),
+            );
+        }
+        groups_view = groups_view.child(grp_row);
+    }
+
+    let body = div()
+        .id("account-details-scroll")
+        .flex()
+        .flex_col()
+        .gap(px(14.0))
+        .max_h(px(520.0))
+        .overflow_y_scroll()
+        .child(header_info)
+        .child(
+            div()
+                .text_size(px(12.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(t.text_secondary)
+                .child(i.t("全部模型详细配额", "All Model Detailed Quotas")),
+        )
+        .child(models_grid)
+        .when(!quota_groups.is_empty(), |s| {
+            s.child(
+                div()
+                    .text_size(px(12.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(t.text_secondary)
+                    .child(i.t("配额组窗口摘要", "Quota Group Windows")),
+            ).child(groups_view)
+        })
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .pt(px(10.0))
+                .border_t_1()
+                .border_color(t.card_border)
+                .child(button_l(
+                    "close-details-btn",
+                    i.t("关闭", "Close"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.antigravity_details_account = None;
+                        cx.notify();
+                    },
+                )),
+        );
+
+    modal_scaffold_custom(
+        &t,
+        &format!("{} - {}", i.t("账号详情", "Account Details"), account.email),
+        px(680.0),
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.antigravity_details_account = None;
+            cx.notify();
+        },
+    )
+}
+
+/// Render the Device Fingerprint Dialog.
+pub fn render_device_fingerprint_dialog(
+    account: &AntigravityAccount,
+    profile: DeviceProfile,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let profile_for_copy = profile.clone();
+    let profile_for_save = profile.clone();
+    let account_id_for_save = account.id.clone();
+    let account_for_regenerate = account.clone();
+
+    let render_field = |name: &'static str, val: &str| -> gpui::AnyElement {
+        let v_copy = val.to_string();
+        div()
             .flex()
             .flex_col()
             .gap(px(4.0))
             .child(
                 div()
-                    .text_size(px(13.0))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(t.danger)
-                    .child(i.t("配额接口访问受限 (403)", "Quota Access Restricted (403)")),
+                    .text_size(px(11.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(t.text_secondary)
+                    .child(name),
             )
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .text_color(t.text_primary)
-                    .child(reason.to_string()),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.0))
+                    .px(px(10.0))
+                    .py(px(6.0))
+                    .rounded(px(6.0))
+                    .bg(t.input_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_size(px(12.0))
+                            .font_family("Consolas, monospace")
+                            .text_color(t.text_primary)
+                            .child(val.to_string()),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("copy-{}", name)))
+                            .cursor_pointer()
+                            .p(px(2.0))
+                            .hover(|h| h.opacity(0.8))
+                            .child(gpui::svg().data(COPY_SVG).size(px(12.0)).text_color(t.text_muted))
+                            .on_click(cx.listener(move |ws, _, _, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(v_copy.clone()));
+                                ws.ui.toast(format!("已复制 {}", name), false);
+                                cx.notify();
+                            })),
+                    ),
             )
-            .into_any_element();
-    }
-
-    let mut content = div().flex().flex_col().gap(px(10.0));
-
-    // Summary windows (5h & weekly)
-    let mut summary_row = div().flex().items_center().gap(px(16.0)).flex_wrap();
-
-    if let Some(w5h) = quota.window_5h {
-        let pct = (w5h * 100.0).round() as i32;
-        summary_row = summary_row.child(render_window_meter(
-            &ws.theme,
-            i.t("5 小时窗口", "5h Window"),
-            pct,
-        ));
-    }
-
-    if let Some(ww) = quota.window_weekly {
-        let pct = (ww * 100.0).round() as i32;
-        summary_row = summary_row.child(render_window_meter(
-            &ws.theme,
-            i.t("每周配额", "Weekly Window"),
-            pct,
-        ));
-    }
-
-    // Last updated timestamp
-    let updated_time = DateTime::from_timestamp(quota.last_updated, 0)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_default();
-
-    summary_row = summary_row.child(
-        div()
-            .text_size(px(11.5))
-            .text_color(t.text_muted)
-            .child(format!("{} {}", i.t("更新于", "Updated at"), updated_time)),
-    );
-
-    content = content.child(summary_row);
-
-    // Models quota grid
-    if !quota.models.is_empty() {
-        let mut grid = div()
-            .flex()
-            .flex_wrap()
-            .gap(px(8.0));
-
-        for m in &quota.models {
-            grid = grid.child(render_model_quota_item(m, ws));
-        }
-
-        content = content.child(grid);
-    }
-
-    div()
-        .p(px(12.0))
-        .rounded(px(8.0))
-        .bg(t.sidebar_bg)
-        .child(content)
-        .into_any_element()
-}
-
-/// Render a single window meter pill.
-fn render_window_meter(t: &crate::theme::Theme, label: SharedString, percentage: i32) -> gpui::AnyElement {
-    let bar_color = if percentage > 50 {
-        t.success
-    } else if percentage > 20 {
-        t.warning
-    } else {
-        t.danger
+            .into_any_element()
     };
 
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .px(px(10.0))
-        .py(px(4.0))
-        .rounded(px(6.0))
-        .bg(t.card_bg)
-        .border_1()
-        .border_color(t.card_border)
-        .child(
-            div()
-                .text_size(px(12.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(t.text_secondary)
-                .child(label),
-        )
-        .child(
-            div()
-                .w(px(60.0))
-                .h(px(6.0))
-                .rounded(px(3.0))
-                .bg(t.card_border)
-                .overflow_hidden()
-                .child(
-                    div()
-                        .w(gpui::relative(percentage.clamp(0, 100) as f32 / 100.0))
-                        .h_full()
-                        .bg(bar_color)
-                        .rounded(px(3.0)),
-                ),
-        )
-        .child(
-            div()
-                .text_size(px(12.0))
-                .font_weight(gpui::FontWeight::BOLD)
-                .text_color(bar_color)
-                .child(format!("{}%", percentage)),
-        )
-        .into_any_element()
-}
-
-/// Render a model quota box with progress bar and countdown.
-fn render_model_quota_item(m: &ModelQuotaInfo, ws: &Workspace) -> gpui::AnyElement {
-    let t = &ws.theme;
-    let name = m.display_name.as_deref().unwrap_or(&m.name);
-    let pct = m.percentage.clamp(0, 100);
-
-    let bar_color = if pct > 50 {
-        t.success
-    } else if pct > 20 {
-        t.warning
-    } else {
-        t.danger
-    };
-
-    // Calculate reset countdown if available
-    let reset_text = if !m.reset_time.is_empty() {
-        if let Ok(reset_dt) = DateTime::parse_from_rfc3339(&m.reset_time) {
-            let now = Utc::now();
-            let duration = reset_dt.with_timezone(&Utc).signed_duration_since(now);
-            if duration.num_seconds() > 0 {
-                let hours = duration.num_hours();
-                let mins = duration.num_minutes() % 60;
-                if hours > 0 {
-                    format!("重置于 {}h{}m 后", hours, mins)
-                } else {
-                    format!("重置于 {}m 后", mins)
-                }
-            } else {
-                "已重置".to_string()
-            }
-        } else {
-            "".to_string()
-        }
-    } else {
-        "".to_string()
-    };
-
-    div()
-        .w(px(240.0))
-        .p(px(8.0))
-        .rounded(px(6.0))
-        .bg(t.card_bg)
-        .border_1()
-        .border_color(t.card_border)
+    let body = div()
         .flex()
         .flex_col()
-        .gap(px(4.0))
+        .gap(px(12.0))
+        .child(
+            div()
+                .text_size(px(12.5))
+                .text_color(t.text_secondary)
+                .child(i.t(
+                    "设备指纹用于隔离不同账号的 IDE/VS Code 设备标识，避免多账号关联或风控限制。",
+                    "Device fingerprints isolate account machine identifiers to avoid multi-account association.",
+                )),
+        )
+        .child(render_field("Machine ID", &profile.machine_id))
+        .child(render_field("Mac Machine ID", &profile.mac_machine_id))
+        .child(render_field("Dev Device ID", &profile.dev_device_id))
+        .child(render_field("SQM ID", &profile.sqm_id))
         .child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
+                .pt(px(12.0))
+                .border_t_1()
+                .border_color(t.card_border)
                 .child(
                     div()
-                        .text_size(px(12.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_primary)
-                        .child(name.to_string()),
+                        .flex()
+                        .gap(px(8.0))
+                        .child(button_with_icon_l(
+                            "btn-regen-fp",
+                            WAND_SVG,
+                            i.t("重新生成随机指纹", "Generate New"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                let new_prof = DeviceProfile::generate_random();
+                                ws.ui.antigravity_device_account = Some((account_for_regenerate.clone(), new_prof));
+                                ws.ui.toast(ws.i18n.t("已生成新随机指纹，点击「保存并绑定」生效", "New fingerprint generated. Click Save to apply.").to_string(), false);
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_with_icon_l(
+                            "btn-copy-all-fp",
+                            COPY_SVG,
+                            i.t("复制全部", "Copy All"),
+                            ButtonVariant::Ghost,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                if let Ok(json) = serde_json::to_string_pretty(&profile_for_copy) {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
+                                    ws.ui.toast(ws.i18n.t("已复制完整设备指纹到剪贴板", "Copied device profile to clipboard").to_string(), false);
+                                    cx.notify();
+                                }
+                            },
+                        )),
                 )
                 .child(
                     div()
-                        .text_size(px(12.0))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(bar_color)
-                        .child(format!("{}%", pct)),
+                        .flex()
+                        .gap(px(8.0))
+                        .child(button_l(
+                            "btn-close-fp",
+                            i.t("取消", "Cancel"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.antigravity_device_account = None;
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "btn-save-fp",
+                            i.t("保存并绑定", "Save & Bind"),
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                let app_data = ws.paths.app_data.clone();
+                                if let Some(mut store) = ws.ui.antigravity_store.clone() {
+                                    let _ = update_account_device_profile(&app_data, &mut store, &account_id_for_save, profile_for_save.clone());
+                                    ws.ui.antigravity_store = Some(store);
+                                    ws.ui.toast(ws.i18n.t("设备指纹已绑定并保存", "Device fingerprint bound and saved").to_string(), false);
+                                }
+                                ws.ui.antigravity_device_account = None;
+                                cx.notify();
+                            },
+                        )),
                 ),
-        )
+        );
+
+    modal_scaffold(
+        &t,
+        &format!("{} - {}", i.t("设备指纹", "Device Fingerprint"), account.email),
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.antigravity_device_account = None;
+            cx.notify();
+        },
+    )
+}
+
+/// Render the Custom Label Edit Dialog.
+pub fn render_label_edit_dialog(
+    account_id: &str,
+    input: gpui::Entity<TextInput>,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+    let acc_id_save = account_id.to_string();
+    let acc_id_clear = account_id.to_string();
+    let input_for_save = input.clone();
+
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(14.0))
         .child(
             div()
-                .w_full()
-                .h(px(5.0))
-                .rounded(px(2.5))
-                .bg(t.card_border)
-                .overflow_hidden()
+                .text_size(px(12.5))
+                .text_color(t.text_secondary)
+                .child(i.t(
+                    "设置自定义标签方便在多账号列表中快速辨识（例如：工作号、主力账号、备用、测试等）。",
+                    "Set a custom label to easily identify this account in the list.",
+                )),
+        )
+        .child(input_container(&t, input))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .pt(px(10.0))
+                .border_t_1()
+                .border_color(t.card_border)
+                .child(button_l(
+                    "btn-clear-label",
+                    i.t("清除标签", "Clear Label"),
+                    ButtonVariant::Danger,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let app_data = ws.paths.app_data.clone();
+                        if let Some(mut store) = ws.ui.antigravity_store.clone() {
+                            let _ = update_account_label(&app_data, &mut store, &acc_id_clear, None);
+                            ws.ui.antigravity_store = Some(store);
+                            ws.ui.toast(ws.i18n.t("已清除标签", "Label cleared").to_string(), false);
+                        }
+                        ws.ui.antigravity_editing_label = None;
+                        cx.notify();
+                    },
+                ))
                 .child(
                     div()
-                        .w(gpui::relative(pct as f32 / 100.0))
-                        .h_full()
-                        .bg(bar_color)
-                        .rounded(px(2.5)),
+                        .flex()
+                        .gap(px(8.0))
+                        .child(button_l(
+                            "btn-cancel-label",
+                            i.t("取消", "Cancel"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.antigravity_editing_label = None;
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "btn-save-label",
+                            i.t("保存", "Save"),
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                let text = input_for_save.read(cx).text().trim().to_string();
+                                let app_data = ws.paths.app_data.clone();
+                                if let Some(mut store) = ws.ui.antigravity_store.clone() {
+                                    let val = if text.is_empty() { None } else { Some(text) };
+                                    let _ = update_account_label(&app_data, &mut store, &acc_id_save, val);
+                                    ws.ui.antigravity_store = Some(store);
+                                    ws.ui.toast(ws.i18n.t("标签已保存", "Label saved").to_string(), false);
+                                }
+                                ws.ui.antigravity_editing_label = None;
+                                cx.notify();
+                            },
+                        )),
                 ),
-        )
-        .when(!reset_text.is_empty(), |s| {
-            s.child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(t.text_muted)
-                    .child(reset_text),
-            )
-        })
-        .into_any_element()
+        );
+
+    modal_scaffold(
+        &t,
+        &i.t("编辑自定义标签", "Edit Custom Label"),
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.antigravity_editing_label = None;
+            cx.notify();
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -738,17 +2441,28 @@ pub fn render_add_account_dialog(
                 )
             })
             .when_some(state.error_message.as_ref(), |s, err| {
-                s.child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.5))
-                        .text_color(t.danger)
-                        .child(err.clone()),
-                )
+                let dismiss_btn = icon_button_svg(
+                    "btn-dismiss-oauth-err",
+                    crate::icons::X_SVG,
+                    i.t("关闭", "Close"),
+                    false,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
+                            d.error_message = None;
+                        }
+                        cx.notify();
+                    },
+                );
+                s.child(error_strip(
+                    "ag-dlg-oauth-err",
+                    i.t("授权失败", "OAuth Failed"),
+                    err,
+                    &t,
+                    cx,
+                    Some(dismiss_btn),
+                ))
             })
             .child(
                 div()
@@ -806,17 +2520,28 @@ pub fn render_add_account_dialog(
             )
             .child(input_container(&t, state.custom_label.clone()))
             .when_some(state.error_message.as_ref(), |s, err| {
-                s.child(
-                    div()
-                        .p(px(10.0))
-                        .rounded(px(6.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(err.clone()),
-                )
+                let dismiss_btn = icon_button_svg(
+                    "btn-dismiss-token-err",
+                    crate::icons::X_SVG,
+                    i.t("关闭", "Close"),
+                    false,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
+                            d.error_message = None;
+                        }
+                        cx.notify();
+                    },
+                );
+                s.child(error_strip(
+                    "ag-dlg-token-err",
+                    i.t("验证失败", "Token Error"),
+                    err,
+                    &t,
+                    cx,
+                    Some(dismiss_btn),
+                ))
             })
             .child(
                 div()
@@ -912,7 +2637,7 @@ fn start_oauth_flow_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 
             let user_info = fetch_user_info(&access_token)?;
             let (project_id, tier) = fetch_project_and_tier(&access_token);
-            let quota = fetch_quota(&access_token).ok();
+            let quota = fetch_quota(&access_token, project_id.as_deref(), None).ok();
 
             let mut account = AntigravityAccount::new(
                 uuid::Uuid::new_v4().to_string(),
@@ -1138,15 +2863,15 @@ fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut C
         let result = cx.background_spawn(async move {
             let mut acc = account;
             aitoolplus_core::antigravity::ensure_fresh_token(&mut acc)?;
-            let quota = fetch_quota(&acc.access_token)?;
             let (project_id, tier) = fetch_project_and_tier(&acc.access_token);
-            acc.quota = Some(quota);
             if project_id.is_some() {
                 acc.project_id = project_id;
             }
             if tier.is_some() {
                 acc.tier = tier;
             }
+            let quota = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref())?;
+            acc.quota = Some(quota);
             Ok::<AntigravityAccount, String>(acc)
         }).await;
 
@@ -1197,13 +2922,23 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
         let updated_accounts = cx.background_spawn(async move {
             let mut accounts = accounts_to_refresh;
             for acc in &mut accounts {
-                if let Ok(()) = aitoolplus_core::antigravity::ensure_fresh_token(acc) {
-                    if let Ok(q) = fetch_quota(&acc.access_token) {
-                        acc.quota = Some(q);
+                // Skip accounts that are already known to be forbidden due to TOS violation (aligned with Antigravity-Manager)
+                if let Some(quota) = &acc.quota {
+                    if quota.is_forbidden {
+                        if let Some(reason) = &quota.forbidden_reason {
+                            if reason.contains("TOS_VIOLATION") || reason.contains("violation of Terms of Service") {
+                                continue;
+                            }
+                        }
                     }
+                }
+                if let Ok(()) = aitoolplus_core::antigravity::ensure_fresh_token(acc) {
                     let (pid, tier) = fetch_project_and_tier(&acc.access_token);
                     if pid.is_some() { acc.project_id = pid; }
                     if tier.is_some() { acc.tier = tier; }
+                    if let Ok(q) = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref()) {
+                        acc.quota = Some(q);
+                    }
                 }
             }
             accounts
@@ -1221,8 +2956,13 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     }).detach();
 }
 
-/// Switch active account.
-fn switch_account_action(account_id: &str, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+/// Switch active account with optional target (classic, IDE, CLI).
+fn switch_account_target_action(
+    account_id: &str,
+    target: Option<&str>,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) {
     let home = ws.paths.home.clone();
     let app_data = ws.paths.app_data.clone();
     let mut store = match ws.ui.antigravity_store.clone() {
@@ -1233,10 +2973,31 @@ fn switch_account_action(account_id: &str, ws: &mut Workspace, cx: &mut Context<
     let account_email = store.get_account(account_id).map(|a| a.email.clone()).unwrap_or_default();
     let weak = cx.entity().downgrade();
     let account_id_str = account_id.to_string();
+    let target_owned = target.map(String::from);
+
+    let target_name = match target {
+        Some("ide") => "IDE",
+        Some("agy") => "CLI (agy)",
+        _ => "App",
+    };
+    let target_name_en = match target {
+        Some("ide") => "IDE",
+        Some("agy") => "CLI (agy)",
+        _ => "App",
+    };
+
+    ws.ui.toast(
+        ws.i18n.t(
+            &format!("正在切换账号到 {}：{}…", target_name, account_email),
+            &format!("Switching account to {} for: {}…", target_name_en, account_email),
+        ),
+        false,
+    );
+    cx.notify();
 
     cx.spawn(async move |_this, cx| {
         let result = cx.background_spawn(async move {
-            switch_account(&home, &app_data, &mut store, &account_id_str)?;
+            switch_account_target(&home, &app_data, &mut store, &account_id_str, target_owned.as_deref())?;
             Ok::<(AntigravityStore, String), String>((store, account_email))
         }).await;
 
@@ -1245,8 +3006,8 @@ fn switch_account_action(account_id: &str, ws: &mut Workspace, cx: &mut Context<
                 Ok((new_store, email)) => {
                     ws.ui.antigravity_store = Some(new_store);
                     let msg = ws.i18n.t(
-                        &format!("已成功切换活动账号为：{}", email),
-                        &format!("Switched active account to: {}", email),
+                        &format!("已成功切换 {} 活动账号为：{}", target_name, email),
+                        &format!("Switched {} active account to: {}", target_name_en, email),
                     ).to_string();
                     ws.ui.toast(msg, false);
                 }
@@ -1258,6 +3019,57 @@ fn switch_account_action(account_id: &str, ws: &mut Workspace, cx: &mut Context<
             cx.notify();
         });
     }).detach();
+}
+
+/// Switch active account (defaults to classic).
+#[allow(dead_code)]
+fn switch_account_action(account_id: &str, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    switch_account_target_action(account_id, None, ws, cx);
+}
+
+/// Toggle account disabled state.
+fn toggle_disabled_action(account_id: &str, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    let app_data = ws.paths.app_data.clone();
+    let mut store = match ws.ui.antigravity_store.clone() {
+        Some(s) => s,
+        None => return,
+    };
+
+    match toggle_account_disabled(&app_data, &mut store, account_id) {
+        Ok(disabled) => {
+            let msg = if disabled {
+                ws.i18n.t("账号已禁用", "Account disabled").to_string()
+            } else {
+                ws.i18n.t("账号已启用", "Account enabled").to_string()
+            };
+            ws.ui.antigravity_store = Some(store);
+            ws.ui.toast(msg, false);
+        }
+        Err(e) => {
+            let msg = format!("操作失败: {}", e);
+            ws.ui.toast(msg, true);
+        }
+    }
+    cx.notify();
+}
+
+/// Export account credentials as JSON to clipboard.
+fn export_account_action(account: &AntigravityAccount, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    match serde_json::to_string_pretty(account) {
+        Ok(json) => {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
+            let msg = ws.i18n.t(
+                &format!("已将账号 {} 凭据复制到剪贴板（JSON）", account.email),
+                &format!("Copied credentials for {} to clipboard (JSON)", account.email),
+            ).to_string();
+            ws.ui.toast(msg, false);
+        }
+        Err(e) => {
+            let msg = format!("导出账号凭据失败: {}", e);
+            ws.ui.toast(msg, true);
+        }
+    }
+    cx.notify();
 }
 
 /// Delete an account.

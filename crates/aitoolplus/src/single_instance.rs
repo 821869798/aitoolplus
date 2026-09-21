@@ -99,7 +99,10 @@ pub fn pump_messages(
                     let _ = handle.update(cx, |root, window, cx| {
                         if let Ok(workspace) = root.view().clone().downcast::<aitoolplus_ui::Workspace>() {
                             workspace.update(cx, |workspace, cx| {
-                                if message.starts_with("aitoolbox://") {
+                                if message.starts_with("aitoolplus://")
+                                    || message.starts_with("aitoolbox://")
+                                    || message.starts_with("ccswitch://")
+                                {
                                     match aitoolplus_core::deeplink::import_into_store(
                                         &message,
                                         workspace.store.store_mut(),
@@ -177,13 +180,26 @@ pub fn register_protocol() -> Result<(), String> {
         }
     }
 
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let cmd = format!("\"{}\" \"%1\"", executable.display());
+
+    // Register aitoolplus:// (primary)
+    set_default("Software\\Classes\\aitoolplus", "URL:AI ToolPlus Protocol")?;
+    set_default("Software\\Classes\\aitoolplus\\URL Protocol", "")?;
+    set_default(
+        "Software\\Classes\\aitoolplus\\shell\\open\\command",
+        &cmd,
+    )?;
+
+    // Register aitoolbox:// (legacy compatibility)
     set_default("Software\\Classes\\aitoolbox", "URL:AI ToolPlus Protocol")?;
     set_default("Software\\Classes\\aitoolbox\\URL Protocol", "")?;
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     set_default(
         "Software\\Classes\\aitoolbox\\shell\\open\\command",
-        &format!("\"{}\" \"%1\"", executable.display()),
-    )
+        &cmd,
+    )?;
+
+    Ok(())
 }
 
 impl Drop for Claim {

@@ -114,7 +114,7 @@ impl McpServer {
         self.record_sync(tool, ok, error);
     }
 
-    fn is_enabled_in(&self, tool: ToolId) -> bool {
+    pub fn is_enabled_in(&self, tool: ToolId) -> bool {
         self.enabled_tools.iter().any(|k| k == tool.key())
     }
 
@@ -226,6 +226,179 @@ pub fn toggle_tool(store: &mut McpStore, id: &str, tool: ToolId) -> Option<bool>
     }
     server.touch();
     Some(enabled)
+}
+
+pub fn set_management_enabled(store: &mut McpStore, id: &str, enabled: bool) -> bool {
+    if let Some(server) = store.servers.iter_mut().find(|s| s.id == id) {
+        server.management_enabled = enabled;
+        server.touch();
+        true
+    } else {
+        false
+    }
+}
+
+pub fn update_metadata(
+    store: &mut McpStore,
+    id: &str,
+    group: Option<String>,
+    note: Option<String>,
+) -> bool {
+    if let Some(server) = store.servers.iter_mut().find(|s| s.id == id) {
+        server.user_group = group.filter(|g| !g.trim().is_empty());
+        server.user_note = note.filter(|n| !n.trim().is_empty());
+        server.touch();
+        true
+    } else {
+        false
+    }
+}
+
+pub fn update_tags(store: &mut McpStore, id: &str, tags: Vec<String>) -> bool {
+    if let Some(server) = store.servers.iter_mut().find(|s| s.id == id) {
+        server.tags = tags;
+        server.touch();
+        true
+    } else {
+        false
+    }
+}
+
+/// Parse MCP servers from a raw JSON snippet (mirrors ai-toolbox `mcpJsonImport.ts`).
+/// Supports standard Claude Desktop, Cursor, VSCode shapes:
+/// - `{ "mcpServers": { ... } }`
+/// - `{ "servers": { ... } }`
+/// - `{ "mcp": { "servers": { ... } } }`
+/// - direct map `{ "server_name": { ... } }`
+/// - single server `{ "name": "...", "command": "..." }`
+pub fn parse_mcp_servers_from_json(
+    json_str: &str,
+) -> Result<Vec<(String, McpServerType, Value)>, String> {
+    let value: Value = serde_json::from_str(json_str)
+        .map_err(|e| format!("JSON 解析失败: {e}"))?;
+
+    let mut out = Vec::new();
+
+    fn has_server_shape(obj: &serde_json::Map<String, Value>) -> bool {
+        obj.contains_key("command")
+            || obj.contains_key("url")
+            || obj.contains_key("httpUrl")
+            || obj.contains_key("serverUrl")
+    }
+
+    fn parse_single(name: &str, obj: &serde_json::Map<String, Value>) -> Option<(String, McpServerType, Value)> {
+        let server_type = if let Some(t) = obj.get("type").and_then(Value::as_str) {
+            match t.to_lowercase().as_str() {
+                "stdio" | "local" => McpServerType::Stdio,
+                "http" => McpServerType::Http,
+                "sse" | "remote" => McpServerType::Sse,
+                _ if obj.contains_key("command") => McpServerType::Stdio,
+                _ => McpServerType::Http,
+            }
+        } else if obj.contains_key("command") {
+            McpServerType::Stdio
+        } else if obj.contains_key("url") || obj.contains_key("httpUrl") || obj.contains_key("serverUrl") {
+            McpServerType::Http
+        } else {
+            McpServerType::Stdio
+        };
+
+        let mut config = serde_json::Map::new();
+        match server_type {
+            McpServerType::Stdio => {
+                let command = if let Some(cmd_arr) = obj.get("command").and_then(Value::as_array) {
+                    let cmd = cmd_arr.first().and_then(Value::as_str).unwrap_or("").to_string();
+                    let args: Vec<Value> = cmd_arr.iter().skip(1).cloned().collect();
+                    config.insert("command".into(), Value::String(cmd));
+                    config.insert("args".into(), Value::Array(args));
+                    true
+                } else if let Some(cmd_str) = obj.get("command").and_then(Value::as_str) {
+                    config.insert("command".into(), Value::String(cmd_str.to_string()));
+                    if let Some(args) = obj.get("args") {
+                        config.insert("args".into(), args.clone());
+                    } else {
+                        config.insert("args".into(), Value::Array(vec![]));
+                    }
+                    true
+                } else {
+                    false
+                };
+                if !command {
+                    return None;
+                }
+                if let Some(env) = obj.get("env").or_else(|| obj.get("environment")) {
+                    config.insert("env".into(), env.clone());
+                }
+            }
+            McpServerType::Http | McpServerType::Sse => {
+                let url = obj.get("url")
+                    .or_else(|| obj.get("httpUrl"))
+                    .or_else(|| obj.get("serverUrl"))
+                    .and_then(Value::as_str);
+                if let Some(u) = url {
+                    config.insert("url".into(), Value::String(u.to_string()));
+                } else {
+                    return None;
+                }
+                if let Some(headers) = obj.get("headers") {
+                    config.insert("headers".into(), headers.clone());
+                }
+            }
+        }
+
+        Some((name.to_string(), server_type, Value::Object(config)))
+    }
+
+    if let Some(obj) = value.as_object() {
+        if let Some(servers) = obj.get("mcpServers").and_then(Value::as_object) {
+            for (name, s_val) in servers {
+                if let Some(s_obj) = s_val.as_object() {
+                    if let Some(parsed) = parse_single(name, s_obj) {
+                        out.push(parsed);
+                    }
+                }
+            }
+        } else if let Some(servers) = obj.get("servers").and_then(Value::as_object) {
+            for (name, s_val) in servers {
+                if let Some(s_obj) = s_val.as_object() {
+                    if let Some(parsed) = parse_single(name, s_obj) {
+                        out.push(parsed);
+                    }
+                }
+            }
+        } else if let Some(servers) = obj.get("mcp").and_then(|m| m.get("servers")).and_then(Value::as_object) {
+            for (name, s_val) in servers {
+                if let Some(s_obj) = s_val.as_object() {
+                    if let Some(parsed) = parse_single(name, s_obj) {
+                        out.push(parsed);
+                    }
+                }
+            }
+        } else if has_server_shape(obj) {
+            let name = obj.get("name")
+                .or_else(|| obj.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("imported-mcp-server");
+            if let Some(parsed) = parse_single(name, obj) {
+                out.push(parsed);
+            }
+        } else {
+            // Assume map of servers
+            for (name, s_val) in obj {
+                if let Some(s_obj) = s_val.as_object() {
+                    if let Some(parsed) = parse_single(name, s_obj) {
+                        out.push(parsed);
+                    }
+                }
+            }
+        }
+    }
+
+    if out.is_empty() {
+        return Err("未能识别有效的 MCP 服务器配置，请检查 JSON 格式是否包含 mcpServers 或服务器配置字段".into());
+    }
+
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1609,5 +1782,30 @@ mod tests {
                 .contains("[mcp_servers.fs]"),
             "disabled server not removed"
         );
+    }
+
+    #[test]
+    fn test_parse_mcp_servers_from_json() {
+        let json = r#"{
+            "mcpServers": {
+                "sqlite": {
+                    "command": "uvx",
+                    "args": ["mcp-server-sqlite", "--db-path", "test.db"]
+                },
+                "github": {
+                    "type": "http",
+                    "url": "https://api.githubcopilot.com/mcp"
+                }
+            }
+        }"#;
+        let servers = parse_mcp_servers_from_json(json).unwrap();
+        assert_eq!(servers.len(), 2);
+        let sqlite = servers.iter().find(|(name, _, _)| name == "sqlite").unwrap();
+        assert_eq!(sqlite.1, McpServerType::Stdio);
+        assert_eq!(sqlite.2["command"], "uvx");
+
+        let github = servers.iter().find(|(name, _, _)| name == "github").unwrap();
+        assert_eq!(github.1, McpServerType::Http);
+        assert_eq!(github.2["url"], "https://api.githubcopilot.com/mcp");
     }
 }

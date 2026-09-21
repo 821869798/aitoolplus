@@ -128,6 +128,7 @@ pub fn scan_sessions(paths: &Paths, tool: ToolId, limit: usize) -> Vec<SessionMe
     }
     let mut sessions = match tool {
         ToolId::Grok => scan_grok(&root),
+        ToolId::Codex => scan_codex(&root, limit),
         ToolId::ClaudeCode => scan_claude_code(&root, limit),
         ToolId::Kimi => scan_kimi_dirs(&root, limit),
         _ => scan_jsonl_generic(&root, tool, limit),
@@ -135,6 +136,45 @@ pub fn scan_sessions(paths: &Paths, tool: ToolId, limit: usize) -> Vec<SessionMe
     sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
     sessions.truncate(limit);
     sessions
+}
+
+/// Codex: sessions in `~/.codex/sessions/**/*.jsonl` with optional thread_names
+/// from `~/.codex/session_index.jsonl`.
+fn scan_codex(root: &Path, limit: usize) -> Vec<SessionMeta> {
+    let thread_names = read_codex_thread_names(root);
+    let mut sessions = scan_jsonl_generic(root, ToolId::Codex, limit);
+    for session in &mut sessions {
+        if let Some(thread_name) = thread_names.get(&session.session_id) {
+            session.title = Some(thread_name.clone());
+        }
+    }
+    sessions
+}
+
+fn read_codex_thread_names(root: &Path) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let index_file = root
+        .parent()
+        .map(|p| p.join("session_index.jsonl"))
+        .unwrap_or_else(|| root.join("session_index.jsonl"));
+    let Ok(content) = std::fs::read_to_string(&index_file) else {
+        return map;
+    };
+    for line in content.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let id = val.get("id").and_then(Value::as_str).unwrap_or("").trim();
+        let name = val
+            .get("thread_name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if !id.is_empty() && !name.is_empty() {
+            map.insert(id.to_string(), name.to_string());
+        }
+    }
+    map
 }
 
 /// Grok: `<root>/<encoded-cwd>/<session-id>/summary.json`.
@@ -226,12 +266,11 @@ fn scan_jsonl_generic(root: &Path, tool: ToolId, limit: usize) -> Vec<SessionMet
     let mut files = vec![];
     collect_jsonl(root, &mut files);
     files.sort_by_key(|p| std::cmp::Reverse(modified_ms(p)));
-    files.truncate(limit.saturating_mul(2));
+    files.truncate(limit.saturating_mul(3));
     let provider = tool.key().to_string();
     files
         .into_iter()
         .filter_map(|path| parse_jsonl_meta(&path, &provider, tool))
-        .take(limit)
         .collect()
 }
 
@@ -252,11 +291,7 @@ fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) {
                 continue;
             }
             collect_jsonl(&path, out);
-        } else if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("jsonl"))
-        {
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with("agent-") {
                 continue;
@@ -291,6 +326,182 @@ fn strip_xml_tags(s: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromptWrapperBlock {
+    Instructions,
+    Permissions,
+    Skills,
+    Environment,
+    UserAction,
+    CollaborationMode,
+    BracketedPrompt,
+    SkillTag,
+}
+
+fn is_bracketed_prompt_wrapper_start(line: &str) -> bool {
+    line.starts_with("[Assistant Rules")
+        || line == "[Available Skills]"
+        || line == "[Available Tools]"
+}
+
+fn is_bracketed_prompt_section_header(line: &str) -> bool {
+    line.len() >= 3 && line.len() <= 120 && line.starts_with('[') && line.ends_with(']')
+}
+
+fn detect_prompt_wrapper_start(line: &str) -> Option<PromptWrapperBlock> {
+    if line.starts_with("# AGENTS.md instructions") || line == "<INSTRUCTIONS>" {
+        return Some(PromptWrapperBlock::Instructions);
+    }
+    if line.starts_with("<skill") {
+        return Some(PromptWrapperBlock::SkillTag);
+    }
+    match line {
+        "<permissions instructions>" => Some(PromptWrapperBlock::Permissions),
+        "<skills_instructions>" => Some(PromptWrapperBlock::Skills),
+        "<environment_context>" => Some(PromptWrapperBlock::Environment),
+        "<user_action>" => Some(PromptWrapperBlock::UserAction),
+        "<collaboration_mode>" => Some(PromptWrapperBlock::CollaborationMode),
+        _ => None,
+    }
+}
+
+fn is_prompt_wrapper_end(line: &str, wrapper: PromptWrapperBlock) -> bool {
+    match wrapper {
+        PromptWrapperBlock::Instructions => line == "</INSTRUCTIONS>",
+        PromptWrapperBlock::Permissions => line == "</permissions instructions>",
+        PromptWrapperBlock::Skills => line == "</skills_instructions>",
+        PromptWrapperBlock::Environment => line == "</environment_context>",
+        PromptWrapperBlock::UserAction => line == "</user_action>",
+        PromptWrapperBlock::CollaborationMode => line == "</collaboration_mode>",
+        PromptWrapperBlock::BracketedPrompt => false,
+        PromptWrapperBlock::SkillTag => line.starts_with("</skill>"),
+    }
+}
+
+fn strip_user_request_marker(line: &str) -> Option<&str> {
+    if line == "[User Request]" {
+        return Some("");
+    }
+    let rest = line.strip_prefix("[User Request]")?.trim_start();
+    Some(rest.strip_prefix(':').unwrap_or(rest).trim_start())
+}
+
+fn extract_wrapped_user_request_text(text: &str) -> Option<String> {
+    let mut is_user_request_block = false;
+    let mut lines = Vec::new();
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+
+        if let Some(rest) = strip_user_request_marker(line) {
+            is_user_request_block = true;
+            if !rest.is_empty() {
+                lines.push(rest.to_string());
+            }
+            continue;
+        }
+
+        if !is_user_request_block {
+            continue;
+        }
+
+        if is_bracketed_prompt_section_header(line) {
+            break;
+        }
+
+        lines.push(raw_line.trim_end().to_string());
+    }
+
+    let value = lines.join("\n");
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn is_prompt_title_noise_line(line: &str) -> bool {
+    if line.starts_with('/')
+        || line.starts_with("Based on this message")
+        || line.starts_with("References are relative to")
+    {
+        return true;
+    }
+    if line.starts_with('<') && line.ends_with('>') {
+        return true;
+    }
+    let lowercase = line.to_lowercase();
+    matches!(
+        lowercase.as_str(),
+        "hi" | "hello" | "hey" | "在吗" | "在么" | "在不在" | "你好" | "您好" | "嗨" | "test"
+    )
+}
+
+fn extract_prompt_title_text(text: &str, max_chars: usize) -> Option<String> {
+    let unwrapped = extract_wrapped_user_request_text(text);
+    let target = unwrapped.as_deref().unwrap_or(text);
+    let mut active_wrapper: Option<PromptWrapperBlock> = None;
+
+    for raw_line in target.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if is_bracketed_prompt_wrapper_start(line) {
+            active_wrapper = Some(PromptWrapperBlock::BracketedPrompt);
+            continue;
+        }
+
+        if let Some(wrapper) = active_wrapper {
+            if is_prompt_wrapper_end(line, wrapper) {
+                active_wrapper = None;
+            }
+            continue;
+        }
+
+        if let Some(wrapper) = detect_prompt_wrapper_start(line) {
+            if !is_prompt_wrapper_end(line, wrapper) {
+                active_wrapper = Some(wrapper);
+            }
+            continue;
+        }
+
+        if is_prompt_title_noise_line(line) {
+            continue;
+        }
+
+        let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if collapsed.is_empty() {
+            continue;
+        }
+
+        let chars: Vec<char> = collapsed.chars().collect();
+        return if chars.len() <= max_chars {
+            Some(collapsed)
+        } else {
+            let truncated: String = chars.into_iter().take(max_chars).collect();
+            Some(format!("{truncated}..."))
+        };
+    }
+
+    None
+}
+
+fn path_basename(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = trimmed.trim_end_matches(['/', '\\']);
+    let last = normalized
+        .split(['/', '\\'])
+        .next_back()
+        .filter(|segment| !segment.is_empty())?;
+    Some(last.to_string())
+}
+
 fn clean_session_title(raw: &str) -> String {
     let text = raw.trim();
     if let Some(start) = text.find("<command-args>") {
@@ -320,9 +531,31 @@ fn clean_session_title(raw: &str) -> String {
     }
 }
 
+pub fn clean_antigravity_user_content(raw: &str) -> String {
+    let text = raw.trim();
+    if let Some(start) = text.find("<USER_REQUEST>") {
+        if let Some(end) = text[start..].find("</USER_REQUEST>") {
+            return text[start + "<USER_REQUEST>".len()..start + end].trim().to_string();
+        }
+    }
+    text.to_string()
+}
+
 fn parse_ts_value(v: &Value) -> Option<i64> {
     if let Some(num) = v.as_i64() {
-        return Some(num);
+        return Some(if num > 1_000_000_000_000 {
+            num
+        } else {
+            num * 1000
+        });
+    }
+    if let Some(num) = v.as_f64() {
+        let num = num as i64;
+        return Some(if num > 1_000_000_000_000 {
+            num
+        } else {
+            num * 1000
+        });
     }
     if let Some(s) = v.as_str() {
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
@@ -332,10 +565,45 @@ fn parse_ts_value(v: &Value) -> Option<i64> {
     None
 }
 
+fn read_head_tail_lines(
+    path: &Path,
+    head_n: usize,
+    tail_n: usize,
+) -> std::io::Result<(Vec<String>, Vec<String>)> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    let file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+
+    if file_len < 32_768 {
+        let reader = BufReader::new(file);
+        let all_lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
+        let head = all_lines.iter().take(head_n).cloned().collect();
+        let skip = all_lines.len().saturating_sub(tail_n);
+        let tail = all_lines.into_iter().skip(skip).collect();
+        return Ok((head, tail));
+    }
+
+    let reader = BufReader::new(file);
+    let head: Vec<String> = reader.lines().take(head_n).map_while(Result::ok).collect();
+
+    let seek_pos = file_len.saturating_sub(32_768);
+    let mut tail_file = File::open(path)?;
+    tail_file.seek(SeekFrom::Start(seek_pos))?;
+    let tail_reader = BufReader::new(tail_file);
+    let all_tail: Vec<String> = tail_reader.lines().map_while(Result::ok).collect();
+
+    let skip_first = if seek_pos > 0 { 1 } else { 0 };
+    let usable_tail: Vec<String> = all_tail.into_iter().skip(skip_first).collect();
+    let skip = usable_tail.len().saturating_sub(tail_n);
+    let tail = usable_tail.into_iter().skip(skip).collect();
+
+    Ok((head, tail))
+}
+
 fn parse_jsonl_meta(path: &Path, provider: &str, tool: ToolId) -> Option<SessionMeta> {
-    use std::io::BufRead;
-    let file = std::fs::File::open(path).ok()?;
-    let mut reader = std::io::BufReader::new(file);
+    let (head, tail) = read_head_tail_lines(path, 80, 80).ok()?;
 
     let mut first_user: Option<String> = None;
     let mut latest_session_name: Option<String> = None;
@@ -345,85 +613,107 @@ fn parse_jsonl_meta(path: &Path, provider: &str, tool: ToolId) -> Option<Session
     let mut project_dir: Option<String> = None;
     let mut session_id_from_file: Option<String> = None;
 
-    let mut line = String::new();
-    let mut read_lines = 0;
-    while read_lines < 80 {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                read_lines += 1;
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
+    for line in head.iter().chain(tail.iter()) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        let entry_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if entry_type == "session" || entry_type == "session_meta" {
+            let id = value
+                .get("id")
+                .or_else(|| value.pointer("/payload/id"))
+                .or_else(|| value.get("sessionId"))
+                .and_then(Value::as_str);
+            if let Some(id) = id {
+                if !id.trim().is_empty() {
+                    session_id_from_file = Some(id.to_string());
                 }
-                if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-                    let entry_type = value.get("type").and_then(Value::as_str).unwrap_or("");
-                    if entry_type == "session" {
-                        if let Some(id) = value.get("id").and_then(Value::as_str) {
-                            if !id.trim().is_empty() {
-                                session_id_from_file = Some(id.to_string());
-                            }
-                        }
-                    } else if entry_type == "session_info" {
-                        if let Some(name) = value.get("name").and_then(Value::as_str) {
-                            let trimmed_name = name.trim();
-                            if !trimmed_name.is_empty() {
-                                latest_session_name = Some(trimmed_name.to_string());
-                            }
-                        }
-                    }
-
-                    if project_dir.is_none() {
-                        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
-                            if !cwd.trim().is_empty() {
-                                project_dir = Some(cwd.to_string());
-                            }
-                        } else if let Some(cwd) = value.pointer("/attachment/snapshot/workingDirectory").and_then(Value::as_str) {
-                            if !cwd.trim().is_empty() {
-                                project_dir = Some(cwd.to_string());
-                            }
-                        }
-                    }
-
-                    let role = value
-                        .pointer("/message/role")
-                        .and_then(Value::as_str)
-                        .or_else(|| value.get("role").and_then(Value::as_str))
-                        .or_else(|| value.pointer("/payload/role").and_then(Value::as_str))
-                        .or_else(|| {
-                            if entry_type == "user" || entry_type == "assistant" {
-                                Some(entry_type)
-                            } else {
-                                None
-                            }
-                        });
-
-                    if let Some(role) = role {
-                        if role.eq_ignore_ascii_case("user") || role.eq_ignore_ascii_case("assistant") {
-                            message_count += 1;
-                        }
-                        if first_user.is_none() && role.eq_ignore_ascii_case("user") {
-                            let text = extract_text(&value);
-                            let cleaned = clean_session_title(&text);
-                            if !cleaned.is_empty() {
-                                first_user = Some(cleaned);
-                            }
-                        }
-                    }
-
-                    if let Some(ts) = value
-                        .get("timestamp")
-                        .or_else(|| value.get("ts"))
-                        .or_else(|| value.get("created_at"))
-                        .and_then(parse_ts_value)
-                    {
-                        if first_ts.is_none() {
-                            first_ts = Some(ts);
-                        }
-                        last_ts = Some(ts);
-                    }
+            }
+            let cwd = value
+                .get("cwd")
+                .or_else(|| value.pointer("/payload/cwd"))
+                .and_then(Value::as_str);
+            if let Some(cwd) = cwd {
+                if !cwd.trim().is_empty() {
+                    project_dir = Some(cwd.to_string());
                 }
+            }
+            if let Some(ts) = value.get("timestamp").and_then(parse_ts_value) {
+                if first_ts.is_none() {
+                    first_ts = Some(ts);
+                }
+            }
+        } else if entry_type == "session_info" {
+            if let Some(name) = value.get("name").and_then(Value::as_str) {
+                let trimmed_name = name.trim();
+                if !trimmed_name.is_empty() {
+                    latest_session_name = Some(trimmed_name.to_string());
+                }
+            }
+        }
+
+        if let Some(slug) = value.get("slug").and_then(Value::as_str) {
+            let trimmed = slug.trim();
+            if !trimmed.is_empty() && latest_session_name.is_none() {
+                latest_session_name = Some(trimmed.to_string());
+            }
+        }
+
+        if project_dir.is_none() {
+            if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+                if !cwd.trim().is_empty() {
+                    project_dir = Some(cwd.to_string());
+                }
+            } else if let Some(cwd) = value.pointer("/attachment/snapshot/workingDirectory").and_then(Value::as_str) {
+                if !cwd.trim().is_empty() {
+                    project_dir = Some(cwd.to_string());
+                }
+            }
+        }
+
+        let role = value
+            .pointer("/message/role")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("role").and_then(Value::as_str))
+            .or_else(|| value.pointer("/payload/role").and_then(Value::as_str))
+            .or_else(|| {
+                if entry_type == "user" || entry_type == "assistant" {
+                    Some(entry_type)
+                } else {
+                    None
+                }
+            });
+
+        if let Some(role) = role {
+            if role.eq_ignore_ascii_case("user") || role.eq_ignore_ascii_case("assistant") {
+                message_count += 1;
+            }
+            if first_user.is_none() && role.eq_ignore_ascii_case("user") {
+                let text = extract_text(&value);
+                let prompt_title = extract_prompt_title_text(&text, 120);
+                let cleaned = prompt_title.unwrap_or_else(|| clean_session_title(&text));
+                if !cleaned.is_empty() {
+                    first_user = Some(cleaned);
+                }
+            }
+        }
+
+        if let Some(ts) = value
+            .get("timestamp")
+            .or_else(|| value.get("ts"))
+            .or_else(|| value.get("created_at"))
+            .and_then(parse_ts_value)
+        {
+            if first_ts.is_none() {
+                first_ts = Some(ts);
+            }
+            if entry_type != "session_info" {
+                last_ts = Some(ts);
             }
         }
     }
@@ -437,6 +727,12 @@ fn parse_jsonl_meta(path: &Path, provider: &str, tool: ToolId) -> Option<Session
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("session");
+        if stem.len() >= 36 {
+            let tail = &stem[stem.len() - 36..];
+            if tail.chars().filter(|c| *c == '-').count() == 4 {
+                return tail.to_string();
+            }
+        }
         if let Some(pos) = stem.find('_') {
             let suffix = &stem[pos + 1..];
             if suffix.len() >= 32 {
@@ -446,7 +742,9 @@ fn parse_jsonl_meta(path: &Path, provider: &str, tool: ToolId) -> Option<Session
         stem.to_string()
     });
 
-    let display_title = latest_session_name.or(first_user);
+    let display_title = latest_session_name
+        .or(first_user)
+        .or_else(|| project_dir.as_deref().and_then(path_basename));
     let resume = resume_command(tool, &session_id, path.to_str());
 
     Some(SessionMeta {
@@ -554,6 +852,89 @@ fn load_jsonl_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
                     None
                 }
             });
+
+        // 2b. Antigravity USER_INPUT
+        if value.get("type").and_then(Value::as_str) == Some("USER_INPUT") {
+            let content_raw = value.get("content").and_then(Value::as_str).unwrap_or("");
+            let clean_text = clean_antigravity_user_content(content_raw);
+            if !clean_text.is_empty() {
+                out.push(SessionMessage {
+                    role: "user".to_string(),
+                    content: clean_text.clone(),
+                    ts,
+                    id: None,
+                    message_type: Some("text".into()),
+                    blocks: vec![SessionMessageBlock {
+                        kind: "text".into(),
+                        text: Some(clean_text),
+                        ..Default::default()
+                    }],
+                    model: None,
+                });
+            }
+            continue;
+        }
+
+        // 2c. Antigravity PLANNER_RESPONSE
+        if value.get("type").and_then(Value::as_str) == Some("PLANNER_RESPONSE") {
+            let mut blocks = vec![];
+            let content = value.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+
+            if let Some(thinking) = value.get("thinking").and_then(Value::as_str) {
+                if !thinking.trim().is_empty() {
+                    blocks.push(SessionMessageBlock {
+                        kind: "thinking".into(),
+                        text: Some(thinking.to_string()),
+                        title: Some("Thinking".into()),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            if !content.trim().is_empty() {
+                blocks.push(SessionMessageBlock {
+                    kind: "text".into(),
+                    text: Some(content.clone()),
+                    ..Default::default()
+                });
+            }
+
+            if let Some(tool_calls) = value.get("tool_calls").and_then(Value::as_array) {
+                for tc in tool_calls {
+                    let name = tc.get("name").and_then(Value::as_str).unwrap_or("tool");
+                    let args = tc.get("args").map(|a| a.to_string()).unwrap_or_default();
+                    let is_cmd = name.eq_ignore_ascii_case("run_command")
+                        || name.eq_ignore_ascii_case("bash")
+                        || name.eq_ignore_ascii_case("exec");
+                    blocks.push(SessionMessageBlock {
+                        kind: if is_cmd { "command".into() } else { "tool_call".into() },
+                        text: Some(args.clone()),
+                        command: if is_cmd { Some(args) } else { None },
+                        tool_name: Some(name.to_string()),
+                        title: Some(format!("Call {name}")),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            if !blocks.is_empty() || !content.is_empty() {
+                let msg_type = if blocks.iter().all(|b| b.kind == "thinking") {
+                    "thinking"
+                } else {
+                    "text"
+                };
+                out.push(SessionMessage {
+                    role: "assistant".to_string(),
+                    content,
+                    ts,
+                    id: None,
+                    message_type: Some(msg_type.into()),
+                    blocks,
+                    model: None,
+                });
+            }
+            continue;
+        }
 
         // 3. Codex "response_item"
         if value.get("type").and_then(Value::as_str) == Some("response_item") {

@@ -26,7 +26,11 @@ fn main() {
 
     let incoming = std::env::args()
         .skip(1)
-        .find(|argument| argument.starts_with("aitoolbox://"));
+        .find(|argument| {
+            argument.starts_with("aitoolplus://")
+                || argument.starts_with("aitoolbox://")
+                || argument.starts_with("ccswitch://")
+        });
 
     // Single instance: second launches forward their URL/activation payload.
     let mut instance = match single_instance::acquire() {

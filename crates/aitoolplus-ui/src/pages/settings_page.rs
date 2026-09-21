@@ -715,6 +715,69 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
         .into_any_element()
 }
 
+struct LocalBackupEntry {
+    path: std::path::PathBuf,
+    name: String,
+    size_bytes: u64,
+    date_str: String,
+}
+
+fn list_local_backups(paths: &aitoolplus_core::paths::Paths) -> Vec<LocalBackupEntry> {
+    let mut entries = Vec::new();
+    let dirs = [
+        paths.app_data.join("backups").join("manual"),
+        paths.app_data.join("backups").join("auto"),
+    ];
+    for dir in dirs {
+        if let Ok(read_dir) = std::fs::read_dir(dir) {
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("zip") {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("backup.zip")
+                        .to_string();
+                    let (size_bytes, date_str) = if let Ok(meta) = path.metadata() {
+                        let size = meta.len();
+                        let date = meta
+                            .modified()
+                            .ok()
+                            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| {
+                                let dt = chrono::DateTime::from_timestamp(d.as_secs() as i64, 0);
+                                dt.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .unwrap_or_default()
+                            })
+                            .unwrap_or_default();
+                        (size, date)
+                    } else {
+                        (0, String::new())
+                    };
+                    entries.push(LocalBackupEntry {
+                        path,
+                        name,
+                        size_bytes,
+                        date_str,
+                    });
+                }
+            }
+        }
+    }
+    entries.sort_by(|a, b| b.name.cmp(&a.name));
+    entries
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
@@ -766,19 +829,360 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
         },
     );
 
+    let local_panel = (backup_type == aitoolplus_core::settings::BackupType::Local).then(|| {
+        let local_backups = list_local_backups(&ws.paths);
+        let panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .p(px(10.0))
+            .rounded(px(8.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(section_title(
+                &t,
+                i.t("本地备份与恢复", "Local Backup & Restore"),
+                Some(i.t(
+                    "下载导出 ZIP 备份到本地，或选择已有备份文件上传恢复配置",
+                    "Download ZIP backup or upload an existing backup to restore",
+                )),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .flex_wrap()
+                    .child(button_with_icon_l(
+                        "backup-download-zip",
+                        crate::icons::DOWNLOAD_SVG,
+                        i.t("下载备份 (导出 ZIP)", "Download Backup (Export ZIP)"),
+                        ButtonVariant::Primary,
+                        &t,
+                        cx,
+                        |_ws, _, _, cx| {
+                            let dialog = rfd::AsyncFileDialog::new()
+                                .set_file_name(&format!(
+                                    "aitoolplus-backup-{}.zip",
+                                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+                                ))
+                                .add_filter("ZIP", &["zip"]);
+                            let weak = cx.entity().downgrade();
+                            cx.spawn(async move |_this, cx| {
+                                if let Some(file) = dialog.save_file().await {
+                                    let output = file.path().to_path_buf();
+                                    let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                                        match aitoolplus_core::backup::create_backup(
+                                            &ws.paths,
+                                            &ws.settings,
+                                            &output,
+                                        ) {
+                                            Ok(report) => {
+                                                ws.ui.toast(
+                                                    ws.i18n
+                                                        .t(
+                                                            &format!(
+                                                                "下载备份成功：已导出至 {}（{} 个文件）",
+                                                                report.output.display(),
+                                                                report.file_count
+                                                            ),
+                                                            &format!(
+                                                                "Backup downloaded: {} ({} files)",
+                                                                report.output.display(),
+                                                                report.file_count
+                                                            ),
+                                                        )
+                                                        .to_string(),
+                                                    false,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                ws.ui.toast(format!("下载备份失败: {e}"), true);
+                                            }
+                                        }
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .detach();
+                        },
+                    ))
+                    .child(button_with_icon_l(
+                        "backup-upload-zip",
+                        crate::icons::UPLOAD_SVG,
+                        i.t("上传备份 (从 ZIP 恢复)", "Upload Backup (Restore ZIP)"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |_ws, _, _, cx| {
+                            let dialog = rfd::AsyncFileDialog::new().add_filter("ZIP", &["zip"]);
+                            let weak = cx.entity().downgrade();
+                            cx.spawn(async move |_this, cx| {
+                                if let Some(file) = dialog.pick_file().await {
+                                    let archive = file.path().to_path_buf();
+                                    let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                                        let paths = ws.paths.clone();
+                                        match aitoolplus_core::backup::restore_backup_with_options(
+                                            &paths,
+                                            &archive,
+                                            &aitoolplus_core::backup::RestoreOptions {
+                                                allow_custom_absolute: ws
+                                                    .ui
+                                                    .restore_allow_custom_absolute,
+                                                conflict_strategy: ws
+                                                    .ui
+                                                    .restore_conflict_strategy,
+                                            },
+                                        ) {
+                                            Ok(report) => {
+                                                if let Ok(store) =
+                                                    aitoolplus_core::store::StoreHandle::open(&paths)
+                                                {
+                                                    ws.store = store;
+                                                }
+                                                ws.settings =
+                                                    aitoolplus_core::settings::AppSettings::load(
+                                                        &paths.settings_file(),
+                                                    );
+                                                ws.ui.toast(
+                                                    ws.i18n
+                                                        .t(
+                                                            &format!(
+                                                                "上传恢复完成：{} 个文件 (覆盖 {}, 副本 {})",
+                                                                report.restored,
+                                                                report.overwritten,
+                                                                report.copies.len()
+                                                            ),
+                                                            &format!(
+                                                                "restore complete: {} files (overwritten {}, copies {})",
+                                                                report.restored,
+                                                                report.overwritten,
+                                                                report.copies.len()
+                                                            ),
+                                                        )
+                                                        .to_string(),
+                                                    false,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                ws.ui.toast(format!("上传恢复失败: {e}"), true)
+                                            }
+                                        }
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .detach();
+                        },
+                    ))
+                    .child(button_with_icon_l(
+                        "backup-open-folder",
+                        crate::icons::FOLDER_SVG,
+                        i.t("打开备份目录", "Open Backup Directory"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, _| {
+                            let dir = ws.paths.app_data.join("backups");
+                            let _ = std::fs::create_dir_all(&dir);
+                            let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                        },
+                    )),
+            );
+
+        let mut list_section = div().flex().flex_col().gap(px(6.0)).child(
+            div()
+                .text_size(px(12.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(t.text_primary)
+                .child(i.t("本地备份文件列表", "Local Backup Files")),
+        );
+
+        if local_backups.is_empty() {
+            list_section = list_section.child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(t.text_muted)
+                    .child(i.t(
+                        "暂无本地备份文件，点击上方【下载备份 (导出 ZIP)】即可创建首个备份",
+                        "No local backups found. Click 'Download Backup (Export ZIP)' to create one.",
+                    )),
+            );
+        } else {
+            for b in local_backups {
+                let file_path_for_restore = b.path.clone();
+                let file_path_for_save_as = b.path.clone();
+                let file_path_for_delete = b.path.clone();
+                let file_name = b.name.clone();
+                let file_name_for_restore_id = b.name.clone();
+                let file_name_for_save_as_id = b.name.clone();
+                let file_name_for_save_as_dialog = b.name.clone();
+                let file_name_for_delete_id = b.name.clone();
+                let file_size_str = format_file_size(b.size_bytes);
+                let date_str = b.date_str.clone();
+
+                list_section = list_section.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.0))
+                        .p(px(8.0))
+                        .rounded(px(6.0))
+                        .bg(t.card_bg)
+                        .border_1()
+                        .border_color(t.card_border)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(t.text_primary)
+                                        .child(file_name),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(t.text_muted)
+                                        .child(format!("{file_size_str} · {date_str}")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(button_with_icon_l(
+                                    gpui::SharedString::from(format!("local-restore-{}", file_name_for_restore_id)),
+                                    crate::icons::REFRESH_SVG,
+                                    i.t("恢复", "Restore"),
+                                    ButtonVariant::Secondary,
+                                    &t,
+                                    cx,
+                                    move |ws, _, _, cx| {
+                                        let paths = ws.paths.clone();
+                                        match aitoolplus_core::backup::restore_backup_with_options(
+                                            &paths,
+                                            &file_path_for_restore,
+                                            &aitoolplus_core::backup::RestoreOptions {
+                                                allow_custom_absolute: ws
+                                                    .ui
+                                                    .restore_allow_custom_absolute,
+                                                conflict_strategy: ws
+                                                    .ui
+                                                    .restore_conflict_strategy,
+                                            },
+                                        ) {
+                                            Ok(report) => {
+                                                if let Ok(store) =
+                                                    aitoolplus_core::store::StoreHandle::open(&paths)
+                                                {
+                                                    ws.store = store;
+                                                }
+                                                ws.settings =
+                                                    aitoolplus_core::settings::AppSettings::load(
+                                                        &paths.settings_file(),
+                                                    );
+                                                ws.ui.toast(
+                                                    ws.i18n
+                                                        .t(
+                                                            &format!(
+                                                                "恢复完成：{} 个文件",
+                                                                report.restored
+                                                            ),
+                                                            &format!(
+                                                                "restore complete: {} files",
+                                                                report.restored
+                                                            ),
+                                                        )
+                                                        .to_string(),
+                                                    false,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                ws.ui.toast(format!("恢复失败: {e}"), true);
+                                            }
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(button_with_icon_l(
+                                    gpui::SharedString::from(format!("local-save-as-{}", file_name_for_save_as_id)),
+                                    crate::icons::DOWNLOAD_SVG,
+                                    i.t("另存为", "Save As"),
+                                    ButtonVariant::Secondary,
+                                    &t,
+                                    cx,
+                                    move |_ws, _, _, cx| {
+                                        let dialog = rfd::AsyncFileDialog::new()
+                                            .set_file_name(&file_name_for_save_as_dialog)
+                                            .add_filter("ZIP", &["zip"]);
+                                        let src = file_path_for_save_as.clone();
+                                        let weak = cx.entity().downgrade();
+                                        cx.spawn(async move |_this, cx| {
+                                            if let Some(file) = dialog.save_file().await {
+                                                let dst = file.path().to_path_buf();
+                                                let _ = std::fs::copy(&src, &dst);
+                                                let _ = weak.update(cx, |ws, cx| {
+                                                    ws.ui.toast(
+                                                        ws.i18n.t("文件已另存为指定位置", "Saved as specified").to_string(),
+                                                        false,
+                                                    );
+                                                    cx.notify();
+                                                });
+                                            }
+                                        }).detach();
+                                    },
+                                ))
+                                .child(button_with_icon_l(
+                                    gpui::SharedString::from(format!("local-delete-{}", file_name_for_delete_id)),
+                                    crate::icons::TRASH_SVG,
+                                    i.t("删除", "Delete"),
+                                    ButtonVariant::Danger,
+                                    &t,
+                                    cx,
+                                    move |ws, _, _, cx| {
+                                        let _ = std::fs::remove_file(&file_path_for_delete);
+                                        ws.ui.toast(
+                                            ws.i18n.t("本地备份文件已删除", "Backup file deleted").to_string(),
+                                            false,
+                                        );
+                                        cx.notify();
+                                    },
+                                )),
+                        ),
+                );
+            }
+        }
+
+        panel.child(list_section).into_any_element()
+    });
+
     let webdav_panel = (backup_type == aitoolplus_core::settings::BackupType::Webdav).then(|| {
-        let list_url = dav_url.clone();
-        let list_user = dav_user.clone();
-        let list_password = dav_password.clone();
-        let list_directory = dav_directory.clone();
         let test_url = dav_url.clone();
         let test_user = dav_user.clone();
         let test_password = dav_password.clone();
         let test_directory = dav_directory.clone();
+
         let save_url = dav_url.clone();
         let save_user = dav_user.clone();
         let save_password = dav_password.clone();
         let save_directory = dav_directory.clone();
+
+        let upload_url = dav_url.clone();
+        let upload_user = dav_user.clone();
+        let upload_password = dav_password.clone();
+        let upload_directory = dav_directory.clone();
+
+        let download_url = dav_url.clone();
+        let download_user = dav_user.clone();
+        let download_password = dav_password.clone();
+        let download_directory = dav_directory.clone();
+
         div()
             .flex()
             .flex_col()
@@ -796,89 +1200,154 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                 div()
                     .flex()
                     .gap(px(8.0))
-                    .child(button_l(
-                        "webdav-save",
-                        i.t("保存 WebDAV 设置", "Save WebDAV Settings"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            ws.settings.webdav.url =
-                                save_url.update(cx, |input, _| input.text().trim().to_string());
-                            ws.settings.webdav.username =
-                                save_user.update(cx, |input, _| input.text().trim().to_string());
-                            ws.settings.webdav.password =
-                                save_password.update(cx, |input, _| input.text().to_string());
-                            ws.settings.webdav.remote_directory = save_directory
-                                .update(cx, |input, _| input.text().trim().to_string());
-                            (ws.callbacks.save_settings)(&ws.settings);
-                            ws.ui.toast(ws.i18n.t("已保存", "saved").to_string(), false);
-                            cx.notify();
-                        },
-                    ))
-                    .child(button_l(
-                        "webdav-list",
-                        i.t("列出远端备份", "List Remote Backups"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            let config = aitoolplus_core::settings::WebDavConfig {
-                                url: list_url
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                username: list_user
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                password: list_password
-                                    .update(cx, |input, _| input.text().to_string()),
-                                remote_directory: list_directory
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                            };
-                            match aitoolplus_core::webdav::list(&config) {
-                                Ok(backups) => {
-                                    let count = backups.len();
-                                    ws.ui.remote_backups = backups;
-                                    ws.ui.toast(
-                                        ws.i18n
-                                            .t(
-                                                &format!("发现 {count} 个远端备份"),
-                                                &format!("found {count} remote backups"),
-                                            )
-                                            .to_string(),
-                                        false,
-                                    );
-                                }
-                                Err(error) => {
-                                    ws.ui.toast(format!("WebDAV list failed: {error}"), true)
-                                }
-                            }
-                            cx.notify();
-                        },
-                    ))
-                    .child(button_l(
+                    .flex_wrap()
+                    .child(button_with_icon_l(
                         "webdav-test",
+                        crate::icons::GLOBE_SVG,
                         i.t("测试连接", "Test Connection"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
                             let config = aitoolplus_core::settings::WebDavConfig {
-                                url: test_url
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                username: test_user
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                password: test_password
-                                    .update(cx, |input, _| input.text().to_string()),
-                                remote_directory: test_directory
-                                    .update(cx, |input, _| input.text().trim().to_string()),
+                                url: test_url.update(cx, |input, _| input.text().trim().to_string()),
+                                username: test_user.update(cx, |input, _| input.text().trim().to_string()),
+                                password: test_password.update(cx, |input, _| input.text().to_string()),
+                                remote_directory: test_directory.update(cx, |input, _| input.text().trim().to_string()),
                             };
                             match aitoolplus_core::webdav::test_connection(&config) {
                                 Ok(()) => ws.ui.toast(
-                                    ws.i18n
-                                        .t("WebDAV 连接成功", "WebDAV connection succeeded")
-                                        .to_string(),
+                                    ws.i18n.t("WebDAV 连接成功", "WebDAV connection succeeded").to_string(),
                                     false,
                                 ),
-                                Err(error) => ws.ui.toast(format!("WebDAV failed: {error}"), true),
+                                Err(error) => ws.ui.toast(format!("WebDAV 连接失败: {error}"), true),
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_with_icon_l(
+                        "webdav-save",
+                        crate::icons::CHECK_SVG,
+                        i.t("保存设置", "Save Settings"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            ws.settings.webdav.url = save_url.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.webdav.username = save_user.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.webdav.password = save_password.update(cx, |input, _| input.text().to_string());
+                            ws.settings.webdav.remote_directory = save_directory.update(cx, |input, _| input.text().trim().to_string());
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            ws.ui.toast(ws.i18n.t("已保存", "saved").to_string(), false);
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_with_icon_l(
+                        "webdav-upload",
+                        crate::icons::CLOUD_UPLOAD_SVG,
+                        i.t("上传云端", "Upload to Cloud"),
+                        ButtonVariant::Primary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            ws.settings.webdav.url = upload_url.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.webdav.username = upload_user.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.webdav.password = upload_password.update(cx, |input, _| input.text().to_string());
+                            ws.settings.webdav.remote_directory = upload_directory.update(cx, |input, _| input.text().trim().to_string());
+                            (ws.callbacks.save_settings)(&ws.settings);
+
+                            let directory = ws.paths.app_data.join("backups").join("sync");
+                            let _ = std::fs::create_dir_all(&directory);
+                            let output = directory.join("aitoolplus-sync.zip");
+                            match aitoolplus_core::backup::create_backup(&ws.paths, &ws.settings, &output) {
+                                Ok(report) => {
+                                    match aitoolplus_core::webdav::upload(&ws.settings.webdav, &report.output) {
+                                        Ok(_) => {
+                                            ws.ui.toast(
+                                                ws.i18n.t("上传成功！已同步至 WebDAV 云端", "Upload succeeded: Synced to WebDAV cloud").to_string(),
+                                                false,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            ws.ui.toast(format!("上传到 WebDAV 失败: {e}"), true);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    ws.ui.toast(format!("创建备份失败: {e}"), true);
+                                }
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_with_icon_l(
+                        "webdav-download",
+                        crate::icons::CLOUD_DOWNLOAD_SVG,
+                        i.t("从云端下载并恢复", "Download & Restore"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            ws.settings.webdav.url = download_url.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.webdav.username = download_user.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.webdav.password = download_password.update(cx, |input, _| input.text().to_string());
+                            ws.settings.webdav.remote_directory = download_directory.update(cx, |input, _| input.text().trim().to_string());
+                            (ws.callbacks.save_settings)(&ws.settings);
+
+                            match aitoolplus_core::webdav::list(&ws.settings.webdav) {
+                                Ok(backups) if backups.is_empty() => {
+                                    ws.ui.toast(
+                                        ws.i18n.t("云端暂无备份数据，请先上传", "No backup found in cloud, please upload first").to_string(),
+                                        true,
+                                    );
+                                }
+                                Ok(backups) => {
+                                    let target_name = backups
+                                        .iter()
+                                        .find(|b| b.name == "aitoolplus-sync.zip")
+                                        .map(|b| b.name.clone())
+                                        .unwrap_or_else(|| backups[0].name.clone());
+
+                                    let temporary = ws
+                                        .paths
+                                        .app_data
+                                        .join("backups")
+                                        .join("downloads")
+                                        .join(&target_name);
+
+                                    match aitoolplus_core::webdav::download(&ws.settings.webdav, &target_name, &temporary)
+                                        .and_then(|path| {
+                                            aitoolplus_core::backup::restore_backup_with_options(
+                                                &ws.paths,
+                                                &path,
+                                                &aitoolplus_core::backup::RestoreOptions {
+                                                    allow_custom_absolute: ws.ui.restore_allow_custom_absolute,
+                                                    conflict_strategy: ws.ui.restore_conflict_strategy,
+                                                },
+                                            )
+                                        })
+                                    {
+                                        Ok(report) => {
+                                            if let Ok(store) = aitoolplus_core::store::StoreHandle::open(&ws.paths) {
+                                                ws.store = store;
+                                            }
+                                            ws.settings = aitoolplus_core::settings::AppSettings::load(&ws.paths.settings_file());
+                                            ws.ui.toast(
+                                                ws.i18n.t(
+                                                    &format!("云端恢复完成：已恢复 {} 个文件", report.restored),
+                                                    &format!("Cloud restore complete: {} files restored", report.restored),
+                                                ).to_string(),
+                                                false,
+                                            );
+                                        }
+                                        Err(error) => {
+                                            ws.ui.toast(format!("云端下载恢复失败: {error}"), true);
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    ws.ui.toast(format!("获取 WebDAV 云端备份失败: {error}"), true);
+                                }
                             }
                             cx.notify();
                         },
@@ -888,6 +1357,13 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
     });
 
     let s3_panel = (backup_type == aitoolplus_core::settings::BackupType::S3).then(|| {
+        let test_endpoint = s3_endpoint.clone();
+        let test_region = s3_region.clone();
+        let test_bucket = s3_bucket.clone();
+        let test_access_key = s3_access_key.clone();
+        let test_secret_key = s3_secret_key.clone();
+        let test_prefix = s3_prefix.clone();
+
         let save_endpoint = s3_endpoint.clone();
         let save_region = s3_region.clone();
         let save_bucket = s3_bucket.clone();
@@ -895,19 +1371,19 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
         let save_secret_key = s3_secret_key.clone();
         let save_prefix = s3_prefix.clone();
 
-        let list_endpoint = s3_endpoint.clone();
-        let list_region = s3_region.clone();
-        let list_bucket = s3_bucket.clone();
-        let list_access_key = s3_access_key.clone();
-        let list_secret_key = s3_secret_key.clone();
-        let list_prefix = s3_prefix.clone();
+        let upload_endpoint = s3_endpoint.clone();
+        let upload_region = s3_region.clone();
+        let upload_bucket = s3_bucket.clone();
+        let upload_access_key = s3_access_key.clone();
+        let upload_secret_key = s3_secret_key.clone();
+        let upload_prefix = s3_prefix.clone();
 
-        let test_endpoint = s3_endpoint.clone();
-        let test_region = s3_region.clone();
-        let test_bucket = s3_bucket.clone();
-        let test_access_key = s3_access_key.clone();
-        let test_secret_key = s3_secret_key.clone();
-        let test_prefix = s3_prefix.clone();
+        let download_endpoint = s3_endpoint.clone();
+        let download_region = s3_region.clone();
+        let download_bucket = s3_bucket.clone();
+        let download_access_key = s3_access_key.clone();
+        let download_secret_key = s3_secret_key.clone();
+        let download_prefix = s3_prefix.clone();
 
         div()
             .flex()
@@ -967,251 +1443,169 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                 div()
                     .flex()
                     .gap(px(8.0))
-                    .child(button_l(
-                        "s3-save",
-                        i.t("保存 S3 设置", "Save S3 Settings"),
+                    .flex_wrap()
+                    .child(button_with_icon_l(
+                        "s3-test",
+                        crate::icons::GLOBE_SVG,
+                        i.t("测试连接", "Test Connection"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
-                            ws.settings.s3.endpoint = save_endpoint
-                                .update(cx, |input, _| input.text().trim().to_string());
-                            ws.settings.s3.region =
-                                save_region.update(cx, |input, _| input.text().trim().to_string());
-                            ws.settings.s3.bucket =
-                                save_bucket.update(cx, |input, _| input.text().trim().to_string());
-                            ws.settings.s3.access_key_id = save_access_key
-                                .update(cx, |input, _| input.text().trim().to_string());
-                            ws.settings.s3.secret_access_key =
-                                save_secret_key.update(cx, |input, _| input.text().to_string());
-                            ws.settings.s3.prefix =
-                                save_prefix.update(cx, |input, _| input.text().trim().to_string());
+                            let config = aitoolplus_core::settings::S3Config {
+                                endpoint: test_endpoint.update(cx, |input, _| input.text().trim().to_string()),
+                                region: test_region.update(cx, |input, _| input.text().trim().to_string()),
+                                bucket: test_bucket.update(cx, |input, _| input.text().trim().to_string()),
+                                access_key_id: test_access_key.update(cx, |input, _| input.text().trim().to_string()),
+                                secret_access_key: test_secret_key.update(cx, |input, _| input.text().to_string()),
+                                prefix: test_prefix.update(cx, |input, _| input.text().trim().to_string()),
+                                path_style: ws.settings.s3.path_style,
+                            };
+                            match aitoolplus_core::s3::test_connection(&config) {
+                                Ok(()) => ws.ui.toast(
+                                    ws.i18n.t("S3 连接成功", "S3 connection succeeded").to_string(),
+                                    false,
+                                ),
+                                Err(error) => ws.ui.toast(format!("S3 连接失败: {error}"), true),
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_with_icon_l(
+                        "s3-save",
+                        crate::icons::CHECK_SVG,
+                        i.t("保存设置", "Save Settings"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            ws.settings.s3.endpoint = save_endpoint.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.region = save_region.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.bucket = save_bucket.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.access_key_id = save_access_key.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.secret_access_key = save_secret_key.update(cx, |input, _| input.text().to_string());
+                            ws.settings.s3.prefix = save_prefix.update(cx, |input, _| input.text().trim().to_string());
                             (ws.callbacks.save_settings)(&ws.settings);
                             ws.ui.toast(ws.i18n.t("已保存", "saved").to_string(), false);
                             cx.notify();
                         },
                     ))
-                    .child(button_l(
-                        "s3-list",
-                        i.t("列出 S3 备份", "List S3 Backups"),
-                        ButtonVariant::Secondary,
+                    .child(button_with_icon_l(
+                        "s3-upload",
+                        crate::icons::CLOUD_UPLOAD_SVG,
+                        i.t("上传云端", "Upload to Cloud"),
+                        ButtonVariant::Primary,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
-                            let config = aitoolplus_core::settings::S3Config {
-                                endpoint: list_endpoint
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                region: list_region
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                bucket: list_bucket
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                access_key_id: list_access_key
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                secret_access_key: list_secret_key
-                                    .update(cx, |input, _| input.text().to_string()),
-                                prefix: list_prefix
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                path_style: ws.settings.s3.path_style,
-                            };
-                            match aitoolplus_core::s3::list(&config) {
-                                Ok(backups) => {
-                                    let count = backups.len();
-                                    ws.ui.remote_backups = backups;
-                                    ws.ui.toast(
-                                        ws.i18n
-                                            .t(
-                                                &format!("发现 {count} 个 S3 备份"),
-                                                &format!("found {count} S3 backups"),
-                                            )
-                                            .to_string(),
-                                        false,
-                                    );
+                            ws.settings.s3.endpoint = upload_endpoint.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.region = upload_region.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.bucket = upload_bucket.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.access_key_id = upload_access_key.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.secret_access_key = upload_secret_key.update(cx, |input, _| input.text().to_string());
+                            ws.settings.s3.prefix = upload_prefix.update(cx, |input, _| input.text().trim().to_string());
+                            (ws.callbacks.save_settings)(&ws.settings);
+
+                            let directory = ws.paths.app_data.join("backups").join("sync");
+                            let _ = std::fs::create_dir_all(&directory);
+                            let output = directory.join("aitoolplus-sync.zip");
+                            match aitoolplus_core::backup::create_backup(&ws.paths, &ws.settings, &output) {
+                                Ok(report) => {
+                                    match aitoolplus_core::s3::upload(&ws.settings.s3, &report.output) {
+                                        Ok(_) => {
+                                            ws.ui.toast(
+                                                ws.i18n.t("上传成功！已同步至 S3 云端", "Upload succeeded: Synced to S3 cloud").to_string(),
+                                                false,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            ws.ui.toast(format!("上传到 S3 失败: {e}"), true);
+                                        }
+                                    }
                                 }
-                                Err(error) => ws.ui.toast(format!("S3 list failed: {error}"), true),
+                                Err(e) => {
+                                    ws.ui.toast(format!("创建备份失败: {e}"), true);
+                                }
                             }
                             cx.notify();
                         },
                     ))
-                    .child(button_l(
-                        "s3-test",
-                        i.t("测试 S3 连接", "Test S3 Connection"),
+                    .child(button_with_icon_l(
+                        "s3-download",
+                        crate::icons::CLOUD_DOWNLOAD_SVG,
+                        i.t("从云端下载并恢复", "Download & Restore"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
-                            let config = aitoolplus_core::settings::S3Config {
-                                endpoint: test_endpoint
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                region: test_region
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                bucket: test_bucket
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                access_key_id: test_access_key
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                secret_access_key: test_secret_key
-                                    .update(cx, |input, _| input.text().to_string()),
-                                prefix: test_prefix
-                                    .update(cx, |input, _| input.text().trim().to_string()),
-                                path_style: ws.settings.s3.path_style,
-                            };
-                            match aitoolplus_core::s3::test_connection(&config) {
-                                Ok(()) => ws.ui.toast(
-                                    ws.i18n
-                                        .t("S3 连接成功", "S3 connection succeeded")
-                                        .to_string(),
-                                    false,
-                                ),
-                                Err(error) => ws.ui.toast(format!("S3 failed: {error}"), true),
+                            ws.settings.s3.endpoint = download_endpoint.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.region = download_region.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.bucket = download_bucket.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.access_key_id = download_access_key.update(cx, |input, _| input.text().trim().to_string());
+                            ws.settings.s3.secret_access_key = download_secret_key.update(cx, |input, _| input.text().to_string());
+                            ws.settings.s3.prefix = download_prefix.update(cx, |input, _| input.text().trim().to_string());
+                            (ws.callbacks.save_settings)(&ws.settings);
+
+                            match aitoolplus_core::s3::list(&ws.settings.s3) {
+                                Ok(backups) if backups.is_empty() => {
+                                    ws.ui.toast(
+                                        ws.i18n.t("云端暂无备份数据，请先上传", "No backup found in cloud, please upload first").to_string(),
+                                        true,
+                                    );
+                                }
+                                Ok(backups) => {
+                                    let target_name = backups
+                                        .iter()
+                                        .find(|b| b.name == "aitoolplus-sync.zip")
+                                        .map(|b| b.name.clone())
+                                        .unwrap_or_else(|| backups[0].name.clone());
+
+                                    let temporary = ws
+                                        .paths
+                                        .app_data
+                                        .join("backups")
+                                        .join("downloads")
+                                        .join(&target_name);
+
+                                    match aitoolplus_core::s3::download(&ws.settings.s3, &target_name, &temporary)
+                                        .and_then(|path| {
+                                            aitoolplus_core::backup::restore_backup_with_options(
+                                                &ws.paths,
+                                                &path,
+                                                &aitoolplus_core::backup::RestoreOptions {
+                                                    allow_custom_absolute: ws.ui.restore_allow_custom_absolute,
+                                                    conflict_strategy: ws.ui.restore_conflict_strategy,
+                                                },
+                                            )
+                                        })
+                                    {
+                                        Ok(report) => {
+                                            if let Ok(store) = aitoolplus_core::store::StoreHandle::open(&ws.paths) {
+                                                ws.store = store;
+                                            }
+                                            ws.settings = aitoolplus_core::settings::AppSettings::load(&ws.paths.settings_file());
+                                            ws.ui.toast(
+                                                ws.i18n.t(
+                                                    &format!("云端恢复完成：已恢复 {} 个文件", report.restored),
+                                                    &format!("Cloud restore complete: {} files restored", report.restored),
+                                                ).to_string(),
+                                                false,
+                                            );
+                                        }
+                                        Err(error) => {
+                                            ws.ui.toast(format!("云端下载恢复失败: {error}"), true);
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    ws.ui.toast(format!("获取 S3 云端备份失败: {error}"), true);
+                                }
                             }
                             cx.notify();
                         },
                     )),
             )
             .into_any_element()
-    });
-
-    let remote_panel = ((backup_type == aitoolplus_core::settings::BackupType::Webdav
-        || backup_type == aitoolplus_core::settings::BackupType::S3)
-        && !ws.ui.remote_backups.is_empty())
-    .then(|| {
-        let mut panel = div().flex().flex_col().gap(px(6.0)).child(section_title(
-            &t,
-            i.t("远端备份", "Remote Backups"),
-            None,
-        ));
-        for backup in ws.ui.remote_backups.clone() {
-            let restore_name = backup.name.clone();
-            let delete_name = backup.name.clone();
-            panel = panel.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_start()
-                    .gap(px(6.0))
-                    .p(px(8.0))
-                    .rounded(px(8.0))
-                    .bg(t.input_bg)
-                    .border_1()
-                    .border_color(t.card_border)
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(t.text_primary)
-                            .child(backup.name),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(8.0))
-                            .child(button_l(
-                                gpui::SharedString::from(format!("remote-restore-{restore_name}")),
-                                i.t("下载并恢复", "Download & Restore"),
-                                ButtonVariant::Secondary,
-                                &t,
-                                cx,
-                                move |ws, _, _, cx| {
-                                    let temporary = ws
-                                        .paths
-                                        .app_data
-                                        .join("backups")
-                                        .join("downloads")
-                                        .join(&restore_name);
-                                    let download_res = if ws.settings.backup_type
-                                        == aitoolplus_core::settings::BackupType::Webdav
-                                    {
-                                        aitoolplus_core::webdav::download(
-                                            &ws.settings.webdav,
-                                            &restore_name,
-                                            &temporary,
-                                        )
-                                    } else {
-                                        aitoolplus_core::s3::download(
-                                            &ws.settings.s3,
-                                            &restore_name,
-                                            &temporary,
-                                        )
-                                    };
-                                    match download_res.and_then(|path| {
-                                        aitoolplus_core::backup::restore_backup_with_options(
-                                            &ws.paths,
-                                            &path,
-                                            &aitoolplus_core::backup::RestoreOptions {
-                                                allow_custom_absolute: ws
-                                                    .ui
-                                                    .restore_allow_custom_absolute,
-                                                conflict_strategy: ws.ui.restore_conflict_strategy,
-                                            },
-                                        )
-                                    }) {
-                                        Ok(report) => {
-                                            if let Ok(store) =
-                                                aitoolplus_core::store::StoreHandle::open(&ws.paths)
-                                            {
-                                                ws.store = store;
-                                            }
-                                            ws.ui.toast(
-                                                ws.i18n
-                                                    .t(
-                                                        &format!(
-                                                            "恢复完成：{} 个文件",
-                                                            report.restored
-                                                        ),
-                                                        &format!(
-                                                            "restore complete: {} files",
-                                                            report.restored
-                                                        ),
-                                                    )
-                                                    .to_string(),
-                                                false,
-                                            );
-                                        }
-                                        Err(error) => ws
-                                            .ui
-                                            .toast(format!("remote restore failed: {error}"), true),
-                                    }
-                                    cx.notify();
-                                },
-                            ))
-                            .child(button_l(
-                                gpui::SharedString::from(format!("remote-delete-{delete_name}")),
-                                i.t("删除远端", "Delete Remote"),
-                                ButtonVariant::Danger,
-                                &t,
-                                cx,
-                                move |ws, _, _, cx| {
-                                    let del_res = if ws.settings.backup_type
-                                        == aitoolplus_core::settings::BackupType::Webdav
-                                    {
-                                        aitoolplus_core::webdav::delete(
-                                            &ws.settings.webdav,
-                                            &delete_name,
-                                        )
-                                    } else {
-                                        aitoolplus_core::s3::delete(&ws.settings.s3, &delete_name)
-                                    };
-                                    match del_res {
-                                        Ok(()) => {
-                                            ws.ui
-                                                .remote_backups
-                                                .retain(|item| item.name != delete_name);
-                                            ws.ui.toast(
-                                                ws.i18n
-                                                    .t("远端备份已删除", "remote backup deleted")
-                                                    .to_string(),
-                                                false,
-                                            );
-                                        }
-                                        Err(error) => {
-                                            ws.ui.toast(format!("delete failed: {error}"), true)
-                                        }
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                    ),
-            );
-        }
-        panel.into_any_element()
     });
 
     let mut filter_panel = div().flex().flex_col().gap(px(6.0)).child(section_title(
@@ -1389,9 +1783,9 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                 )),
             ),
             transport_row,
+            local_panel.unwrap_or_else(|| div().into_any_element()),
             webdav_panel.unwrap_or_else(|| div().into_any_element()),
             s3_panel.unwrap_or_else(|| div().into_any_element()),
-            remote_panel.unwrap_or_else(|| div().into_any_element()),
             div()
                 .flex()
                 .flex_col()
@@ -1546,138 +1940,6 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                     },
                 ))
                 .into_any_element(),
-            button_l(
-                "backup-export",
-                i.t("立即创建 ZIP 备份", "Create ZIP Backup Now"),
-                ButtonVariant::Primary,
-                &t,
-                cx,
-                |ws, _, _, cx| {
-                    let directory = ws.paths.app_data.join("backups").join("manual");
-                    let output = directory.join(format!(
-                        "aitoolplus-backup-{}.zip",
-                        chrono::Local::now().format("%Y%m%d-%H%M%S")
-                    ));
-                    match aitoolplus_core::backup::create_backup(&ws.paths, &ws.settings, &output) {
-                        Ok(report) => {
-                            let remote = if ws.settings.backup_type
-                                == aitoolplus_core::settings::BackupType::Webdav
-                            {
-                                aitoolplus_core::webdav::upload(&ws.settings.webdav, &report.output)
-                                    .map(|backup| format!(" · WebDAV: {}", backup.name))
-                            } else if ws.settings.backup_type
-                                == aitoolplus_core::settings::BackupType::S3
-                            {
-                                aitoolplus_core::s3::upload(&ws.settings.s3, &report.output)
-                                    .map(|backup| format!(" · S3: {}", backup.name))
-                            } else {
-                                Ok(String::new())
-                            };
-                            match remote {
-                                Ok(remote) => ws.ui.toast(
-                                    ws.i18n
-                                        .t(
-                                            &format!(
-                                                "备份完成：{}（{} 个文件）{}",
-                                                report.output.display(),
-                                                report.file_count,
-                                                remote
-                                            ),
-                                            &format!(
-                                                "backup complete: {} ({} files){}",
-                                                report.output.display(),
-                                                report.file_count,
-                                                remote
-                                            ),
-                                        )
-                                        .to_string(),
-                                    false,
-                                ),
-                                Err(error) => ws.ui.toast(
-                                    format!("local backup ok; remote upload failed: {error}"),
-                                    true,
-                                ),
-                            }
-                        }
-                        Err(error) => ws.ui.toast(format!("backup failed: {error}"), true),
-                    }
-                    cx.notify();
-                },
-            ),
-            button_l(
-                "backup-restore",
-                i.t("恢复 ZIP 备份", "Restore ZIP Backup"),
-                ButtonVariant::Secondary,
-                &t,
-                cx,
-                |_ws, _, _, cx| {
-                    let dialog = rfd::AsyncFileDialog::new().add_filter("ZIP", &["zip"]);
-                    let weak = cx.entity().downgrade();
-                    cx.spawn(async move |_this, cx| {
-                        if let Some(file) = dialog.pick_file().await {
-                            let archive = file.path().to_path_buf();
-                            let _ = weak.update(cx, |ws: &mut Workspace, cx| {
-                                let paths = ws.paths.clone();
-                                match aitoolplus_core::backup::restore_backup_with_options(
-                                    &paths,
-                                    &archive,
-                                    &aitoolplus_core::backup::RestoreOptions {
-                                        allow_custom_absolute: ws.ui.restore_allow_custom_absolute,
-                                        conflict_strategy: ws.ui.restore_conflict_strategy,
-                                    },
-                                ) {
-                                    Ok(report) => {
-                                        if let Ok(store) =
-                                            aitoolplus_core::store::StoreHandle::open(&paths)
-                                        {
-                                            ws.store = store;
-                                        }
-                                        ws.settings = aitoolplus_core::settings::AppSettings::load(
-                                            &paths.settings_file(),
-                                        );
-                                        ws.ui.toast(
-                                            ws.i18n
-                                                .t(
-                                                    &format!(
-                                                        "恢复完成：{} 个文件 (覆盖 {}, 副本 {})",
-                                                        report.restored,
-                                                        report.overwritten,
-                                                        report.copies.len()
-                                                    ),
-                                                    &format!(
-                                                        "restore complete: {} files (overwritten {}, copies {})",
-                                                        report.restored,
-                                                        report.overwritten,
-                                                        report.copies.len()
-                                                    ),
-                                                )
-                                                .to_string(),
-                                            false,
-                                        );
-                                    }
-                                    Err(error) => {
-                                        ws.ui.toast(format!("restore failed: {error}"), true)
-                                    }
-                                }
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .detach();
-                },
-            ),
-            button_l(
-                "backup-open-folder",
-                i.t("打开备份目录", "Open Backup Directory"),
-                ButtonVariant::Secondary,
-                &t,
-                cx,
-                |ws, _, _, _| {
-                    let dir = ws.paths.app_data.join("backups");
-                    let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::process::Command::new("explorer").arg(&dir).spawn();
-                },
-            ),
         ],
     )
     .into_any_element()

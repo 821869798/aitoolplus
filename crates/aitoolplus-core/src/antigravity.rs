@@ -19,7 +19,7 @@ pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 pub const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
-pub const NATIVE_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
+pub const NATIVE_USER_AGENT: &str = "antigravity";
 
 pub const QUOTA_MODELS_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
@@ -77,6 +77,8 @@ pub struct AntigravityQuota {
     pub is_forbidden: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forbidden_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_tier: Option<String>,
 }
 
 impl Default for AntigravityQuota {
@@ -89,6 +91,31 @@ impl Default for AntigravityQuota {
             last_updated: Utc::now().timestamp(),
             is_forbidden: false,
             forbidden_reason: None,
+            subscription_tier: None,
+        }
+    }
+}
+
+/// Device fingerprint profile for Antigravity isolation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DeviceProfile {
+    pub machine_id: String,
+    pub mac_machine_id: String,
+    pub dev_device_id: String,
+    pub sqm_id: String,
+}
+
+impl DeviceProfile {
+    pub fn generate_random() -> Self {
+        let u1 = uuid::Uuid::new_v4();
+        let u2 = uuid::Uuid::new_v4();
+        let u3 = uuid::Uuid::new_v4();
+        let u4 = uuid::Uuid::new_v4();
+        Self {
+            machine_id: format!("auth0|user_{}", u1.simple()),
+            mac_machine_id: u2.to_string(),
+            dev_device_id: u3.to_string(),
+            sqm_id: format!("{{{}}}", u4.to_string().to_uppercase()),
         }
     }
 }
@@ -116,6 +143,12 @@ pub struct AntigravityAccount {
     pub last_used: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_label: Option<String>,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_profile: Option<DeviceProfile>,
 }
 
 impl AntigravityAccount {
@@ -136,6 +169,9 @@ impl AntigravityAccount {
             created_at: now,
             last_used: now,
             custom_label: None,
+            disabled: false,
+            disabled_reason: None,
+            device_profile: None,
         }
     }
 
@@ -143,6 +179,25 @@ impl AntigravityAccount {
     pub fn is_token_expiring(&self) -> bool {
         let now = Utc::now().timestamp();
         self.expiry_timestamp <= now + 300
+    }
+
+    /// Resolve account subscription tier ("ULTRA", "PRO", "ENTERPRISE", or "FREE").
+    pub fn get_tier(&self) -> &str {
+        if let Some(t) = &self.tier {
+            let s = t.trim();
+            if !s.is_empty() {
+                return s;
+            }
+        }
+        if let Some(q) = &self.quota {
+            if let Some(t) = &q.subscription_tier {
+                let s = t.trim();
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+        }
+        "FREE"
     }
 }
 
@@ -239,6 +294,7 @@ struct QuotaSummaryGroupJson {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct QuotaSummaryBucketJson {
     window: Option<String>,
     #[serde(rename = "remainingFraction")]
@@ -394,109 +450,182 @@ pub fn fetch_project_and_tier(access_token: &str) -> (Option<String>, Option<Str
 }
 
 /// Fetch detailed model quota and summary groups.
-pub fn fetch_quota(access_token: &str) -> Result<AntigravityQuota, String> {
+/// If `project_id` is provided, it tries with and without project_id.
+/// If `existing_quota` is provided and the API is rate-limited or transiently fails,
+/// the existing model list and quota groups are preserved as fallback.
+pub fn fetch_quota(
+    access_token: &str,
+    project_id: Option<&str>,
+    existing_quota: Option<&AntigravityQuota>,
+) -> Result<AntigravityQuota, String> {
     let mut quota = AntigravityQuota::default();
-    let body = serde_json::json!({});
+    let mut models_fetched = false;
+    let mut last_403_reason = None;
 
     // 1. Fetch available models
-    let mut models_fetched = false;
     for endpoint in QUOTA_MODELS_ENDPOINTS {
-        let resp = ureq::post(endpoint)
-            .set("Authorization", &format!("Bearer {}", access_token))
-            .set("Content-Type", "application/json")
-            .set("User-Agent", NATIVE_USER_AGENT)
-            .timeout(Duration::from_secs(10))
-            .send_json(&body);
+        let bodies = if let Some(pid) = project_id.filter(|p| !p.trim().is_empty()) {
+            vec![
+                serde_json::json!({ "project": pid }),
+                serde_json::json!({}),
+            ]
+        } else {
+            vec![serde_json::json!({})]
+        };
 
-        match resp {
-            Ok(res) => {
-                if let Ok(data) = res.into_json::<QuotaModelResponse>() {
-                    let mut models = Vec::new();
-                    for (name, info) in data.models {
-                        if let Some(q_info) = info.quota_info {
-                            let fraction = q_info.remaining_fraction.unwrap_or(1.0);
-                            let percentage = (fraction * 100.0).round() as i32;
-                            let reset_time = q_info.reset_time.unwrap_or_default();
-                            models.push(ModelQuotaInfo {
-                                name,
-                                display_name: info.display_name,
-                                percentage,
-                                reset_time,
-                                supports_thinking: info.supports_thinking.unwrap_or(false),
-                                recommended: info.recommended.unwrap_or(false),
-                            });
-                        }
-                    }
-                    // Sort models: priority to Gemini 2.5 Pro, Flash, Claude
-                    models.sort_by(|a, b| {
-                        let score = |m: &ModelQuotaInfo| -> i32 {
-                            let n = m.name.to_lowercase();
-                            if n.contains("gemini-2.5-pro") {
-                                100
-                            } else if n.contains("gemini-2.5-flash") || n.contains("gemini-3.6-flash") {
-                                90
-                            } else if n.contains("claude-3-5-sonnet") || n.contains("claude-3-7-sonnet") || n.contains("claude-sonnet") {
-                                80
-                            } else if n.contains("gemini") {
-                                50
-                            } else if n.contains("claude") {
-                                40
-                            } else {
-                                10
+        let mut endpoint_succeeded = false;
+
+        for body in &bodies {
+            let resp = ureq::post(endpoint)
+                .set("Authorization", &format!("Bearer {}", access_token))
+                .set("Content-Type", "application/json")
+                .set("User-Agent", NATIVE_USER_AGENT)
+                .timeout(Duration::from_secs(10))
+                .send_json(body);
+
+            match resp {
+                Ok(res) => {
+                    if let Ok(data) = res.into_json::<QuotaModelResponse>() {
+                        let mut models = Vec::new();
+                        for (name, info) in data.models {
+                            if let Some(q_info) = info.quota_info {
+                                let fraction = q_info.remaining_fraction.unwrap_or(1.0);
+                                let percentage = (fraction * 100.0).round() as i32;
+                                let reset_time = q_info.reset_time.unwrap_or_default();
+                                models.push(ModelQuotaInfo {
+                                    name,
+                                    display_name: info.display_name,
+                                    percentage,
+                                    reset_time,
+                                    supports_thinking: info.supports_thinking.unwrap_or(false),
+                                    recommended: info.recommended.unwrap_or(false),
+                                });
                             }
-                        };
-                        score(b).cmp(&score(a)).then_with(|| a.name.cmp(&b.name))
-                    });
+                        }
+                        // Sort models: priority to Gemini 3.x / 2.5 Pro, Flash, Claude
+                        models.sort_by(|a, b| {
+                            let score = |m: &ModelQuotaInfo| -> i32 {
+                                let n = m.name.to_lowercase();
+                                if n.contains("gemini-3.1-pro") || n.contains("gemini-3-pro") || n.contains("gemini-2.5-pro") {
+                                    100
+                                } else if n.contains("gemini-3.8-flash") || n.contains("gemini-3-flash") || n.contains("gemini-2.5-flash") {
+                                    90
+                                } else if n.contains("claude-3-5-sonnet") || n.contains("claude-3-7-sonnet") || n.contains("claude-sonnet") {
+                                    80
+                                } else if n.contains("gemini") {
+                                    50
+                                } else if n.contains("claude") {
+                                    40
+                                } else {
+                                    10
+                                }
+                            };
+                            score(b).cmp(&score(a)).then_with(|| a.name.cmp(&b.name))
+                        });
 
-                    quota.models = models;
-                    models_fetched = true;
-                    break;
+                        quota.models = models;
+                        models_fetched = true;
+                        endpoint_succeeded = true;
+                        last_403_reason = None;
+                        break;
+                    }
                 }
+                Err(ureq::Error::Status(403, resp)) => {
+                    // Record reason and continue trying without project_id or next endpoint
+                    last_403_reason = resp.into_string().ok();
+                    continue;
+                }
+                Err(_) => continue,
             }
-            Err(ureq::Error::Status(403, resp)) => {
+        }
+
+        if endpoint_succeeded {
+            break;
+        }
+    }
+
+    // If all model endpoints failed with 403, mark as forbidden if it is a real TOS violation
+    if !models_fetched && last_403_reason.is_some() {
+        if let Some(reason) = &last_403_reason {
+            if reason.contains("TOS_VIOLATION") || reason.contains("violation of Terms of Service") {
                 quota.is_forbidden = true;
-                quota.forbidden_reason = resp.into_string().ok();
+                quota.forbidden_reason = last_403_reason;
                 return Ok(quota);
             }
-            Err(_) => continue,
         }
     }
 
     // 2. Fetch quota summary (5h and weekly buckets)
+    let summary_bodies = if let Some(pid) = project_id.filter(|p| !p.trim().is_empty()) {
+        vec![
+            serde_json::json!({ "project": pid }),
+            serde_json::json!({}),
+        ]
+    } else {
+        vec![serde_json::json!({})]
+    };
+
+    let mut summary_fetched = false;
     for endpoint in QUOTA_SUMMARY_ENDPOINTS {
-        let resp = ureq::post(endpoint)
-            .set("Authorization", &format!("Bearer {}", access_token))
-            .set("Content-Type", "application/json")
-            .set("User-Agent", NATIVE_USER_AGENT)
-            .timeout(Duration::from_secs(10))
-            .send_json(&body);
+        for body in &summary_bodies {
+            let resp = ureq::post(endpoint)
+                .set("Authorization", &format!("Bearer {}", access_token))
+                .set("Content-Type", "application/json")
+                .set("User-Agent", NATIVE_USER_AGENT)
+                .timeout(Duration::from_secs(10))
+                .send_json(body);
 
-        if let Ok(res) = resp {
-            if let Ok(data) = res.into_json::<QuotaSummaryResponse>() {
-                for group in data.groups {
-                    let group_name = group.display_name.unwrap_or_else(|| "General".to_string());
-                    for bucket in group.buckets {
-                        let window = bucket.window.unwrap_or_default();
-                        let fraction = bucket.remaining_fraction.unwrap_or(1.0);
-                        let reset_time = bucket.reset_time.unwrap_or_default();
-                        let display_name = bucket.display_name.unwrap_or_else(|| group_name.clone());
+            if let Ok(res) = resp {
+                if let Ok(data) = res.into_json::<QuotaSummaryResponse>() {
+                    for group in data.groups {
+                        let group_name = group.display_name.unwrap_or_else(|| "General".to_string());
+                        for bucket in group.buckets {
+                            let window = bucket.window.unwrap_or_default();
+                            let fraction = bucket.remaining_fraction.unwrap_or(1.0);
+                            let reset_time = bucket.reset_time.unwrap_or_default();
+                            let display_name = group_name.clone();
 
-                        if window == "5h" && quota.window_5h.is_none() {
-                            quota.window_5h = Some(fraction);
-                        } else if window == "weekly" && quota.window_weekly.is_none() {
-                            quota.window_weekly = Some(fraction);
+                            if window == "5h" && quota.window_5h.is_none() {
+                                quota.window_5h = Some(fraction);
+                            } else if window == "weekly" && quota.window_weekly.is_none() {
+                                quota.window_weekly = Some(fraction);
+                            }
+
+                            quota.quota_groups.push(QuotaGroupInfo {
+                                display_name,
+                                window,
+                                remaining_fraction: fraction,
+                                reset_time,
+                            });
                         }
-
-                        quota.quota_groups.push(QuotaGroupInfo {
-                            display_name,
-                            window,
-                            remaining_fraction: fraction,
-                            reset_time,
-                        });
                     }
+                    summary_fetched = true;
+                    break;
                 }
-                break;
             }
+        }
+        if summary_fetched {
+            break;
+        }
+    }
+
+    // Fallback: If models or quota_groups could not be fetched (e.g. rate limit 429),
+    // retain existing cached quota data instead of wiping them out
+    if let Some(existing) = existing_quota {
+        if quota.models.is_empty() && !existing.models.is_empty() {
+            quota.models = existing.models.clone();
+        }
+        if quota.quota_groups.is_empty() && !existing.quota_groups.is_empty() {
+            quota.quota_groups = existing.quota_groups.clone();
+            if quota.window_5h.is_none() {
+                quota.window_5h = existing.window_5h;
+            }
+            if quota.window_weekly.is_none() {
+                quota.window_weekly = existing.window_weekly;
+            }
+        }
+        if quota.subscription_tier.is_none() {
+            quota.subscription_tier = existing.subscription_tier.clone();
         }
     }
 
@@ -859,10 +988,24 @@ pub fn load_store(app_data: &Path) -> AntigravityStore {
     if !path.exists() {
         return AntigravityStore::default();
     }
-    match std::fs::read_to_string(&path) {
+    let mut store: AntigravityStore = match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => AntigravityStore::default(),
+    };
+    // Auto-heal false 403s caused by previous sandbox domain endpoint bug
+    for acc in &mut store.accounts {
+        if let Some(quota) = &mut acc.quota {
+            if quota.is_forbidden {
+                if let Some(reason) = &quota.forbidden_reason {
+                    if reason.contains("The caller does not have permission") && !reason.contains("TOS_VIOLATION") {
+                        quota.is_forbidden = false;
+                        quota.forbidden_reason = None;
+                    }
+                }
+            }
+        }
     }
+    store
 }
 
 pub fn save_store(app_data: &Path, store: &AntigravityStore) -> Result<(), String> {
@@ -900,7 +1043,7 @@ pub fn build_account_from_refresh_token(
 
     let user_info = fetch_user_info(&access_token)?;
     let (project_id, tier) = fetch_project_and_tier(&access_token);
-    let quota = fetch_quota(&access_token).ok();
+    let quota = fetch_quota(&access_token, project_id.as_deref(), None).ok();
 
     let id = existing_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut account = AntigravityAccount::new(id, user_info.email, access_token, refresh_token.to_string(), expiry_timestamp);
@@ -972,11 +1115,30 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
         acc.name = name;
         acc.project_id = project_id;
         acc.is_active = current_id == Some(acc_id);
-        acc.custom_label = Some("从 Antigravity Manager 导入".to_string());
+        acc.custom_label = detail.get("custom_label").and_then(|v| v.as_str()).map(String::from);
+
+        // Resolve subscription tier from detail.tier or detail.quota.subscription_tier
+        let raw_tier = detail.get("tier").and_then(|v| v.as_str())
+            .or_else(|| detail.get("quota").and_then(|q| q.get("subscription_tier")).and_then(|v| v.as_str()));
+        if let Some(t) = raw_tier {
+            acc.tier = Some(normalize_subscription_tier(t));
+        }
 
         // Parse quota if present
         if let Some(quota_val) = detail.get("quota") {
             let mut quota = AntigravityQuota::default();
+            quota.is_forbidden = quota_val.get("is_forbidden").and_then(|v| v.as_bool()).unwrap_or(false);
+            quota.forbidden_reason = quota_val.get("forbidden_reason").and_then(|v| v.as_str()).map(String::from);
+            if let Some(lu) = quota_val.get("last_updated").and_then(|v| v.as_i64()) {
+                quota.last_updated = lu;
+            }
+            if let Some(st) = quota_val.get("subscription_tier").and_then(|v| v.as_str()) {
+                let norm = normalize_subscription_tier(st);
+                quota.subscription_tier = Some(norm.clone());
+                if acc.tier.is_none() {
+                    acc.tier = Some(norm);
+                }
+            }
             if let Some(models) = quota_val.get("models").and_then(|v| v.as_array()) {
                 for m in models {
                     if let Some(name) = m.get("name").and_then(|v| v.as_str()) {
@@ -1002,12 +1164,73 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
             if let Some(ww) = quota_val.get("window_weekly").and_then(|v| v.as_f64()) {
                 quota.window_weekly = Some(ww);
             }
+            if let Some(groups) = quota_val.get("quota_groups").and_then(|v| v.as_array()) {
+                for g in groups {
+                    let g_name = g.get("display_name").and_then(|v| v.as_str()).unwrap_or("General").to_string();
+                    if let Some(buckets) = g.get("buckets").and_then(|v| v.as_array()) {
+                        for b in buckets {
+                            let window = b.get("window").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let fraction = b.get("remaining_fraction").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                            let reset_time = b.get("reset_time").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let display_name = g_name.clone();
+                            quota.quota_groups.push(QuotaGroupInfo {
+                                display_name,
+                                window,
+                                remaining_fraction: fraction,
+                                reset_time,
+                            });
+                        }
+                    }
+                }
+            }
             acc.quota = Some(quota);
         }
 
         accounts.push(acc);
     }
     Ok(accounts)
+}
+
+/// Toggle account disabled status.
+pub fn toggle_account_disabled(
+    app_data: &Path,
+    store: &mut AntigravityStore,
+    account_id: &str,
+) -> Result<bool, String> {
+    let account = store.get_account_mut(account_id)
+        .ok_or_else(|| format!("Account {} not found", account_id))?;
+    account.disabled = !account.disabled;
+    let new_state = account.disabled;
+    save_store(app_data, store)?;
+    Ok(new_state)
+}
+
+/// Update custom label for an account.
+pub fn update_account_label(
+    app_data: &Path,
+    store: &mut AntigravityStore,
+    account_id: &str,
+    label: Option<String>,
+) -> Result<(), String> {
+    let account = store.get_account_mut(account_id)
+        .ok_or_else(|| format!("Account {} not found", account_id))?;
+    account.custom_label = label;
+    save_store(app_data, store)?;
+    Ok(())
+}
+
+/// Update device profile for an account.
+pub fn update_account_device_profile(
+    app_data: &Path,
+    store: &mut AntigravityStore,
+    account_id: &str,
+    profile: DeviceProfile,
+) -> Result<(), String> {
+    let account = store.get_account_mut(account_id)
+        .ok_or_else(|| format!("Account {} not found", account_id))?;
+    account.device_profile = Some(profile);
+    save_store(app_data, store)?;
+    Ok(())
 }
 
 /// Switch active account: updates Windows Credential Manager, ~/.gemini/oauth_creds.json, and store.
@@ -1017,8 +1240,23 @@ pub fn switch_account(
     store: &mut AntigravityStore,
     account_id: &str,
 ) -> Result<(), String> {
+    switch_account_target(home_dir, app_data, store, account_id, None)
+}
+
+/// Switch active account targeting classic, IDE, or CLI.
+pub fn switch_account_target(
+    home_dir: &Path,
+    app_data: &Path,
+    store: &mut AntigravityStore,
+    account_id: &str,
+    target: Option<&str>,
+) -> Result<(), String> {
     let account = store.get_account_mut(account_id)
         .ok_or_else(|| format!("Account {} not found", account_id))?;
+
+    if account.disabled {
+        return Err("Cannot switch to a disabled account".to_string());
+    }
 
     // Ensure valid token before switching
     ensure_fresh_token(account)?;
@@ -1029,7 +1267,12 @@ pub fn switch_account(
     // 2. Write to ~/.gemini files
     write_file_credentials(home_dir, account)?;
 
-    // 3. Update store state
+    // 3. If target is IDE or classic and device profile exists, write to storage.json
+    if let Some(ref profile) = account.device_profile {
+        let _ = write_device_profile_to_storage(target, profile);
+    }
+
+    // 4. Update store state
     for acc in &mut store.accounts {
         acc.is_active = acc.id == account_id;
         if acc.is_active {
@@ -1039,7 +1282,42 @@ pub fn switch_account(
     store.active_account_id = Some(account_id.to_string());
 
     save_store(app_data, store)?;
-    info!("Successfully switched active Antigravity account to {}", account_id);
+    info!("Successfully switched active Antigravity account to {} (target: {:?})", account_id, target);
+    Ok(())
+}
+
+/// Write device profile to VS Code / Antigravity IDE storage.json if present.
+pub fn write_device_profile_to_storage(target: Option<&str>, profile: &DeviceProfile) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = match std::env::var("APPDATA") {
+            Ok(v) => v,
+            Err(_) => return Ok(()),
+        };
+        let folder = if target == Some("ide") { "Antigravity IDE" } else { "Antigravity" };
+        let storage_path = PathBuf::from(&appdata)
+            .join(folder)
+            .join("User")
+            .join("globalStorage")
+            .join("storage.json");
+
+        if storage_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&storage_path) {
+                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(map) = val.as_object_mut() {
+                        map.insert("telemetry.machineId".to_string(), serde_json::Value::String(profile.machine_id.clone()));
+                        map.insert("telemetry.macMachineId".to_string(), serde_json::Value::String(profile.mac_machine_id.clone()));
+                        map.insert("telemetry.devDeviceId".to_string(), serde_json::Value::String(profile.dev_device_id.clone()));
+                        map.insert("telemetry.sqmId".to_string(), serde_json::Value::String(profile.sqm_id.clone()));
+                        map.insert("storage.serviceMachineId".to_string(), serde_json::Value::String(profile.dev_device_id.clone()));
+                        if let Ok(pretty) = serde_json::to_string_pretty(&val) {
+                            let _ = std::fs::write(&storage_path, pretty);
+                        }
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1206,6 +1484,362 @@ pub fn open_browser(url: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Antigravity Session Management (CLI + IDE/App)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AntigravitySessionMeta {
+    pub session_id: String,
+    pub source: String, // "cli" or "app"
+    pub title: String,
+    pub preview: String,
+    pub project_dir: Option<String>,
+    pub last_active_at: Option<i64>,
+    pub step_count: usize,
+    pub source_path: String,
+    pub resume_command: Option<String>,
+}
+
+impl From<AntigravitySessionMeta> for crate::session::SessionMeta {
+    fn from(s: AntigravitySessionMeta) -> Self {
+        Self {
+            provider_id: format!("antigravity:{}", s.source),
+            session_id: s.session_id,
+            title: Some(s.title),
+            summary: Some(s.preview),
+            project_dir: s.project_dir,
+            created_at: s.last_active_at,
+            last_active_at: s.last_active_at,
+            source_path: s.source_path,
+            resume_command: s.resume_command,
+        }
+    }
+}
+
+/// Strip formatting and tags from Antigravity user input / prompts.
+pub fn clean_antigravity_snippet(raw: &str) -> String {
+    let mut text = raw.trim();
+    if let Some(start) = text.find("<USER_REQUEST>") {
+        if let Some(end) = text[start..].find("</USER_REQUEST>") {
+            text = text[start + "<USER_REQUEST>".len()..start + end].trim();
+        }
+    }
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('<'))
+        .collect();
+    if lines.is_empty() {
+        text.chars().take(100).collect()
+    } else {
+        lines.join(" ").chars().take(100).collect()
+    }
+}
+
+/// Scan Antigravity sessions from both ~/.gemini/antigravity-cli and ~/.gemini/antigravity-ide.
+pub fn scan_antigravity_sessions(home: &Path, limit: usize) -> Vec<AntigravitySessionMeta> {
+    let mut sessions = vec![];
+    let gemini_dir = home.join(".gemini");
+    if !gemini_dir.is_dir() {
+        return sessions;
+    }
+
+    // 1. Scan Antigravity CLI sessions
+    let cli_dir = gemini_dir.join("antigravity-cli");
+    if cli_dir.is_dir() {
+        scan_cli_sessions(&cli_dir, &mut sessions);
+    }
+
+    // 2. Scan Antigravity IDE / App sessions
+    let ide_dir = gemini_dir.join("antigravity-ide");
+    if ide_dir.is_dir() {
+        scan_ide_sessions(&ide_dir, &mut sessions);
+    }
+
+    // Sort descending by last_active_at
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
+    sessions.truncate(limit);
+    sessions
+}
+
+fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
+    use std::collections::HashMap;
+    use std::io::BufRead;
+
+    // A map from conversationId -> (timestamp, workspace, display_prompt)
+    let mut history_map: HashMap<String, (Option<i64>, Option<String>, String)> = HashMap::new();
+    let history_file = cli_dir.join("history.jsonl");
+    if let Ok(file) = std::fs::File::open(&history_file) {
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines().map_while(Result::ok) {
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let cid = val.get("conversationId").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if cid.is_empty() {
+                continue;
+            }
+            let ts = val.get("timestamp").and_then(|v| v.as_i64());
+            let ws = val.get("workspace").and_then(|v| v.as_str()).map(String::from);
+            let display = val.get("display").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if let Some(entry) = history_map.get_mut(cid) {
+                if ts.is_some() && (entry.0.is_none() || ts > entry.0) {
+                    entry.0 = ts;
+                }
+                if ws.is_some() {
+                    entry.1 = ws;
+                }
+                if !display.is_empty() {
+                    entry.2 = display.to_string();
+                }
+            } else {
+                history_map.insert(cid.to_string(), (ts, ws, display.to_string()));
+            }
+        }
+    }
+
+    // Scan brain directory
+    let brain_dir = cli_dir.join("brain");
+    if let Ok(entries) = std::fs::read_dir(&brain_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let cid = entry.file_name().to_string_lossy().to_string();
+            // Check if valid session directory
+            let transcript_path = path.join(".system_generated").join("logs").join("transcript.jsonl");
+            let source_path = if transcript_path.is_file() {
+                transcript_path
+            } else {
+                path.clone()
+            };
+
+            let (mut ts, ws, prompt) = history_map
+                .remove(&cid)
+                .unwrap_or_else(|| (None, None, String::new()));
+
+            let mut title = if !prompt.is_empty() {
+                clean_antigravity_snippet(&prompt)
+            } else {
+                String::new()
+            };
+
+            // If prompt was empty, inspect the first line of transcript
+            if title.is_empty() && source_path.is_file() {
+                if let Ok(first_line) = std::fs::read_to_string(&source_path) {
+                    if let Some(line) = first_line.lines().next() {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                            if let Some(content) = val.get("content").and_then(|c| c.as_str()) {
+                                title = clean_antigravity_snippet(content);
+                            }
+                            if ts.is_none() {
+                                if let Some(created_at) = val.get("created_at").and_then(|c| c.as_str()) {
+                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
+                                        ts = Some(dt.timestamp_millis());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback timestamp: directory mtime
+            if ts.is_none() {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(mtime) = meta.modified() {
+                        let duration = mtime
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default();
+                        ts = Some(duration.as_millis() as i64);
+                    }
+                }
+            }
+
+            if title.is_empty() {
+                title = format!("CLI Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid });
+            }
+
+            let preview = title.clone();
+            out.push(AntigravitySessionMeta {
+                session_id: cid.clone(),
+                source: "cli".into(),
+                title,
+                preview,
+                project_dir: ws,
+                last_active_at: ts,
+                step_count: 0,
+                source_path: source_path.to_string_lossy().to_string(),
+                resume_command: Some(format!("agy resume {cid}")),
+            });
+        }
+    }
+
+    // Any remaining items in history_map without brain folder
+    for (cid, (ts, ws, display)) in history_map {
+        let title = if !display.is_empty() {
+            clean_antigravity_snippet(&display)
+        } else {
+            format!("CLI Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid })
+        };
+        let preview = title.clone();
+        let db_path = cli_dir.join("conversations").join(format!("{cid}.db"));
+        out.push(AntigravitySessionMeta {
+            session_id: cid.clone(),
+            source: "cli".into(),
+            title,
+            preview,
+            project_dir: ws,
+            last_active_at: ts,
+            step_count: 0,
+            source_path: db_path.to_string_lossy().to_string(),
+            resume_command: Some(format!("agy resume {cid}")),
+        });
+    }
+}
+
+fn scan_ide_sessions(ide_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
+    let conv_dir = ide_dir.join("conversations");
+    let brain_dir = ide_dir.join("brain");
+
+    if let Ok(entries) = std::fs::read_dir(&conv_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("pb") {
+                continue;
+            }
+            let cid = entry
+                .path()
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if cid.is_empty() {
+                continue;
+            }
+
+            let mut ts = None;
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    let duration = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default();
+                    ts = Some(duration.as_millis() as i64);
+                }
+            }
+
+            // Check if there is overview or logs in brain/<cid>
+            let brain_session = brain_dir.join(&cid);
+            let overview_path = brain_session.join(".system_generated").join("logs").join("overview.txt");
+            let transcript_path = brain_session.join(".system_generated").join("logs").join("transcript.jsonl");
+            let task_path = brain_session.join("task.md");
+            let plan_path = brain_session.join("implementation_plan.md");
+
+            let mut title = String::new();
+            let mut ws = None;
+            let mut source_path = path.clone();
+
+            if overview_path.is_file() {
+                source_path = overview_path.clone();
+                if let Ok(file_content) = std::fs::read_to_string(&overview_path) {
+                    if let Some(first_line) = file_content.lines().next() {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(first_line) {
+                            if let Some(c) = val.get("content").and_then(|c| c.as_str()) {
+                                title = clean_antigravity_snippet(c);
+                                if let Some(idx) = c.find("Active Document:") {
+                                    let doc_line = c[idx + 16..].lines().next().unwrap_or("").trim();
+                                    if let Some(dir) = std::path::Path::new(doc_line).parent() {
+                                        ws = Some(dir.to_string_lossy().to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if transcript_path.is_file() {
+                source_path = transcript_path.clone();
+                if let Ok(file_content) = std::fs::read_to_string(&transcript_path) {
+                    if let Some(first_line) = file_content.lines().next() {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(first_line) {
+                            if let Some(c) = val.get("content").and_then(|c| c.as_str()) {
+                                title = clean_antigravity_snippet(c);
+                            }
+                        }
+                    }
+                }
+            } else if task_path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&task_path) {
+                    title = content
+                        .lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty() && !l.starts_with("<!--"))
+                        .map(|l| l.trim_start_matches('#').trim().to_string())
+                        .unwrap_or_default();
+                }
+            } else if plan_path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&plan_path) {
+                    title = content
+                        .lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty() && !l.starts_with("<!--"))
+                        .map(|l| l.trim_start_matches('#').trim().to_string())
+                        .unwrap_or_default();
+                }
+            }
+
+            if title.is_empty() {
+                title = format!("App Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid });
+            }
+
+            let preview = title.clone();
+            out.push(AntigravitySessionMeta {
+                session_id: cid,
+                source: "app".into(),
+                title,
+                preview,
+                project_dir: ws,
+                last_active_at: ts,
+                step_count: 0,
+                source_path: source_path.to_string_lossy().to_string(),
+                resume_command: None,
+            });
+        }
+    }
+}
+
+pub fn delete_antigravity_session(home: &Path, session: &AntigravitySessionMeta) -> Result<(), String> {
+    let gemini_dir = home.join(".gemini");
+    if session.source == "cli" {
+        let cli_dir = gemini_dir.join("antigravity-cli");
+        let brain_path = cli_dir.join("brain").join(&session.session_id);
+        if brain_path.exists() {
+            let _ = std::fs::remove_dir_all(&brain_path);
+        }
+        let conv_path = cli_dir.join("conversations").join(format!("{}.db", session.session_id));
+        if conv_path.exists() {
+            let _ = std::fs::remove_file(&conv_path);
+        }
+        Ok(())
+    } else {
+        let ide_dir = gemini_dir.join("antigravity-ide");
+        let brain_path = ide_dir.join("brain").join(&session.session_id);
+        if brain_path.exists() {
+            let _ = std::fs::remove_dir_all(&brain_path);
+        }
+        let conv_path = ide_dir.join("conversations").join(format!("{}.pb", session.session_id));
+        if conv_path.exists() {
+            let _ = std::fs::remove_file(&conv_path);
+        }
+        let annot_path = ide_dir.join("annotations").join(format!("{}.pbtxt", session.session_id));
+        if annot_path.exists() {
+            let _ = std::fs::remove_file(&annot_path);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1310,5 +1944,105 @@ mod tests {
         assert!(store.remove_account("id-2"));
         assert_eq!(store.accounts.len(), 1);
         assert_eq!(store.active_account_id.as_deref(), Some("id-1"));
+    }
+
+    #[test]
+    fn test_import_from_antigravity_manager_preserves_quota() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join(".antigravity_tools");
+        std::fs::create_dir_all(base.join("accounts")).unwrap();
+
+        let accounts_index = serde_json::json!({
+            "version": "2.0",
+            "current_account_id": "acc-1",
+            "accounts": [
+                { "id": "acc-1", "email": "pro@example.com" }
+            ]
+        });
+        std::fs::write(base.join("accounts.json"), accounts_index.to_string()).unwrap();
+
+        let detail = serde_json::json!({
+            "email": "pro@example.com",
+            "token": {
+                "access_token": "at",
+                "refresh_token": "rt",
+                "expiry_timestamp": 1800000000,
+                "project_id": "p-1"
+            },
+            "quota": {
+                "is_forbidden": false,
+                "subscription_tier": "PRO",
+                "models": [
+                    {
+                        "name": "gemini-3.8-flash",
+                        "percentage": 95,
+                        "reset_time": "2026-09-21T07:23:40Z"
+                    }
+                ],
+                "quota_groups": [
+                    {
+                        "display_name": "Gemini Models",
+                        "buckets": [
+                            {
+                                "window": "5h",
+                                "remaining_fraction": 0.95,
+                                "reset_time": "2026-09-21T07:23:40Z"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        std::fs::write(base.join("accounts").join("acc-1.json"), detail.to_string()).unwrap();
+
+        let imported = import_from_antigravity_manager(temp.path()).unwrap();
+        assert_eq!(imported.len(), 1);
+        let acc = &imported[0];
+        assert_eq!(acc.email, "pro@example.com");
+        assert_eq!(acc.tier.as_deref(), Some("PRO"));
+        let q = acc.quota.as_ref().unwrap();
+        assert!(!q.is_forbidden);
+        assert_eq!(q.models.len(), 1);
+        assert_eq!(q.models[0].percentage, 95);
+        assert_eq!(q.models[0].reset_time, "2026-09-21T07:23:40Z");
+        assert_eq!(q.quota_groups.len(), 1);
+        assert_eq!(q.quota_groups[0].window, "5h");
+        assert_eq!(q.quota_groups[0].reset_time, "2026-09-21T07:23:40Z");
+    }
+
+    #[test]
+    fn test_scan_antigravity_sessions_mock() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let cli_dir = home.join(".gemini").join("antigravity-cli");
+        let ide_dir = home.join(".gemini").join("antigravity-ide");
+        std::fs::create_dir_all(cli_dir.join("brain").join("cli-sess-1").join(".system_generated").join("logs")).unwrap();
+        std::fs::create_dir_all(ide_dir.join("conversations")).unwrap();
+
+        // Write history.jsonl
+        let history_line = r#"{"conversationId":"cli-sess-1","display":"CLI prompt test","timestamp":1700000000000,"workspace":"/test/project"}"#;
+        std::fs::write(cli_dir.join("history.jsonl"), format!("{history_line}\n")).unwrap();
+
+        // Write transcript.jsonl
+        let transcript = r#"{"type":"USER_INPUT","content":"<USER_REQUEST>\nCLI prompt test\n</USER_REQUEST>"}"#;
+        std::fs::write(
+            cli_dir.join("brain").join("cli-sess-1").join(".system_generated").join("logs").join("transcript.jsonl"),
+            transcript,
+        ).unwrap();
+
+        // Write IDE .pb
+        std::fs::write(ide_dir.join("conversations").join("ide-sess-1.pb"), b"mock").unwrap();
+
+        let sessions = scan_antigravity_sessions(home, 10);
+        assert_eq!(sessions.len(), 2);
+        let cli_sess = sessions.iter().find(|s| s.source == "cli").unwrap();
+        assert_eq!(cli_sess.session_id, "cli-sess-1");
+        assert_eq!(cli_sess.title, "CLI prompt test");
+        assert_eq!(cli_sess.project_dir.as_deref(), Some("/test/project"));
+        assert_eq!(cli_sess.resume_command.as_deref(), Some("agy resume cli-sess-1"));
+
+        let ide_sess = sessions.iter().find(|s| s.source == "app").unwrap();
+        assert_eq!(ide_sess.session_id, "ide-sess-1");
+        assert!(ide_sess.title.contains("ide-sess"));
     }
 }

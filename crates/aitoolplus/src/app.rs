@@ -27,6 +27,19 @@ pub fn get_window_hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundati
     }
 }
 
+/// Trims the process working set memory on Windows, releasing idle pages to the OS (parity with flyclip).
+#[cfg(windows)]
+pub fn trim_working_set() {
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+        let process = GetCurrentProcess();
+        let _ = SetProcessWorkingSetSize(process, usize::MAX, usize::MAX);
+    }
+}
+
+#[cfg(not(windows))]
+pub fn trim_working_set() {}
+
 pub fn hide_window_to_tray(window: &gpui::Window) {
     #[cfg(windows)]
     {
@@ -35,10 +48,12 @@ pub fn hide_window_to_tray(window: &gpui::Window) {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
+            trim_working_set();
             return;
         }
     }
     window.minimize_window();
+    trim_working_set();
 }
 
 pub fn restore_window_from_tray(window: &gpui::Window) {
@@ -99,13 +114,17 @@ impl App {
                 {
                     std::env::set_var("HTTP_PROXY", &settings.proxy_url);
                     std::env::set_var("HTTPS_PROXY", &settings.proxy_url);
+                    std::env::remove_var("AITOOLPLUS_PROXY_MODE");
                 }
                 aitoolplus_core::settings::ProxyMode::Direct => {
                     std::env::remove_var("HTTP_PROXY");
                     std::env::remove_var("HTTPS_PROXY");
                     std::env::remove_var("ALL_PROXY");
+                    std::env::set_var("AITOOLPLUS_PROXY_MODE", "direct");
                 }
-                _ => {}
+                _ => {
+                    std::env::remove_var("AITOOLPLUS_PROXY_MODE");
+                }
             }
             std::env::set_var(
                 "AITOOLPLUS_CODEX_PRESERVE_AUTH",
@@ -272,6 +291,13 @@ pub fn open_main_window(
                 .unwrap_or(false);
             if minimize {
                 hide_window_to_tray(window);
+                cx.spawn(async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(600))
+                        .await;
+                    trim_working_set();
+                })
+                .detach();
                 false
             } else {
                 crate::app::request_quit();
@@ -285,6 +311,13 @@ pub fn open_main_window(
 
     if start_minimized {
         let _ = handle.update(cx, |_, window, _| hide_window_to_tray(window));
+        cx.spawn(async move |cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(800))
+                .await;
+            trim_working_set();
+        })
+        .detach();
     }
     Ok(handle)
 }
@@ -297,5 +330,10 @@ mod tests {
     fn test_request_quit() {
         request_quit();
         assert!(ALLOW_WINDOW_CLOSE.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_trim_working_set() {
+        trim_working_set();
     }
 }

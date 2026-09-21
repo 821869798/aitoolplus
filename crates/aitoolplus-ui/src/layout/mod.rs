@@ -16,52 +16,17 @@ impl Workspace {
         let brand = div()
             .id("sidebar-brand")
             .h(px(54.0))
-            .px(px(16.0))
             .flex()
             .items_center()
-            .gap(px(10.0))
+            .px(px(20.0))
             .border_b_1()
             .border_color(t.sidebar_border)
             .child(
                 div()
-                    .size(px(28.0))
-                    .rounded(px(8.0))
-                    .bg(t.accent)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .shadow_xs()
-                    .child(
-                        gpui::svg()
-                            .data(crate::icons::SPARKLES_SVG)
-                            .size(px(15.0))
-                            .text_color(crate::rgba_const(0xffffffff))
-                            .flex_none(),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        div()
-                            .text_size(px(15.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(t.text_primary)
-                            .child("AI ToolPlus"),
-                    )
-                    .child(
-                        div()
-                            .px(px(5.0))
-                            .py(px(1.5))
-                            .rounded(px(4.0))
-                            .bg(t.accent_subtle)
-                            .text_size(px(10.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(t.accent)
-                            .child("PRO"),
-                    ),
+                    .text_size(px(16.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(t.text_primary)
+                    .child("AI ToolPlus"),
             );
 
         // 2. Scrollable Navigation List
@@ -150,25 +115,11 @@ impl Workspace {
         let is_active = self.page == page;
 
         let (icon_svg, label): (&'static [u8], SharedString) = match page {
-            Page::Tool(tool) => match tool {
-                aitoolplus_core::ToolId::ClaudeCode | aitoolplus_core::ToolId::ClaudeDesktop => {
-                    (crate::icons::CLAUDE_SVG, i.t(tool.name_zh(), tool.name_en()))
-                }
-                aitoolplus_core::ToolId::Codex => {
-                    (crate::icons::OPENAI_SVG, i.t(tool.name_zh(), tool.name_en()))
-                }
-                aitoolplus_core::ToolId::Grok => {
-                    (crate::icons::GROK_SVG, i.t(tool.name_zh(), tool.name_en()))
-                }
-                aitoolplus_core::ToolId::Kimi => {
-                    (crate::icons::KIMI_SVG, i.t(tool.name_zh(), tool.name_en()))
-                }
-                _ => (crate::icons::TERMINAL_SVG, i.t(tool.name_zh(), tool.name_en())),
-            },
+            Page::Tool(tool) => (crate::icons::tool_icon(tool), i.t(tool.name_zh(), tool.name_en())),
             Page::Mcp => (crate::icons::MCP_SVG, i.t("MCP 服务器", "MCP Servers")),
             Page::Skills => (crate::icons::SPARKLES_SVG, i.t("Skills 技能", "Skills")),
             Page::Sessions => (crate::icons::HISTORY_SVG, i.t("会话管理", "Sessions")),
-            Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("Antigravity 账号", "Antigravity")),
+            Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("Antigravity", "Antigravity")),
             Page::Settings => (crate::icons::SETTINGS_SVG, i.t("系统设置", "Settings")),
         };
 
@@ -244,10 +195,25 @@ impl Workspace {
                 i.t("会话管理", "Sessions"),
                 i.t("浏览、恢复与导出各 CLI 工具的历史对话会话", "Browse and export CLI chat sessions"),
             ),
-            Page::Antigravity => (
-                i.t("Antigravity 账号管理", "Antigravity Accounts"),
-                i.t("Google / Antigravity 账号配额监控与一键凭据无缝切换", "Account quota inspection and seamless credential switching"),
-            ),
+            Page::Antigravity => {
+                if self.ui.antigravity_tab == crate::pages::AntigravityPageTab::Sessions {
+                    (
+                        i.t("Antigravity 会话管理", "Antigravity Sessions"),
+                        i.t(
+                            "Google / Antigravity CLI 与桌面 App 历史会话查看、恢复与管理",
+                            "Browse, resume, and manage Antigravity CLI & App chat sessions",
+                        ),
+                    )
+                } else {
+                    (
+                        i.t("Antigravity 账号管理", "Antigravity Accounts"),
+                        i.t(
+                            "Google / Antigravity 账号配额监控与一键凭据无缝切换",
+                            "Account quota inspection and seamless credential switching",
+                        ),
+                    )
+                }
+            }
             Page::Settings => (
                 i.t("系统设置", "Settings"),
                 i.t("个性化偏好、CLI 根目录与自动备份管理", "Preferences, paths & backups"),

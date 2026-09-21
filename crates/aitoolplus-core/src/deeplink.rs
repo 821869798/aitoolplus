@@ -10,7 +10,9 @@ use url::Url;
 use crate::providers::ProviderRecord;
 use crate::tools::ToolId;
 
-pub const SCHEME: &str = "aitoolbox";
+pub const SCHEMES: &[&str] = &["aitoolplus", "aitoolbox", "ccswitch"];
+pub const PRIMARY_SCHEME: &str = "aitoolplus";
+pub const SCHEME: &str = PRIMARY_SCHEME;
 pub const VERSION: &str = "v1";
 pub const IMPORT_PATH: &str = "/import";
 
@@ -31,8 +33,8 @@ pub struct DeepLinkImport {
 
 pub fn parse(raw: &str) -> Result<DeepLinkImport, String> {
     let url = Url::parse(raw).map_err(|e| format!("invalid deep link: {e}"))?;
-    if url.scheme() != SCHEME {
-        return Err(format!("expected {SCHEME} scheme"));
+    if !SCHEMES.contains(&url.scheme()) {
+        return Err(format!("expected supported scheme ({})", SCHEMES.join(", ")));
     }
     if url.host_str() != Some(VERSION) {
         return Err(format!("unsupported deep-link version; expected {VERSION}"));
@@ -54,17 +56,33 @@ pub fn parse(raw: &str) -> Result<DeepLinkImport, String> {
         return Err("endpoints parameter is unsupported in v1".into());
     }
     let app = params.get("app").map(String::as_str).unwrap_or("");
-    let tool = match app {
-        "claude" | "claudecode" | "claude_code" => ToolId::ClaudeCode,
-        "codex" => ToolId::Codex,
-        "gemini" | "geminicli" | "gemini_cli" => ToolId::GeminiCli,
-        other => return Err(format!("unsupported deep-link app: {other}")),
-    };
+    let tool = ToolId::from_key(app)
+        .or_else(|| match app.to_ascii_lowercase().as_str() {
+            "claude" | "claudecode" | "claude_code" => Some(ToolId::ClaudeCode),
+            "codex" => Some(ToolId::Codex),
+            "gemini" | "geminicli" | "gemini_cli" => Some(ToolId::GeminiCli),
+            "grok" => Some(ToolId::Grok),
+            "kimi" => Some(ToolId::Kimi),
+            "opencode" | "open_code" => Some(ToolId::OpenCode),
+            "openclaw" | "open_claw" => Some(ToolId::OpenClaw),
+            "pi" => Some(ToolId::Pi),
+            "oh_my_pi" | "omp" | "ohmypi" => Some(ToolId::OhMyPi),
+            "claude_desktop" | "claudedesktop" => Some(ToolId::ClaudeDesktop),
+            "hermes" => Some(ToolId::Hermes),
+            "dsh" | "deepseek_harness" | "deepseek" => Some(ToolId::Dsh),
+            _ => None,
+        })
+        .ok_or_else(|| format!("unsupported deep-link app: {app}"))?;
+
     let name = required(&params, "name")?;
     let category = normalize_category(params.get("category").map(String::as_str));
     let base_url = optional(&params, "baseUrl")
+        .or_else(|| optional(&params, "endpoint"))
         .map(|value| validate_http_url(&value, "baseUrl"))
         .transpose()?;
+    let api_key = optional(&params, "apiKey")
+        .or_else(|| optional(&params, "key"))
+        .or_else(|| optional(&params, "token"));
     let homepage = optional(&params, "homepage")
         .map(|value| validate_http_url(&value, "homepage"))
         .transpose()?;
@@ -78,7 +96,7 @@ pub fn parse(raw: &str) -> Result<DeepLinkImport, String> {
         tool,
         name,
         category,
-        api_key: optional(&params, "apiKey"),
+        api_key,
         base_url,
         model: optional(&params, "model"),
         homepage,
@@ -89,7 +107,7 @@ pub fn parse(raw: &str) -> Result<DeepLinkImport, String> {
 }
 
 pub fn into_provider(request: DeepLinkImport) -> Result<ProviderRecord, String> {
-    let mut record = ProviderRecord::new(request.name, request.category);
+    let mut record = ProviderRecord::new(request.name.clone(), request.category);
     record.website_url = request.homepage;
     record.notes = request.notes;
     let settings = match request.tool {
@@ -124,7 +142,7 @@ pub fn into_provider(request: DeepLinkImport) -> Result<ProviderRecord, String> 
             } else {
                 let base = request
                     .base_url
-                    .ok_or("Codex deep link requires baseUrl or config")?;
+                    .ok_or("Codex deep link requires baseUrl or endpoint or config")?;
                 let model = request.model.unwrap_or_else(|| "gpt-5-codex".into());
                 let key = request.api_key.unwrap_or_default().replace('"', "\\\"");
                 serde_json::json!({"toml": format!(
@@ -156,7 +174,73 @@ pub fn into_provider(request: DeepLinkImport) -> Result<ProviderRecord, String> 
                 })
             }
         }
-        _ => return Err("unsupported deep-link tool".into()),
+        ToolId::Grok => {
+            serde_json::json!({
+                "base_url": request.base_url.unwrap_or_else(|| "https://api.x.ai/v1".into()),
+                "api_key": request.api_key.unwrap_or_default(),
+                "model": request.model.unwrap_or_else(|| "grok-4".into()),
+            })
+        }
+        ToolId::Kimi => {
+            serde_json::json!({
+                "base_url": request.base_url.unwrap_or_else(|| "https://api.moonshot.cn/v1".into()),
+                "api_key": request.api_key.unwrap_or_default(),
+                "model": request.model.unwrap_or_else(|| "kimi-k2".into()),
+            })
+        }
+        ToolId::OpenCode => {
+            serde_json::json!({
+                "provider": "custom",
+                "base_url": request.base_url.unwrap_or_else(|| "https://api.example.com/v1".into()),
+                "api_key": request.api_key.unwrap_or_default(),
+                "model": request.model.unwrap_or_else(|| "claude-sonnet-4".into()),
+            })
+        }
+        ToolId::OpenClaw => {
+            serde_json::json!({
+                "base_url": request.base_url.unwrap_or_else(|| "https://api.example.com/v1".into()),
+                "api_key": request.api_key.unwrap_or_default(),
+                "model": request.model.unwrap_or_else(|| "gpt-4o".into()),
+            })
+        }
+        ToolId::Pi => {
+            let model_name = request.model.unwrap_or_else(|| "default-model".into());
+            serde_json::json!({
+                "name": request.name,
+                "baseUrl": request.base_url.unwrap_or_else(|| "https://api.example.com/v1".into()),
+                "apiKey": request.api_key.unwrap_or_default(),
+                "models": [{"id": model_name.clone(), "name": model_name}]
+            })
+        }
+        ToolId::OhMyPi => {
+            serde_json::json!({
+                "name": request.name,
+                "baseUrl": request.base_url.unwrap_or_else(|| "https://api.example.com/v1".into()),
+            })
+        }
+        ToolId::ClaudeDesktop => {
+            serde_json::json!({
+                "inferenceGatewayBaseUrl": request.base_url.unwrap_or_else(|| "https://api.example.com".into()),
+                "inferenceModels": [request.model.unwrap_or_else(|| "default-model".into())]
+            })
+        }
+        ToolId::Hermes => {
+            serde_json::json!({
+                "name": request.name,
+                "base_url": request.base_url.unwrap_or_else(|| "https://api.example.com/v1".into()),
+                "api_key": request.api_key.unwrap_or_default(),
+                "model": request.model.unwrap_or_else(|| "model-1".into()),
+            })
+        }
+        ToolId::Dsh => {
+            serde_json::json!({
+                "name": request.name,
+                "baseUrl": request.base_url.unwrap_or_else(|| "https://api.example.com/v1".into()),
+                "apiKeyEnv": "API_KEY",
+                "apiKey": request.api_key.unwrap_or_default(),
+                "defaultModel": request.model.unwrap_or_else(|| "model-1".into()),
+            })
+        }
     };
     record.settings_config = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     Ok(record)
@@ -264,7 +348,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_and_build_three_tools() {
+    fn parse_and_build_multi_scheme() {
         let claude = parse("aitoolbox://v1/import?resource=provider&app=claude&name=Relay&category=custom&apiKey=secret&baseUrl=https%3A%2F%2Fa.example&model=m1").unwrap();
         let provider = into_provider(claude).unwrap();
         assert_eq!(
@@ -273,7 +357,7 @@ mod tests {
         );
         assert_eq!(provider.settings()["env"]["ANTHROPIC_AUTH_TOKEN"], "secret");
 
-        let codex = parse("aitoolbox://v1/import?resource=provider&app=codex&name=C&baseUrl=https%3A%2F%2Fc.example%2Fv1&apiKey=k&model=gpt-5").unwrap();
+        let codex = parse("aitoolplus://v1/import?resource=provider&app=codex&name=C&baseUrl=https%3A%2F%2Fc.example%2Fv1&apiKey=k&model=gpt-5").unwrap();
         let provider = into_provider(codex).unwrap();
         assert!(
             provider.settings()["toml"]
@@ -282,12 +366,15 @@ mod tests {
                 .contains("base_url = \"https://c.example/v1\"")
         );
 
-        let gemini = parse("aitoolbox://v1/import?resource=provider&app=gemini&name=G&apiKey=k&baseUrl=https%3A%2F%2Fg.example").unwrap();
-        let provider = into_provider(gemini).unwrap();
-        assert_eq!(
-            provider.settings()["security"]["auth"]["selectedType"],
-            "gemini-api-key"
-        );
+        let pi = parse("aitoolplus://v1/import?resource=provider&app=pi&name=PiTest&endpoint=https%3A%2F%2Fpi.example%2Fv1&apiKey=pi-sec&model=pi-3").unwrap();
+        let provider = into_provider(pi).unwrap();
+        assert_eq!(provider.settings()["baseUrl"], "https://pi.example/v1");
+        assert_eq!(provider.settings()["apiKey"], "pi-sec");
+
+        let grok = parse("ccswitch://v1/import?resource=provider&app=grok&name=GrokX&endpoint=https%3A%2F%2Fapi.x.ai%2Fv1&apiKey=x-sec").unwrap();
+        let provider = into_provider(grok).unwrap();
+        assert_eq!(provider.settings()["base_url"], "https://api.x.ai/v1");
+        assert_eq!(provider.settings()["api_key"], "x-sec");
     }
 
     #[test]
@@ -295,22 +382,22 @@ mod tests {
         let encoded =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"env":{"A":"B"}}"#);
         let request = parse(&format!(
-            "aitoolbox://v1/import?resource=provider&app=claude&name=X&config={encoded}"
+            "aitoolplus://v1/import?resource=provider&app=claude&name=X&config={encoded}"
         ))
         .unwrap();
         assert_eq!(request.config.as_deref(), Some(r#"{"env":{"A":"B"}}"#));
-        assert!(parse("aitoolbox://v2/import?resource=provider&app=codex&name=X").is_err());
-        assert!(parse("aitoolbox://v1/import?resource=mcp&app=codex&name=X").is_err());
-        assert!(parse("aitoolbox://v1/import?resource=provider&app=grok&name=X").is_err());
+        assert!(parse("aitoolplus://v2/import?resource=provider&app=codex&name=X").is_err());
+        assert!(parse("aitoolplus://v1/import?resource=mcp&app=codex&name=X").is_err());
+        assert!(parse("aitoolplus://v1/import?resource=provider&app=unknown_app&name=X").is_err());
         assert!(
-            parse("aitoolbox://v1/import?resource=provider&app=codex&name=X&baseUrl=ftp%3A%2F%2Fx")
+            parse("aitoolplus://v1/import?resource=provider&app=codex&name=X&baseUrl=ftp%3A%2F%2Fx")
                 .is_err()
         );
     }
 
     #[test]
     fn redaction_and_store_dedup() {
-        let raw = "aitoolbox://v1/import?resource=provider&app=claude&name=X&apiKey=secret&baseUrl=https%3A%2F%2Fx.example";
+        let raw = "aitoolplus://v1/import?resource=provider&app=claude&name=X&apiKey=secret&baseUrl=https%3A%2F%2Fx.example";
         let redacted = redact(raw);
         assert!(!redacted.contains("secret"));
         assert!(redacted.contains("%3Credacted%3E") || redacted.contains("%3credacted%3e"));

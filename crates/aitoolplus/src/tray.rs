@@ -204,50 +204,52 @@ pub fn init_tray(initial_groups: ToolGroupSnapshot, cx: &mut GpuiApp) -> TrayMen
 fn build_menu(groups: &ToolGroupSnapshot) -> Result<muda::Menu, String> {
     let menu = muda::Menu::new();
     let open = muda::MenuItem::with_id("app:open", "打开 AI ToolPlus / Open", true, None);
-    let quit = muda::MenuItem::with_id("app:quit", "退出 / Quit", true, None);
-    let separator = muda::PredefinedMenuItem::separator();
-    menu.append_items(&[&open, &quit, &separator])
-        .map_err(|e| e.to_string())?;
+    menu.append(&open).map_err(|e| e.to_string())?;
 
-    if groups.is_empty() {
-        return Ok(menu);
-    }
-
-    let header = muda::MenuItem::new("供应商 / Providers", false, None);
-    let header_sep = muda::PredefinedMenuItem::separator();
-    menu.append_items(&[&header, &header_sep])
-        .map_err(|e| e.to_string())?;
-
-    // preserve insertion order of tools
-    let mut order: Vec<&'static str> = vec![];
-    for (tool, _, _, _) in groups.iter() {
-        if !order.contains(tool) {
-            order.push(tool);
-        }
-    }
-    for tool in order {
-        // collect this tool's menu items
-        let items: Vec<muda::MenuItem> = groups
-            .iter()
-            .filter(|(t, _, _, _)| t == &tool)
-            .map(|(_, id, name, applied)| {
-                let display = if *applied {
-                    format!("✓ {name}")
-                } else {
-                    name.clone()
-                };
-                muda::MenuItem::with_id(encode_provider_item_id(tool, id), display, true, None)
-            })
-            .collect();
-        if items.is_empty() {
-            continue;
-        }
-        let refs: Vec<&dyn muda::IsMenuItem> =
-            items.iter().map(|i| i as &dyn muda::IsMenuItem).collect();
-        let submenu = muda::Submenu::with_items(pretty_tool_name(tool), true, &refs)
+    if !groups.is_empty() {
+        let sep = muda::PredefinedMenuItem::separator();
+        let header = muda::MenuItem::new("供应商 / Providers", false, None);
+        let header_sep = muda::PredefinedMenuItem::separator();
+        menu.append_items(&[&sep, &header, &header_sep])
             .map_err(|e| e.to_string())?;
-        menu.append(&submenu).map_err(|e| e.to_string())?;
+
+        // preserve insertion order of tools
+        let mut order: Vec<&'static str> = vec![];
+        for (tool, _, _, _) in groups.iter() {
+            if !order.contains(tool) {
+                order.push(tool);
+            }
+        }
+        for tool in order {
+            // collect this tool's menu items
+            let items: Vec<muda::MenuItem> = groups
+                .iter()
+                .filter(|(t, _, _, _)| t == &tool)
+                .map(|(_, id, name, applied)| {
+                    let display = if *applied {
+                        format!("✓ {name}")
+                    } else {
+                        name.clone()
+                    };
+                    muda::MenuItem::with_id(encode_provider_item_id(tool, id), display, true, None)
+                })
+                .collect();
+            if items.is_empty() {
+                continue;
+            }
+            let refs: Vec<&dyn muda::IsMenuItem> =
+                items.iter().map(|i| i as &dyn muda::IsMenuItem).collect();
+            let submenu = muda::Submenu::with_items(pretty_tool_name(tool), true, &refs)
+                .map_err(|e| e.to_string())?;
+            menu.append(&submenu).map_err(|e| e.to_string())?;
+        }
     }
+
+    let quit_sep = muda::PredefinedMenuItem::separator();
+    let quit = muda::MenuItem::with_id("app:quit", "退出 / Quit", true, None);
+    menu.append_items(&[&quit_sep, &quit])
+        .map_err(|e| e.to_string())?;
+
     Ok(menu)
 }
 

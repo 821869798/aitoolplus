@@ -2,3 +2,5 @@
 Cargo.lock.bak
 *.log
 dist/
+scratch/
+1.png

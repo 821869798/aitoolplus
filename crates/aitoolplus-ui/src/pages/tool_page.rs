@@ -7,12 +7,12 @@ use aitoolplus_core::pi_pages::PiModelSettings;
 use aitoolplus_core::providers::{CATEGORIES, ProviderRecord};
 use aitoolplus_core::session::{self, SessionMeta};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, deferred, div, prelude::*, px, uniform_list};
+use gpui::{Context, IntoElement, MouseButton, MouseDownEvent, deferred, div, prelude::*, px, uniform_list};
 use gpui_kit::base::{Align, ElementExt as _, Placement, Positioner, POPUP_PRIORITY};
 use serde_json::Value;
 
 use crate::components::{
-    self, BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l,
+    self, BadgeKind, ButtonVariant, Tooltip, badge, button_l, button_with_icon_l,
     button_with_icon_loading_l, input_container, page_header, section_title, textarea_container,
 };
 use crate::i18n::I18n;
@@ -21,7 +21,7 @@ use crate::text_input::TextInput;
 use crate::theme::Theme;
 use crate::workspace::Workspace;
 
-use super::{PromptDialogState, ProviderDialogState, ToolTab, modal_scaffold, modal_scaffold_custom};
+use super::{PromptDialogState, ProviderDialogState, ToolTab, modal_scaffold_custom, modal_scaffold_sized};
 
 pub fn render_tool_page(
     tool: ToolId,
@@ -388,12 +388,19 @@ fn provider_row(
     let pid_down = p.id.clone();
     let pid_test = p.id.clone();
 
-    let avatar_spec = crate::icons::provider_avatar_spec(tool, &p.name, &p.category);
+    let avatar_spec = crate::icons::provider_avatar_spec(tool, &p.name, &p.category, &t);
     let subtitle = extract_provider_subtitle(tool, p, &i);
 
     let test_badge = ws.ui.provider_test_results.get(&p.id).map(|result| {
+        let pid = p.id.clone();
         if result.ok {
+            let msg = if result.models_count > 0 {
+                format!("测试连通成功 ({}ms, 可用模型: {})", result.latency_ms, result.models_count)
+            } else {
+                format!("测试连通成功 ({}ms)", result.latency_ms)
+            };
             div()
+                .id(gpui::SharedString::from(format!("provider-test-ok-{pid}")))
                 .px(px(6.0))
                 .py(px(2.0))
                 .rounded(px(4.0))
@@ -402,16 +409,21 @@ fn provider_row(
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(crate::rgba_const(0x10b981ff))
                 .child(format!("{}ms", result.latency_ms))
+                .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(msg.clone())).into())
+                .into_any_element()
         } else {
-            div()
-                .px(px(6.0))
-                .py(px(2.0))
-                .rounded(px(4.0))
-                .bg(crate::rgba_const(0xef444415))
-                .text_size(px(11.5))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(crate::rgba_const(0xef4444ff))
-                .child(i.t("连通失败", "Failed"))
+            let err_msg = if result.message.trim().is_empty() {
+                "连通测试失败，请检查网络或 API密钥".to_string()
+            } else {
+                format!("测试失败: {}", result.message)
+            };
+            let parsed = crate::components::parse_generic_error(&err_msg);
+            crate::components::error_badge_tooltip(
+                format!("provider-test-fail-{pid}"),
+                i.t("连通失败", "Failed"),
+                parsed.detail,
+                &t,
+            )
         }
     });
 
@@ -435,28 +447,50 @@ fn provider_row(
                     gpui::svg()
                         .data(crate::icons::GRIP_VERTICAL_SVG)
                         .size(px(14.0))
-                        .text_color(crate::rgba_const(0xffffff28)),
+                        .text_color(if t.is_dark { crate::rgba_const(0xffffff28) } else { crate::rgba_const(0x00000028) }),
                 ),
         )
-        .child(
-            div()
-                .size(px(38.0))
-                .flex_shrink_0()
-                .rounded(px(8.0))
-                .bg(avatar_spec.bg)
-                .border_1()
-                .border_color(crate::rgba_const(0xffffff18))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    gpui::svg()
-                        .data(avatar_spec.svg_data)
-                        .size(px(20.0))
-                        .text_color(avatar_spec.fg)
-                        .flex_none(),
-                ),
-        )
+        .child(match avatar_spec {
+            crate::icons::ProviderAvatarSpec::Svg { svg_data, bg, fg } => {
+                div()
+                    .size(px(38.0))
+                    .flex_shrink_0()
+                    .rounded(px(8.0))
+                    .bg(bg)
+                    .border_1()
+                    .border_color(if t.is_dark { crate::rgba_const(0xffffff18) } else { t.card_border })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        gpui::svg()
+                            .data(svg_data)
+                            .size(px(20.0))
+                            .text_color(fg)
+                            .flex_none(),
+                    )
+            }
+            crate::icons::ProviderAvatarSpec::Initials { text, .. } => {
+                let font_size = if text.chars().count() > 1 { px(12.5) } else { px(15.0) };
+                div()
+                    .size(px(38.0))
+                    .flex_shrink_0()
+                    .rounded(px(8.0))
+                    .bg(t.row_hover)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_size(font_size)
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(t.text_secondary)
+                            .child(text),
+                    )
+            }
+        })
         .child(
             div()
                 .flex()
@@ -925,10 +959,16 @@ fn common_section(
                 .flex_col()
                 .gap(px(8.0))
                 .p(px(12.0))
+                .h(px(240.0))
+                .id("common-editor-wrap")
+                .overflow_y_scroll()
                 .rounded(px(8.0))
                 .bg(t.input_bg)
                 .border_1()
                 .border_color(t.input_border)
+                .track_focus(&editor.read(cx).focus_handle)
+                .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
+                .hover(move |h| h.border_color(t.card_border_hover))
                 .child(editor.clone()),
         )
         .child(
@@ -1668,7 +1708,36 @@ pub fn render_runtime_edit_dialog(
                 ))
                 .child(path.display().to_string()),
         )
-        .child(crate::components::textarea_container(&t, editor.clone()))
+        .child(
+            div()
+                .w_full()
+                .h(px(380.0))
+                .id("runtime-editor-wrap")
+                .rounded(px(6.0))
+                .bg(t.input_bg)
+                .border_1()
+                .border_color(t.input_border)
+                .shadow_xs()
+                .cursor_text()
+                .track_focus(&editor.read(cx).focus_handle)
+                .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
+                .hover(move |h| h.border_color(t.card_border_hover))
+                .overflow_y_scroll()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener({
+                        let ed = editor.clone();
+                        move |_this, event: &MouseDownEvent, window, cx| {
+                            ed.update(cx, |ta, cx| {
+                                ta.focus_handle.focus(window, cx);
+                                ta.start_blink(cx);
+                                ta.on_mouse_down(event.position, event.click_count, cx);
+                            });
+                        }
+                    }),
+                )
+                .child(editor.clone()),
+        )
         .child(
             div()
                 .flex()
@@ -2134,12 +2203,14 @@ fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
             section = section.child(header).child(row);
         }
         (Err(e), _) | (_, Err(e)) => {
-            section = section.child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(t.danger)
-                    .child(format!("{}: {e}", i.t("读取失败", "read failed"))),
-            );
+            section = section.child(crate::components::error_strip(
+                "pi-cfg-read-err",
+                i.t("配置读取失败", "Config read failed"),
+                &e,
+                &t,
+                cx,
+                None,
+            ));
         }
     }
 
@@ -2312,10 +2383,16 @@ fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
                 .child(
                     div()
                         .p(px(10.0))
+                        .h(px(220.0))
+                        .id("pi-other-editor-wrap")
+                        .overflow_y_scroll()
                         .rounded(px(8.0))
                         .bg(t.input_bg)
                         .border_1()
                         .border_color(t.input_border)
+                        .track_focus(&editor.read(cx).focus_handle)
+                        .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
+                        .hover(move |h| h.border_color(t.card_border_hover))
                         .child(editor),
                 )
                 .child(div().flex().justify_end().child(button_l(
@@ -2352,12 +2429,14 @@ fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
                 )));
         }
         Err(e) => {
-            section = section.child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(t.danger)
-                    .child(format!("{}: {e}", i.t("读取失败", "read failed"))),
-            );
+            section = section.child(crate::components::error_strip(
+                "rules-read-err",
+                i.t("规则读取失败", "Rules read failed"),
+                &e,
+                &t,
+                cx,
+                None,
+            ));
         }
     }
 
@@ -2902,17 +2981,14 @@ fn extensions_section(
                     i.t("扩展列表获取失败", "Failed to list extensions"),
                     "",
                 ))
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(e.clone()),
-                );
+                .child(crate::components::error_strip(
+                    "claude-plugins-read-err",
+                    i.t("扩展读取失败", "Extensions read failed"),
+                    &e,
+                    &t,
+                    cx,
+                    None,
+                ));
         }
     }
 
@@ -3244,10 +3320,16 @@ fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
             .child(
                 div()
                     .p(px(10.0))
+                    .h(px(220.0))
+                    .id(gpui::SharedString::from(format!("addon-editor-wrap-{}", kind.key())))
+                    .overflow_y_scroll()
                     .rounded(px(8.0))
                     .bg(t.input_bg)
                     .border_1()
                     .border_color(t.card_border)
+                    .track_focus(&editor.read(cx).focus_handle)
+                    .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
+                    .hover(move |h| h.border_color(t.card_border_hover))
                     .child(editor),
             )
             .child(
@@ -3502,17 +3584,14 @@ fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace
         Ok(d) => d,
         Err(e) => {
             return section
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(format!("{}: {e}", i.t("插件读取失败", "plugins read failed"))),
-                )
+                .child(crate::components::error_strip(
+                    "opencode-plugins-read-err",
+                    i.t("插件读取失败", "plugins read failed"),
+                    &e,
+                    &t,
+                    cx,
+                    None,
+                ))
                 .into_any_element();
         }
     };
@@ -3757,17 +3836,14 @@ fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         Ok(d) => d,
         Err(e) => {
             return section
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(format!("{}: {e}", i.t("插件市场读取失败", "marketplace read failed"))),
-                )
+                .child(crate::components::error_strip(
+                    "opencode-market-read-err",
+                    i.t("插件市场读取失败", "marketplace read failed"),
+                    &e,
+                    &t,
+                    cx,
+                    None,
+                ))
                 .into_any_element();
         }
     };
@@ -4189,17 +4265,14 @@ fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspac
         Ok(d) => d,
         Err(e) => {
             return section
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(format!("{}: {e}", i.t("插件读取失败", "plugins read failed"))),
-                )
+                .child(crate::components::error_strip(
+                    "codex-plugins-read-err",
+                    i.t("插件读取失败", "plugins read failed"),
+                    &e,
+                    &t,
+                    cx,
+                    None,
+                ))
                 .into_any_element();
         }
     };
@@ -4451,17 +4524,14 @@ fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
         Ok(d) => d,
         Err(e) => {
             return section
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(format!("{}: {e}", i.t("插件市场读取失败", "marketplace read failed"))),
-                )
+                .child(crate::components::error_strip(
+                    "codex-market-read-err",
+                    i.t("插件市场读取失败", "marketplace read failed"),
+                    &e,
+                    &t,
+                    cx,
+                    None,
+                ))
                 .into_any_element();
         }
     };
@@ -5394,20 +5464,14 @@ fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspa
         Ok(d) => d,
         Err(e) => {
             return section
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(format!(
-                            "{}: {e}",
-                            i.t("插件读取失败", "plugins read failed")
-                        )),
-                )
+                .child(crate::components::error_strip(
+                    "claude-plugins-read-err",
+                    i.t("插件读取失败", "plugins read failed"),
+                    &e,
+                    &t,
+                    cx,
+                    None,
+                ))
                 .into_any_element();
         }
     };
@@ -5739,20 +5803,14 @@ fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -
         Ok(d) => d,
         Err(e) => {
             return section
-                .child(
-                    div()
-                        .p(px(12.0))
-                        .rounded(px(8.0))
-                        .bg(t.danger_subtle)
-                        .border_1()
-                        .border_color(t.danger)
-                        .text_size(px(12.0))
-                        .text_color(t.danger)
-                        .child(format!(
-                            "{}: {e}",
-                            i.t("插件市场读取失败", "marketplace read failed")
-                        )),
-                )
+                .child(crate::components::error_strip(
+                    "claude-market-read-err",
+                    i.t("插件市场读取失败", "marketplace read failed"),
+                    &e,
+                    &t,
+                    cx,
+                    None,
+                ))
                 .into_any_element();
         }
     };
@@ -8179,37 +8237,29 @@ pub fn render_provider_dialog(
             // Fetch Error Notice
             if let Some(err_txt) = &fetch_error {
                 let t2 = t.clone();
+                let dismiss_btn = crate::components::icon_button_svg(
+                    "btn-dismiss-pi-fetch-err",
+                    crate::icons::X_SVG,
+                    i.t("关闭", "Close"),
+                    false,
+                    &t2,
+                    cx,
+                    |ws, _, _, cx| {
+                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                            d.fetch_error = None;
+                        }
+                        cx.notify();
+                    },
+                );
                 pi_sec = pi_sec.child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(6.0))
-                        .rounded(px(6.0))
-                        .bg(gpui::rgba(0xef444415))
-                        .border_1()
-                        .border_color(gpui::rgba(0xef444440))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(gpui::rgb(0xef4444))
-                                .child(format!("{}: {}", i.t("获取模型失败", "Fetch models failed"), err_txt))
-                        )
-                        .child(crate::components::icon_button_svg(
-                            "btn-dismiss-pi-fetch-err",
-                            crate::icons::X_SVG,
-                            i.t("关闭", "Close"),
-                            false,
-                            &t2,
-                            cx,
-                            |ws, _, _, cx| {
-                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                    d.fetch_error = None;
-                                }
-                                cx.notify();
-                            },
-                        ))
+                    crate::components::error_strip(
+                        "pi-fetch-err-strip",
+                        i.t("获取模型失败", "Fetch models failed"),
+                        err_txt,
+                        &t2,
+                        cx,
+                        Some(dismiss_btn),
+                    )
                 );
             }
 
@@ -8534,37 +8584,29 @@ pub fn render_provider_dialog(
             // Fetch Error Notice
             if let Some(err_txt) = &fetch_error {
                 let t2 = t.clone();
+                let dismiss_btn = crate::components::icon_button_svg(
+                    "btn-dismiss-fetch-err",
+                    crate::icons::X_SVG,
+                    i.t("关闭", "Close"),
+                    false,
+                    &t2,
+                    cx,
+                    |ws, _, _, cx| {
+                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                            d.fetch_error = None;
+                        }
+                        cx.notify();
+                    },
+                );
                 sec = sec.child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(6.0))
-                        .rounded(px(6.0))
-                        .bg(gpui::rgba(0xef444415))
-                        .border_1()
-                        .border_color(gpui::rgba(0xef444440))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(gpui::rgb(0xef4444))
-                                .child(format!("{}: {}", i.t("获取模型失败", "Fetch models failed"), err_txt))
-                        )
-                        .child(crate::components::icon_button_svg(
-                            "btn-dismiss-fetch-err",
-                            crate::icons::X_SVG,
-                            i.t("关闭", "Close"),
-                            false,
-                            &t2,
-                            cx,
-                            |ws, _, _, cx| {
-                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                    d.fetch_error = None;
-                                }
-                                cx.notify();
-                            },
-                        ))
+                    crate::components::error_strip(
+                        "provider-fetch-err-strip",
+                        i.t("获取模型失败", "Fetch models failed"),
+                        err_txt,
+                        &t2,
+                        cx,
+                        Some(dismiss_btn),
+                    )
                 );
             }
 
@@ -10361,7 +10403,36 @@ pub fn render_prompt_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("提示词内容（Markdown）", "Prompt Content (Markdown)")))
-                .child(textarea_container(&t, content.clone())),
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(320.0))
+                        .id("prompt-content-editor-wrap")
+                        .rounded(px(6.0))
+                        .bg(t.input_bg)
+                        .border_1()
+                        .border_color(t.input_border)
+                        .shadow_xs()
+                        .cursor_text()
+                        .track_focus(&content.read(cx).focus_handle)
+                        .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
+                        .hover(move |h| h.border_color(t.card_border_hover))
+                        .overflow_y_scroll()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener({
+                                let editor = content.clone();
+                                move |_this, event: &MouseDownEvent, window, cx| {
+                                    editor.update(cx, |ta, cx| {
+                                        ta.focus_handle.focus(window, cx);
+                                        ta.start_blink(cx);
+                                        ta.on_mouse_down(event.position, event.click_count, cx);
+                                    });
+                                }
+                            }),
+                        )
+                        .child(content.clone()),
+                ),
         )
         .child(
             div()
@@ -10402,7 +10473,7 @@ pub fn render_prompt_dialog(
                                         &mut section.prompts,
                                         &id,
                                         |p| {
-                                            p.name = name_txt.clone();
+                                             p.name = name_txt.clone();
                                             p.content = content_txt.clone();
                                         },
                                     );
@@ -10426,9 +10497,11 @@ pub fn render_prompt_dialog(
                 )),
         );
 
-    modal_scaffold(
+    modal_scaffold_sized(
         &t,
         title.as_ref(),
+        px(780.0),
+        None,
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {

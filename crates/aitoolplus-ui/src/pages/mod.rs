@@ -153,8 +153,24 @@ pub struct WorkspaceState {
     pub runtime_edit_dialog: Option<(std::path::PathBuf, gpui::Entity<TextArea>)>,
     pub prompt_search: gpui::Entity<TextInput>,
     pub mcp_search: gpui::Entity<TextInput>,
+    pub selected_mcp_id: Option<String>,
+    pub mcp_import_json_modal: Option<gpui::Entity<TextArea>>,
+    pub mcp_import_existing_modal: bool,
+    pub mcp_editing_metadata: Option<(String, gpui::Entity<TextInput>, gpui::Entity<TextInput>)>,
+    pub mcp_adding_tag: Option<(String, gpui::Entity<TextInput>)>,
     pub skill_search: gpui::Entity<TextInput>,
+    pub skills_page_tab: SkillsPageTab,
+    pub skill_store_search: gpui::Entity<TextInput>,
+    pub skill_store_results: Vec<aitoolplus_core::skills::StoreSkillItem>,
+    pub skill_store_loading: bool,
+    pub skill_store_query: String,
+    pub skill_store_installing: Option<String>,
     pub skill_detail_dialog: Option<SkillDetailState>,
+    pub selected_skill_id: Option<String>,
+    pub skill_detail_active_doc: Option<String>,
+    pub skill_editing_metadata: Option<(String, gpui::Entity<TextInput>, gpui::Entity<TextInput>)>,
+    pub skill_adding_tag: Option<(String, gpui::Entity<TextInput>)>,
+    pub skill_git_modal: Option<gpui::Entity<TextInput>>,
     pub expanded_prompts: std::collections::HashSet<String>,
     pub pi_ms_initialized: bool,
     pub pi_ms_provider_input: gpui::Entity<TextInput>,
@@ -181,8 +197,19 @@ pub struct WorkspaceState {
     pub antigravity_store: Option<aitoolplus_core::antigravity::AntigravityStore>,
     pub antigravity_loading: bool,
     pub antigravity_dialog: Option<antigravity_page::AntigravityDialogState>,
+    pub antigravity_details_account: Option<aitoolplus_core::antigravity::AntigravityAccount>,
+    pub antigravity_device_account: Option<(aitoolplus_core::antigravity::AntigravityAccount, aitoolplus_core::antigravity::DeviceProfile)>,
+    pub antigravity_editing_label: Option<(String, gpui::Entity<TextInput>)>,
     pub antigravity_refreshing_all: bool,
     pub antigravity_search: gpui::Entity<TextInput>,
+    pub antigravity_quota_window: AntigravityQuotaWindow,
+    pub antigravity_tab: AntigravityPageTab,
+    pub antigravity_session_filter: AntigravitySessionFilter,
+    pub antigravity_session_search: gpui::Entity<TextInput>,
+    pub antigravity_sessions: Option<Vec<aitoolplus_core::antigravity::AntigravitySessionMeta>>,
+    pub antigravity_sessions_loading: bool,
+    pub antigravity_open_session: Option<aitoolplus_core::antigravity::AntigravitySessionMeta>,
+    pub antigravity_session_scroll_handle: gpui::UniformListScrollHandle,
     pub session_messages_cache: Option<(ToolId, String, std::sync::Arc<Vec<aitoolplus_core::session::SessionMessage>>)>,
     pub session_actions_menu_open: bool,
     pub session_expanded_blocks: std::collections::HashSet<String>,
@@ -193,10 +220,39 @@ pub struct WorkspaceState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AntigravityPageTab {
+    #[default]
+    Accounts,
+    Sessions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AntigravitySessionFilter {
+    #[default]
+    All,
+    Cli,
+    App,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AntigravityQuotaWindow {
+    #[default]
+    FiveHours,
+    Weekly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClaudePluginsTab {
     #[default]
     Installed,
     Marketplaces,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SkillsPageTab {
+    #[default]
+    Installed,
+    Store,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,9 +262,14 @@ pub enum SettingsTab {
     About,
 }
 
+static TOAST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[derive(Clone)]
 pub struct Toast {
+    pub id: u64,
     pub message: String,
     pub error: bool,
+    pub created_at: std::time::Instant,
 }
 
 pub struct BackupCustomInputs {
@@ -374,6 +435,7 @@ pub enum ConfirmAction {
     DeleteMcp { id: String },
     DeleteSkill { id: String },
     DeleteAntigravityAccount { id: String },
+    DeleteAntigravitySession { session: aitoolplus_core::antigravity::AntigravitySessionMeta },
 }
 
 impl WorkspaceState {
@@ -392,7 +454,14 @@ impl WorkspaceState {
         let claude_market_search = cx.new(|cx| TextInput::new("搜索市场插件…", cx));
         let prompt_search = cx.new(|cx| TextInput::new("搜索全局提示词…", cx));
         let mcp_search = cx.new(|cx| TextInput::new("搜索 MCP 服务器…", cx));
-        let skill_search = cx.new(|cx| TextInput::new("搜索 Skill 技能…", cx));
+        let skill_search = cx.new(|cx| TextInput::new("搜索已安装 Skill…", cx));
+        let skill_store_search = cx.new(|cx| TextInput::new("搜索 skills.sh 技能库（例如：git, rust, claude, review...）", cx));
+        cx.subscribe(&skill_store_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            if let crate::text_input::TextInputEvent::Enter = event {
+                let query = this.ui.skill_store_search.read(cx).text().trim().to_string();
+                crate::pages::skills_page::trigger_store_search(this, query, cx);
+            }
+        }).detach();
         let pi_dropdown_search = cx.new(|cx| TextInput::new("输入搜索…", cx));
         cx.subscribe(&pi_dropdown_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
             match event {
@@ -473,8 +542,9 @@ impl WorkspaceState {
         let codex_market_search = cx.new(|cx| TextInput::new("搜索市场插件…", cx));
         let grok_installed_search = cx.new(|cx| TextInput::new("搜索已安装插件…", cx));
         let grok_market_search = cx.new(|cx| TextInput::new("搜索市场插件…", cx));
-        let agent_session_search = cx.new(|cx| TextInput::new("搜索会话（标题、ID、项目路径、摘要）…", cx));
+        let agent_session_search = cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
         let antigravity_search = cx.new(|cx| TextInput::new("搜索账号（邮箱、备注）…", cx));
+        let antigravity_session_search = cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
         Self {
             tool_tab: ToolTab::Providers,
             common_editors: Default::default(),
@@ -539,8 +609,24 @@ impl WorkspaceState {
             runtime_edit_dialog: None,
             prompt_search,
             mcp_search,
+            selected_mcp_id: None,
+            mcp_import_json_modal: None,
+            mcp_import_existing_modal: false,
+            mcp_editing_metadata: None,
+            mcp_adding_tag: None,
             skill_search,
+            skills_page_tab: SkillsPageTab::Installed,
+            skill_store_search,
+            skill_store_results: vec![],
+            skill_store_loading: false,
+            skill_store_query: String::new(),
+            skill_store_installing: None,
             skill_detail_dialog: None,
+            selected_skill_id: None,
+            skill_detail_active_doc: None,
+            skill_editing_metadata: None,
+            skill_adding_tag: None,
+            skill_git_modal: None,
             expanded_prompts: std::collections::HashSet::new(),
             pi_dropdown_open: None,
             pi_dropdown_typing: false,
@@ -558,8 +644,23 @@ impl WorkspaceState {
             antigravity_store: None,
             antigravity_loading: false,
             antigravity_dialog: None,
+            antigravity_details_account: None,
+            antigravity_device_account: None,
+            antigravity_editing_label: None,
             antigravity_refreshing_all: false,
             antigravity_search,
+            antigravity_quota_window: if std::env::var("AITOOLPLUS_ANTIGRAVITY_WINDOW").map(|v| v.to_lowercase()).as_deref() == Ok("weekly") {
+                AntigravityQuotaWindow::Weekly
+            } else {
+                AntigravityQuotaWindow::default()
+            },
+            antigravity_tab: AntigravityPageTab::Accounts,
+            antigravity_session_filter: AntigravitySessionFilter::All,
+            antigravity_session_search,
+            antigravity_sessions: None,
+            antigravity_sessions_loading: false,
+            antigravity_open_session: None,
+            antigravity_session_scroll_handle: gpui::UniformListScrollHandle::new(),
             session_messages_cache: None,
             session_actions_menu_open: false,
             session_expanded_blocks: std::collections::HashSet::new(),
@@ -752,6 +853,12 @@ impl WorkspaceState {
 
     pub fn on_page_change(&mut self, page: Page, _cx: &mut Context<Workspace>) {
         self.toast = None;
+        self.skill_git_modal = None;
+        self.selected_mcp_id = None;
+        self.mcp_import_json_modal = None;
+        self.mcp_import_existing_modal = false;
+        self.mcp_editing_metadata = None;
+        self.mcp_adding_tag = None;
         if let Page::Sessions = page {
             self.open_session = None;
         }
@@ -777,7 +884,19 @@ impl WorkspaceState {
             || self.rename_dialog.is_some()
             || self.runtime_edit_dialog.is_some()
             || self.skill_detail_dialog.is_some()
+            || self.selected_skill_id.is_some()
+            || self.skill_editing_metadata.is_some()
+            || self.skill_adding_tag.is_some()
+            || self.skill_git_modal.is_some()
+            || self.selected_mcp_id.is_some()
+            || self.mcp_import_json_modal.is_some()
+            || self.mcp_import_existing_modal
+            || self.mcp_editing_metadata.is_some()
+            || self.mcp_adding_tag.is_some()
             || self.antigravity_dialog.is_some()
+            || self.antigravity_details_account.is_some()
+            || self.antigravity_device_account.is_some()
+            || self.antigravity_editing_label.is_some()
     }
 
     /// Resolve or lazily create the common-config editor for a tool.
@@ -803,9 +922,12 @@ impl WorkspaceState {
     }
 
     pub fn toast(&mut self, message: impl Into<String>, error: bool) {
+        let id = TOAST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.toast = Some(Toast {
+            id,
             message: message.into(),
             error,
+            created_at: std::time::Instant::now(),
         });
     }
 }
@@ -915,7 +1037,14 @@ pub fn modal_scaffold_sized(
                         ws.ui.confirm = None;
                         ws.ui.rename_dialog = None;
                         ws.ui.antigravity_dialog = None;
+                        ws.ui.antigravity_details_account = None;
+                        ws.ui.antigravity_device_account = None;
+                        ws.ui.antigravity_editing_label = None;
                         ws.ui.skill_detail_dialog = None;
+                        ws.ui.selected_skill_id = None;
+                        ws.ui.skill_editing_metadata = None;
+                        ws.ui.skill_adding_tag = None;
+                        ws.ui.skill_git_modal = None;
                         ws.ui.runtime_edit_dialog = None;
                         on_close_button(ws, ev, window, cx);
                         cx.notify();
@@ -1066,34 +1195,135 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 }
             }
         }
+        ConfirmAction::DeleteAntigravitySession { session } => {
+            if let Err(err) = aitoolplus_core::antigravity::delete_antigravity_session(&ws.paths.home, &session) {
+                ws.ui.toast(err, true);
+            } else {
+                if let Some(ref mut list) = ws.ui.antigravity_sessions {
+                    list.retain(|s| s.session_id != session.session_id);
+                }
+                if ws.ui.antigravity_open_session.as_ref().map(|s| &s.session_id) == Some(&session.session_id) {
+                    ws.ui.antigravity_open_session = None;
+                }
+                let msg = i.t("Antigravity 会话已删除", "Session deleted").to_string();
+                ws.ui.toast(msg, false);
+            }
+        }
     }
     cx.notify();
 }
 
-/// Toast pill pinned bottom-right.
-pub fn render_toast(ws: &mut Workspace, _cx: &mut Context<Workspace>) -> Option<gpui::AnyElement> {
+/// Toast notification pinned bottom-right with solid opaque background, left accent border, status icon, auto-dismiss, and close button.
+pub fn render_toast(ws: &mut Workspace, cx: &mut Context<Workspace>) -> Option<gpui::AnyElement> {
     let toast = ws.ui.toast.as_ref()?;
-    let t = &ws.theme;
-    let (border, bg) = if toast.error {
-        (t.danger, t.danger_subtle)
+    let max_duration = if toast.error {
+        std::time::Duration::from_secs(7)
     } else {
-        (t.success, t.success_subtle)
+        std::time::Duration::from_secs(4)
     };
+    let elapsed = toast.created_at.elapsed();
+    if elapsed >= max_duration {
+        ws.ui.toast = None;
+        return None;
+    }
+
+    let toast_id = toast.id;
+    let remaining = max_duration.saturating_sub(elapsed);
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        cx.background_executor().timer(remaining).await;
+        let _ = weak.update(cx, |ws, cx| {
+            if let Some(t) = &ws.ui.toast {
+                if t.id == toast_id {
+                    ws.ui.toast = None;
+                    cx.notify();
+                }
+            }
+        });
+    })
+    .detach();
+
+    let t = &ws.theme;
+    let is_error = toast.error;
+    let (accent_color, icon_data, default_title) = if is_error {
+        (t.danger, crate::icons::ALERT_SVG, ws.i18n.t("操作失败", "Operation Failed"))
+    } else {
+        (t.success, crate::icons::CHECK_SVG, ws.i18n.t("操作成功", "Success"))
+    };
+
     Some(
         div()
+            .id("toast-container")
+            .occlude()
             .absolute()
-            .bottom(px(16.0))
-            .right(px(16.0))
-            .px(px(14.0))
-            .py(px(10.0))
+            .bottom(px(20.0))
+            .right(px(20.0))
+            .min_w(px(320.0))
+            .max_w(px(520.0))
             .rounded(px(8.0))
-            .bg(bg)
+            .bg(t.card_bg)
             .border_1()
-            .border_color(border)
-            .text_size(px(12.5))
-            .text_color(border)
-            .shadow_lg()
-            .child(toast.message.clone())
+            .border_color(t.card_border)
+            .shadow_xl()
+            .p(px(12.0))
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap(px(10.0))
+            .on_click(|_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(3.5))
+                    .self_stretch()
+                    .rounded(px(2.0))
+                    .bg(accent_color),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .pt(px(2.0))
+                    .child(crate::icons::svg_icon(icon_data, px(16.0), accent_color)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.0))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(if is_error { accent_color } else { t.text_primary })
+                            .child(default_title.to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(t.text_secondary)
+                            .line_height(px(18.0))
+                            .child(toast.message.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .id("toast-close-btn")
+                    .flex_none()
+                    .cursor_pointer()
+                    .p(px(2.0))
+                    .rounded(px(4.0))
+                    .text_color(t.text_muted)
+                    .hover(|s| s.bg(t.hover_overlay).text_color(t.text_primary))
+                    .on_click(cx.listener(|ws, _, _, cx| {
+                        ws.ui.toast = None;
+                        cx.notify();
+                    }))
+                    .child(crate::icons::svg_icon(crate::icons::X_SVG, px(14.0), t.text_muted)),
+            )
             .into_any_element(),
     )
 }
