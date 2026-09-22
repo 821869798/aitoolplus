@@ -126,7 +126,27 @@ impl ToolAdapter for OpenCodeAdapter {
             Value::Object(Map::new())
         };
         let mut merged = current;
-        deep_merge(&mut merged, &payload);
+        let provider_key = ctx.provider.id.strip_prefix("opencode:").unwrap_or(&ctx.provider.id);
+        if payload.get("provider").is_none()
+            && (payload.get("npm").is_some() || payload.get("options").is_some() || payload.get("models").is_some() || payload.get("baseUrl").is_some() || payload.get("apiKey").is_some())
+        {
+            if !merged.get("provider").is_some_and(Value::is_object) {
+                merged["provider"] = serde_json::json!({});
+            }
+            if let Some(providers) = merged.get_mut("provider").and_then(Value::as_object_mut) {
+                providers.insert(provider_key.to_string(), payload.clone());
+            }
+            if let Some(m) = ctx.provider.settings().get("model").and_then(Value::as_str) {
+                if !m.trim().is_empty() {
+                    let full_m = if m.contains('/') { m.to_string() } else { format!("{}/{}", provider_key, m) };
+                    merged["model"] = Value::String(full_m);
+                }
+            } else if let Some(first_model) = payload.get("models").and_then(Value::as_object).and_then(|ms| ms.keys().next()) {
+                merged["model"] = Value::String(format!("{}/{}", provider_key, first_model));
+            }
+        } else {
+            deep_merge(&mut merged, &payload);
+        }
         write_atomic(&path, &serde_json::to_string_pretty(&merged).unwrap())?;
         Ok(AppliedReport { files: vec![path] })
     }

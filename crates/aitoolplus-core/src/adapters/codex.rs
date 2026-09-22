@@ -314,12 +314,27 @@ fn extract_provider_api_key(record_settings: &str, provider_toml: &str) -> Optio
     let doc = parse_toml_document(provider_toml, "provider config").ok()?;
     if let Some(key) = doc.get("model_providers").and_then(|t| t.as_table()) {
         for (_, item) in key.iter() {
-            if let Some(tbl) = item.as_table()
-                && let Some(k) = tbl.get("api_key").and_then(|v| v.as_str())
-                && !k.is_empty()
-            {
-                return Some(k.to_string());
+            if let Some(tbl) = item.as_table() {
+                if let Some(k) = tbl
+                    .get("experimental_bearer_token")
+                    .or_else(|| tbl.get("api_key"))
+                    .and_then(|v| v.as_str())
+                {
+                    let kt = k.trim();
+                    if !kt.is_empty() {
+                        return Some(kt.to_string());
+                    }
+                }
             }
+        }
+    }
+    if let Some(k) = doc
+        .get("experimental_bearer_token")
+        .and_then(|v| v.as_str())
+    {
+        let kt = k.trim();
+        if !kt.is_empty() {
+            return Some(kt.to_string());
         }
     }
     None

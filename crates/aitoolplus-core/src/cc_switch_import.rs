@@ -102,6 +102,10 @@ pub fn import_from_cc_switch(
             "gemini" => ToolId::GeminiCli,
             "opencode" => ToolId::OpenCode,
             "pi" => ToolId::Pi,
+            "grok" | "grokbuild" => ToolId::Grok,
+            "openclaw" => ToolId::OpenClaw,
+            "hermes" => ToolId::Hermes,
+            "kimi" => ToolId::Kimi,
             _ => continue,
         };
 
@@ -124,6 +128,18 @@ pub fn import_from_cc_switch(
                     }
                 }
             }
+        } else if tool_id == ToolId::Codex {
+            if let Ok(mut val) = serde_json::from_str::<Value>(&settings_config) {
+                if let Some(obj) = val.as_object_mut() {
+                    // Mirror config to toml so both representations are available
+                    if let Some(cfg_str) = obj.get("config").and_then(Value::as_str) {
+                        if !obj.contains_key("toml") {
+                            obj.insert("toml".into(), Value::String(cfg_str.to_string()));
+                            settings_config = serde_json::to_string_pretty(&val).unwrap_or(settings_config);
+                        }
+                    }
+                }
+            }
         }
 
         let meta_val: Option<Value> = r.meta.as_deref().and_then(|m| serde_json::from_str(m).ok());
@@ -140,7 +156,10 @@ pub fn import_from_cc_switch(
             }
         }
 
-        let existing = section.providers.iter_mut().find(|p| p.id == target_id || p.name == r.name);
+        let existing = section
+            .providers
+            .iter_mut()
+            .find(|p| !p.id.starts_with("live:") && (p.id == target_id || p.name == r.name));
 
         if let Some(p) = existing {
             if settings_config != "{}" && !settings_config.trim().is_empty() {
@@ -320,6 +339,70 @@ mod tests {
         assert_eq!(applied.len(), 1);
         assert_eq!(applied[0].name, "anyrouter");
         assert_eq!(applied[0].id, "claude-anyrouter");
+    }
+
+    #[test]
+    fn test_import_live_cc_switch_db_if_exists() {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+        let db_path = PathBuf::from(home).join(".cc-switch").join("cc-switch.db");
+        if !db_path.exists() {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let paths = Paths::new(dir.path().join("home"), dir.path().join("appdata"));
+        let mut store = Store::new();
+
+        let report = import_from_cc_switch(&paths, &mut store, Some(&db_path)).unwrap();
+        println!("Report: {:#?}", report);
+        for (tool, count) in &report.per_tool {
+            println!("Tool {:?}: {} providers", tool, count);
+        }
+        for p in &store.tool(ToolId::Codex).providers {
+            let (u, k) = p.resolve_credentials(ToolId::Codex);
+            println!("Codex provider: id={}, name={}, is_applied={}, url={}, has_key={}", p.id, p.name, p.is_applied, u, !k.is_empty());
+            if p.category != "official" {
+                assert!(!u.is_empty(), "Codex provider {} missing url", p.name);
+                assert!(!k.is_empty(), "Codex provider {} missing key", p.name);
+            }
+        }
+        for p in &store.tool(ToolId::OpenCode).providers {
+            let (u, k) = p.resolve_credentials(ToolId::OpenCode);
+            println!("OpenCode provider: id={}, name={}, is_applied={}, url={}, has_key={}", p.id, p.name, p.is_applied, u, !k.is_empty());
+            assert!(!u.is_empty(), "OpenCode provider {} missing url", p.name);
+        }
+        for p in &store.tool(ToolId::ClaudeCode).providers {
+            let (u, k) = p.resolve_credentials(ToolId::ClaudeCode);
+            println!("Claude provider: id={}, name={}, is_applied={}, url={}, has_key={}", p.id, p.name, p.is_applied, u, !k.is_empty());
+            if p.category != "official" {
+                assert!(!u.is_empty(), "Claude provider {} missing url", p.name);
+                assert!(!k.is_empty(), "Claude provider {} missing key", p.name);
+            }
+        }
+        for p in &store.tool(ToolId::Pi).providers {
+            let (u, k) = p.resolve_credentials(ToolId::Pi);
+            println!("Pi provider: id={}, name={}, is_applied={}, url={}, has_key={}", p.id, p.name, p.is_applied, u, !k.is_empty());
+            assert!(!u.is_empty(), "Pi provider {} missing url", p.name);
+            assert!(!k.is_empty(), "Pi provider {} missing key", p.name);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_reimport_into_user_store_json_live() {
+        let home = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".into());
+        let db_path = PathBuf::from(&home).join(".cc-switch").join("cc-switch.db");
+        let store_path = PathBuf::from(&home).join(".aitoolplus").join("store.json");
+        if !db_path.exists() || !store_path.exists() {
+            return;
+        }
+        let paths = Paths::system();
+        let mut store_handle = match crate::store::StoreHandle::open(&paths) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let report = import_from_cc_switch(&paths, store_handle.store_mut(), Some(&db_path)).unwrap();
+        println!("Reimported into live store: {:?}", report);
+        store_handle.save().unwrap();
     }
 }
 

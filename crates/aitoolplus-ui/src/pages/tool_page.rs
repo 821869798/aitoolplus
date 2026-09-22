@@ -324,48 +324,14 @@ fn extract_provider_subtitle(tool: ToolId, p: &ProviderRecord, _i: &crate::i18n:
             return official_url.to_string();
         }
     }
+    let (endpoint_url, _) = p.resolve_credentials(tool);
+    if !endpoint_url.is_empty() {
+        return endpoint_url;
+    }
     if let Some(ref w) = p.website_url {
         let trimmed = w.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();
-        }
-    }
-    if let Ok(val) = serde_json::from_str::<Value>(&p.settings_config) {
-        if let Some(env) = val.get("env").and_then(Value::as_object) {
-            for key in [
-                "ANTHROPIC_BASE_URL",
-                "OPENAI_BASE_URL",
-                "GOOGLE_GEMINI_BASE_URL",
-                "BASE_URL",
-            ] {
-                if let Some(u) = env.get(key).and_then(Value::as_str) {
-                    let trimmed = u.trim();
-                    if !trimmed.is_empty() {
-                        return trimmed.to_string();
-                    }
-                }
-            }
-        }
-        for key in ["base_url", "baseUrl", "url", "endpoint"] {
-            if let Some(u) = val.get(key).and_then(Value::as_str) {
-                let trimmed = u.trim();
-                if !trimmed.is_empty() {
-                    return trimmed.to_string();
-                }
-            }
-        }
-        if let Some(toml_str) = val.get("toml").and_then(Value::as_str) {
-            for line in toml_str.lines() {
-                let line_trim = line.trim();
-                if line_trim.starts_with("base_url") {
-                    if let Some((_, r)) = line_trim.split_once('=') {
-                        let cleaned = r.trim().trim_matches('"').trim_matches('\'');
-                        if !cleaned.is_empty() {
-                            return cleaned.to_string();
-                        }
-                    }
-                }
-            }
         }
     }
     if let Some(ref n) = p.notes {
@@ -6710,6 +6676,30 @@ fn extract_provider_config(tool: ToolId, raw_json: &str) -> ExtractedProviderCon
             }
         }
     }
+    let dummy = aitoolplus_core::providers::ProviderRecord {
+        id: String::new(),
+        name: String::new(),
+        category: "custom".to_string(),
+        settings_config: raw_json.to_string(),
+        is_applied: false,
+        is_disabled: false,
+        sort_index: 0,
+        notes: None,
+        website_url: None,
+        meta: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+    let (res_url, res_key) = dummy.resolve_credentials(tool);
+    if cfg.base_url.is_empty() {
+        cfg.base_url = res_url;
+    }
+    if cfg.api_key.is_empty() {
+        cfg.api_key = res_key;
+    }
+    if cfg.model.is_empty() {
+        cfg.model = dummy.resolve_model(tool);
+    }
     cfg
 }
 
@@ -10603,6 +10593,9 @@ fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String
                 val = serde_json::json!({});
             }
             if let Some(obj) = val.as_object_mut() {
+                if !obj.contains_key("npm") {
+                    obj.insert("npm".into(), Value::String("@ai-sdk/openai-compatible".into()));
+                }
                 if !base_url.trim().is_empty() {
                     obj.insert("baseUrl".into(), Value::String(base_url.trim().into()));
                     let options = obj.entry("options").or_insert_with(|| serde_json::json!({}));
@@ -10622,6 +10615,70 @@ fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String
                 }
             }
             Ok(serde_json::to_string_pretty(&val).unwrap_or_default())
+        }
+        ToolId::OpenClaw => {
+            let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
+            if !val.is_object() {
+                val = serde_json::json!({});
+            }
+            if let Some(obj) = val.as_object_mut() {
+                if !base_url.trim().is_empty() {
+                    obj.insert("baseUrl".into(), Value::String(base_url.trim().into()));
+                }
+                if !api_key.trim().is_empty() {
+                    obj.insert("apiKey".into(), Value::String(api_key.trim().into()));
+                }
+                if !model.trim().is_empty() {
+                    obj.insert("model".into(), Value::String(model.trim().into()));
+                }
+            }
+            Ok(serde_json::to_string_pretty(&val).unwrap_or_default())
+        }
+        ToolId::Hermes => {
+            let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
+            if !val.is_object() {
+                val = serde_json::json!({});
+            }
+            if let Some(obj) = val.as_object_mut() {
+                if !base_url.trim().is_empty() {
+                    obj.insert("base_url".into(), Value::String(base_url.trim().into()));
+                }
+                if !api_key.trim().is_empty() {
+                    obj.insert("api_key".into(), Value::String(api_key.trim().into()));
+                }
+                if !model.trim().is_empty() {
+                    obj.insert("model".into(), Value::String(model.trim().into()));
+                }
+            }
+            Ok(serde_json::to_string_pretty(&val).unwrap_or_default())
+        }
+        ToolId::Grok => {
+            let val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
+            let existing_toml = val
+                .get("config")
+                .or_else(|| val.get("toml"))
+                .and_then(Value::as_str)
+                .unwrap_or(raw_settings_json);
+            let mut doc = existing_toml.parse::<toml_edit::DocumentMut>().unwrap_or_default();
+            if !base_url.trim().is_empty() || !api_key.trim().is_empty() {
+                let m_tbl = doc.entry("model").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                if let Some(mt) = m_tbl.as_table_mut() {
+                    let custom = mt.entry("custom").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                    if let Some(ct) = custom.as_table_mut() {
+                        if !base_url.trim().is_empty() {
+                            ct.insert("base_url", toml_edit::value(base_url.trim()));
+                        }
+                        if !api_key.trim().is_empty() {
+                            ct.insert("api_key", toml_edit::value(api_key.trim()));
+                        }
+                    }
+                }
+            }
+            let toml_str = doc.to_string();
+            let mut out = serde_json::Map::new();
+            out.insert("config".into(), Value::String(toml_str.clone()));
+            out.insert("toml".into(), Value::String(toml_str));
+            Ok(serde_json::to_string_pretty(&Value::Object(out)).unwrap_or_default())
         }
         _ => {
             let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));

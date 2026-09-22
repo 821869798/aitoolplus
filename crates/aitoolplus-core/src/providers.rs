@@ -125,6 +125,321 @@ impl ProviderRecord {
     pub fn touch(&mut self) {
         self.updated_at = chrono::Local::now().to_rfc3339();
     }
+
+    /// Resolves `(base_url, api_key)` for this provider under the given tool.
+    /// Parity with CC-Switch `resolve_usage_credentials`.
+    pub fn resolve_credentials(&self, tool: ToolId) -> (String, String) {
+        let val = self.settings();
+        let first_non_empty = |env: Option<&Value>, keys: &[&str]| -> String {
+            if let Some(env_obj) = env.and_then(Value::as_object) {
+                for k in keys {
+                    if let Some(s) = env_obj.get(*k).and_then(Value::as_str) {
+                        let t = s.trim();
+                        if !t.is_empty() {
+                            return t.to_string();
+                        }
+                    }
+                }
+            }
+            String::new()
+        };
+
+        let (base_url, api_key) = match tool {
+            ToolId::ClaudeCode | ToolId::ClaudeDesktop => {
+                let env = val.get("env");
+                let u = first_non_empty(env, &["ANTHROPIC_BASE_URL", "BASE_URL"]);
+                let u = if u.is_empty() {
+                    first_non_empty(Some(&val), &["baseUrl", "base_url", "ANTHROPIC_BASE_URL"])
+                } else {
+                    u
+                };
+                let k = first_non_empty(
+                    env,
+                    &[
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "ANTHROPIC_API_KEY",
+                        "OPENROUTER_API_KEY",
+                        "GOOGLE_API_KEY",
+                    ],
+                );
+                let k = if k.is_empty() {
+                    first_non_empty(Some(&val), &["apiKey", "api_key", "token", "key"])
+                } else {
+                    k
+                };
+                (u, k)
+            }
+            ToolId::Codex => {
+                let auth = val.get("auth");
+                let mut key = first_non_empty(auth, &["OPENAI_API_KEY", "api_key", "token"]);
+                if key.is_empty() {
+                    key = first_non_empty(Some(&val), &["apiKey", "api_key"]);
+                }
+
+                let toml_str = val.get("config").or_else(|| val.get("toml")).and_then(Value::as_str);
+                let toml_text = toml_str.unwrap_or(&self.settings_config);
+                let mut base_url = String::new();
+
+                if let Ok(doc) = toml_text.parse::<toml::Value>() {
+                    // Try active model_provider
+                    if let Some(active) = doc.get("model_provider").and_then(|v| v.as_str()) {
+                        if let Some(providers) = doc.get("model_providers").and_then(|v| v.as_table()) {
+                            if let Some(provider) = providers.get(active).and_then(|v| v.as_table()) {
+                                if base_url.is_empty() {
+                                    if let Some(u) = provider.get("base_url").and_then(|v| v.as_str()) {
+                                        base_url = u.trim().to_string();
+                                    }
+                                }
+                                if key.is_empty() {
+                                    if let Some(k) = provider.get("experimental_bearer_token").or_else(|| provider.get("api_key")).and_then(|v| v.as_str()) {
+                                        key = k.trim().to_string();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Fallbacks in TOML: any model_providers table
+                    if base_url.is_empty() {
+                        if let Some(providers) = doc.get("model_providers").and_then(|v| v.as_table()) {
+                            for (_k, tbl_val) in providers {
+                                if let Some(tbl) = tbl_val.as_table() {
+                                    if let Some(u) = tbl.get("base_url").and_then(|v| v.as_str()) {
+                                        let ut = u.trim();
+                                        if !ut.is_empty() {
+                                            base_url = ut.to_string();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if key.is_empty() {
+                        if let Some(providers) = doc.get("model_providers").and_then(|v| v.as_table()) {
+                            for (_k, tbl_val) in providers {
+                                if let Some(tbl) = tbl_val.as_table() {
+                                    if let Some(k) = tbl.get("experimental_bearer_token").or_else(|| tbl.get("api_key")).and_then(|v| v.as_str()) {
+                                        let kt = k.trim();
+                                        if !kt.is_empty() {
+                                            key = kt.to_string();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if base_url.is_empty() {
+                        if let Some(u) = doc.get("base_url").and_then(|v| v.as_str()) {
+                            base_url = u.trim().to_string();
+                        }
+                    }
+                    if key.is_empty() {
+                        if let Some(k) = doc.get("experimental_bearer_token").and_then(|v| v.as_str()) {
+                            key = k.trim().to_string();
+                        }
+                    }
+                }
+
+                if base_url.is_empty() {
+                    base_url = first_non_empty(Some(&val), &["baseUrl", "base_url"]);
+                }
+                (base_url, key)
+            }
+            ToolId::GeminiCli => {
+                let env = val.get("env");
+                let u = first_non_empty(env, &["GOOGLE_GEMINI_BASE_URL", "GEMINI_BASE_URL", "BASE_URL"]);
+                let u = if u.is_empty() {
+                    first_non_empty(Some(&val), &["baseUrl", "base_url"])
+                } else {
+                    u
+                };
+                let k = first_non_empty(env, &["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
+                let k = if k.is_empty() {
+                    first_non_empty(Some(&val), &["apiKey", "api_key"])
+                } else {
+                    k
+                };
+                (u, k)
+            }
+            ToolId::OpenCode => {
+                let options = val.get("options");
+                let mut u = first_non_empty(options, &["baseURL", "baseUrl", "base_url"]);
+                if u.is_empty() {
+                    u = first_non_empty(Some(&val), &["baseUrl", "base_url", "endpoint"]);
+                }
+                let mut k = first_non_empty(options, &["apiKey", "api_key"]);
+                if k.is_empty() {
+                    k = first_non_empty(Some(&val), &["apiKey", "api_key"]);
+                }
+                (u, k)
+            }
+            ToolId::Pi | ToolId::OhMyPi => {
+                let mut u = first_non_empty(Some(&val), &["baseUrl", "base_url"]);
+                if u.is_empty() {
+                    if let Some(arr) = val.get("models").and_then(Value::as_array) {
+                        for m in arr {
+                            if let Some(bu) = m.get("baseUrl").or_else(|| m.get("base_url")).and_then(Value::as_str) {
+                                let trimmed = bu.trim();
+                                if !trimmed.is_empty() {
+                                    u = trimmed.to_string();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut k = first_non_empty(Some(&val), &["apiKey", "api_key"]);
+                if k.is_empty() {
+                    if let Some(auth_key) = val.get("_auth").and_then(|a| a.get("key")).and_then(Value::as_str) {
+                        k = auth_key.trim().to_string();
+                    }
+                }
+                (u, k)
+            }
+            ToolId::Grok => {
+                let toml_str = val.get("config").or_else(|| val.get("toml")).and_then(Value::as_str);
+                let toml_text = toml_str.unwrap_or(&self.settings_config);
+                let mut u = String::new();
+                let mut k = String::new();
+                if let Ok(doc) = toml_text.parse::<toml::Value>() {
+                    if let Some(models) = doc.get("model").and_then(|v| v.as_table()) {
+                        for (_name, tbl) in models {
+                            if let Some(t) = tbl.as_table() {
+                                if u.is_empty() {
+                                    if let Some(url) = t.get("base_url").and_then(|v| v.as_str()) {
+                                        u = url.trim().to_string();
+                                    }
+                                }
+                                if k.is_empty() {
+                                    if let Some(key) = t.get("api_key").and_then(|v| v.as_str()) {
+                                        k = key.trim().to_string();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if u.is_empty() {
+                        if let Some(url) = doc.get("base_url").and_then(|v| v.as_str()) {
+                            u = url.trim().to_string();
+                        }
+                    }
+                }
+                if u.is_empty() {
+                    u = first_non_empty(Some(&val), &["baseUrl", "base_url"]);
+                }
+                if k.is_empty() {
+                    k = first_non_empty(Some(&val), &["apiKey", "api_key"]);
+                }
+                (u, k)
+            }
+            ToolId::Hermes => {
+                let u = first_non_empty(Some(&val), &["base_url", "baseUrl"]);
+                let k = first_non_empty(Some(&val), &["api_key", "apiKey"]);
+                (u, k)
+            }
+            ToolId::OpenClaw => {
+                let u = first_non_empty(Some(&val), &["baseUrl", "base_url"]);
+                let k = first_non_empty(Some(&val), &["apiKey", "api_key"]);
+                (u, k)
+            }
+            ToolId::Kimi => {
+                let env = val.get("env");
+                let mut u = first_non_empty(env, &["KIMI_BASE_URL", "BASE_URL"]);
+                let mut k = first_non_empty(env, &["KIMI_API_KEY", "API_KEY"]);
+                if u.is_empty() {
+                    u = first_non_empty(Some(&val), &["baseUrl", "base_url"]);
+                }
+                if k.is_empty() {
+                    k = first_non_empty(Some(&val), &["apiKey", "api_key"]);
+                }
+                (u, k)
+            }
+            _ => {
+                let u = first_non_empty(Some(&val), &["baseUrl", "base_url", "endpoint"]);
+                let k = first_non_empty(Some(&val), &["apiKey", "api_key"]);
+                (u, k)
+            }
+        };
+
+        (base_url.trim_end_matches('/').trim().to_string(), api_key.trim().to_string())
+    }
+
+    /// Resolves the default or primary model ID for this provider.
+    pub fn resolve_model(&self, tool: ToolId) -> String {
+        let val = self.settings();
+        match tool {
+            ToolId::ClaudeCode | ToolId::ClaudeDesktop => {
+                val.get("env")
+                    .and_then(|e| e.get("ANTHROPIC_MODEL"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            }
+            ToolId::Codex => {
+                let toml_str = val.get("config").or_else(|| val.get("toml")).and_then(Value::as_str);
+                let toml_text = toml_str.unwrap_or(&self.settings_config);
+                if let Ok(doc) = toml_text.parse::<toml::Value>() {
+                    if let Some(m) = doc.get("model").and_then(|v| v.as_str()) {
+                        let mt = m.trim();
+                        if !mt.is_empty() {
+                            return mt.to_string();
+                        }
+                    }
+                }
+                if let Some(m) = val.get("model").and_then(Value::as_str) {
+                    return m.trim().to_string();
+                }
+                if let Some(first_m) = val.get("modelCatalog")
+                    .and_then(|mc| mc.get("models"))
+                    .and_then(Value::as_array)
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.get("model"))
+                    .and_then(Value::as_str)
+                {
+                    return first_m.trim().to_string();
+                }
+                String::new()
+            }
+            ToolId::GeminiCli => {
+                val.get("env")
+                    .and_then(|e| e.get("GEMINI_MODEL"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            }
+            ToolId::OpenCode => {
+                if let Some(m) = val.get("model").and_then(Value::as_str) {
+                    return m.trim().to_string();
+                }
+                if let Some(models) = val.get("models").and_then(Value::as_object) {
+                    if let Some(first_key) = models.keys().next() {
+                        return first_key.clone();
+                    }
+                }
+                String::new()
+            }
+            ToolId::Pi | ToolId::OhMyPi => {
+                if let Some(models) = val.get("models").and_then(Value::as_array) {
+                    if let Some(first) = models.first() {
+                        if let Some(id) = first.get("id").or_else(|| first.get("name")).and_then(Value::as_str) {
+                            return id.trim().to_string();
+                        }
+                    }
+                }
+                String::new()
+            }
+            _ => {
+                val.get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -704,5 +1019,72 @@ mod tests {
         assert_eq!(parsed.custom_headers.as_ref().unwrap().len(), 1);
         assert_eq!(parsed.custom_headers.as_ref().unwrap()[0].name, "HTTP-Referer");
         assert_eq!(parsed.model_rewrites.as_ref().unwrap()[0].from, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn test_resolve_credentials_parity_all_tools() {
+        // Claude Code
+        let mut p_claude = ProviderRecord::new("Claude Test", "custom");
+        p_claude.settings_config = r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com/v1/","ANTHROPIC_AUTH_TOKEN":"sk-ant-test"}}"#.into();
+        assert_eq!(
+            p_claude.resolve_credentials(ToolId::ClaudeCode),
+            ("https://api.anthropic.com/v1".to_string(), "sk-ant-test".to_string())
+        );
+
+        // Codex with auth and config TOML
+        let mut p_codex = ProviderRecord::new("Codex Test", "custom");
+        p_codex.settings_config = r#"{"auth":{"OPENAI_API_KEY":"sk-openai-key"},"config":"model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://anyrouter.top/v1\"\n"}"#.into();
+        assert_eq!(
+            p_codex.resolve_credentials(ToolId::Codex),
+            ("https://anyrouter.top/v1".to_string(), "sk-openai-key".to_string())
+        );
+
+        // Codex with bearer token in TOML
+        let mut p_codex2 = ProviderRecord::new("Codex Bearer", "custom");
+        p_codex2.settings_config = r#"{"toml":"model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://bearer.test/v1/\"\nexperimental_bearer_token = \"sk-bearer-token\"\n"}"#.into();
+        assert_eq!(
+            p_codex2.resolve_credentials(ToolId::Codex),
+            ("https://bearer.test/v1".to_string(), "sk-bearer-token".to_string())
+        );
+
+        // OpenCode with options
+        let mut p_opencode = ProviderRecord::new("OpenCode Test", "custom");
+        p_opencode.settings_config = r#"{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://88996api.cloud/v1","apiKey":"sk-opencode-key"}}"#.into();
+        assert_eq!(
+            p_opencode.resolve_credentials(ToolId::OpenCode),
+            ("https://88996api.cloud/v1".to_string(), "sk-opencode-key".to_string())
+        );
+
+        // Pi with models array
+        let mut p_pi = ProviderRecord::new("Pi Test", "custom");
+        p_pi.settings_config = r#"{"apiKey":"sk-pi-key","models":[{"id":"m1","baseUrl":"https://pi.example.com/v1"}]}"#.into();
+        assert_eq!(
+            p_pi.resolve_credentials(ToolId::Pi),
+            ("https://pi.example.com/v1".to_string(), "sk-pi-key".to_string())
+        );
+
+        // Gemini CLI
+        let mut p_gemini = ProviderRecord::new("Gemini Test", "custom");
+        p_gemini.settings_config = r#"{"env":{"GOOGLE_GEMINI_BASE_URL":"https://gemini.example.com","GEMINI_API_KEY":"ai-gemini-key"}}"#.into();
+        assert_eq!(
+            p_gemini.resolve_credentials(ToolId::GeminiCli),
+            ("https://gemini.example.com".to_string(), "ai-gemini-key".to_string())
+        );
+
+        // Hermes
+        let mut p_hermes = ProviderRecord::new("Hermes Test", "custom");
+        p_hermes.settings_config = r#"{"base_url":"https://hermes.example.com","api_key":"sk-hermes"}"#.into();
+        assert_eq!(
+            p_hermes.resolve_credentials(ToolId::Hermes),
+            ("https://hermes.example.com".to_string(), "sk-hermes".to_string())
+        );
+
+        // OpenClaw
+        let mut p_openclaw = ProviderRecord::new("OpenClaw Test", "custom");
+        p_openclaw.settings_config = r#"{"baseUrl":"https://openclaw.example.com","apiKey":"sk-openclaw"}"#.into();
+        assert_eq!(
+            p_openclaw.resolve_credentials(ToolId::OpenClaw),
+            ("https://openclaw.example.com".to_string(), "sk-openclaw".to_string())
+        );
     }
 }
