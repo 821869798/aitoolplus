@@ -2711,24 +2711,30 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
             .child({
                 let current_mirror = ws.settings.update_mirror;
                 let current_mirror_name = match current_mirror {
-                    aitoolplus_core::updater::UpdateMirror::GhProxyNet => i.t("ghproxy.net (推荐加速)", "ghproxy.net (Fast)"),
-                    aitoolplus_core::updater::UpdateMirror::Official => i.t("GitHub 官方 (直连)", "GitHub Official"),
-                    aitoolplus_core::updater::UpdateMirror::MirrorGhProxy => i.t("mirror.ghproxy", "mirror.ghproxy"),
-                    aitoolplus_core::updater::UpdateMirror::GhProxyCom => i.t("gh-proxy.com", "gh-proxy.com"),
-                    aitoolplus_core::updater::UpdateMirror::Custom => i.t("自定义 CDN / 代理", "Custom CDN"),
+                    aitoolplus_core::updater::UpdateMirror::GhProxy => {
+                        i.t("GhProxy 镜像加速 (gh-proxy.com)", "GhProxy Mirror (gh-proxy.com)")
+                    }
+                    aitoolplus_core::updater::UpdateMirror::Official => {
+                        i.t("GitHub 官方 (直连)", "GitHub Official (Direct)")
+                    }
                 };
                 let is_open = ws.ui.update_mirror_dropdown_open;
                 let mirror_options = vec![
-                    (aitoolplus_core::updater::UpdateMirror::GhProxyNet, i.t("ghproxy.net (国内推荐加速)", "ghproxy.net (Fast)")),
-                    (aitoolplus_core::updater::UpdateMirror::Official, i.t("GitHub 官方 (直连)", "GitHub Official")),
-                    (aitoolplus_core::updater::UpdateMirror::MirrorGhProxy, i.t("mirror.ghproxy", "mirror.ghproxy")),
-                    (aitoolplus_core::updater::UpdateMirror::GhProxyCom, i.t("gh-proxy.com", "gh-proxy.com")),
-                    (aitoolplus_core::updater::UpdateMirror::Custom, i.t("自定义 CDN / 代理前缀", "Custom CDN / Proxy")),
+                    (
+                        aitoolplus_core::updater::UpdateMirror::GhProxy,
+                        i.t("GhProxy 镜像加速 (gh-proxy.com)", "GhProxy Mirror (gh-proxy.com)"),
+                        crate::icons::CLOUD_DOWNLOAD_SVG,
+                    ),
+                    (
+                        aitoolplus_core::updater::UpdateMirror::Official,
+                        i.t("GitHub 官方 (直连)", "GitHub Official (Direct)"),
+                        crate::icons::GLOBE_SVG,
+                    ),
                 ];
 
                 div()
                     .flex()
-                    .items_center()
+                    .items_start()
                     .justify_between()
                     .w_full()
                     .child(
@@ -2748,15 +2754,17 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                     .text_size(px(11.5))
                                     .text_color(t.text_secondary)
                                     .child(i.t(
-                                        "国内网络推荐使用 ghproxy.net 高速镜像，秒速完成下载",
-                                        "China mirror recommended for high-speed downloads",
+                                        "国内网络推荐使用 gh-proxy.com 镜像加速，秒速完成下载",
+                                        "GhProxy mirror (gh-proxy.com) recommended for high-speed downloads",
                                     )),
                             ),
                     )
                     .child(
                         div()
-                            .relative()
-                            .w(px(240.0))
+                            .flex()
+                            .flex_col()
+                            .w(px(260.0))
+                            .gap(px(4.0))
                             .child(
                                 div()
                                     .id("update-mirror-dropdown-trigger")
@@ -2771,6 +2779,7 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                     .border_1()
                                     .border_color(if is_open { t.accent } else { t.card_border })
                                     .cursor_pointer()
+                                    .hover(|s| s.border_color(t.accent))
                                     .on_click(cx.listener(|ws, _, _, cx| {
                                         ws.ui.update_mirror_dropdown_open = !ws.ui.update_mirror_dropdown_open;
                                         cx.notify();
@@ -2782,7 +2791,11 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                             .gap(px(6.0))
                                             .child(
                                                 gpui::svg()
-                                                    .data(crate::icons::CLOUD_DOWNLOAD_SVG)
+                                                    .data(if current_mirror == aitoolplus_core::updater::UpdateMirror::GhProxy {
+                                                        crate::icons::CLOUD_DOWNLOAD_SVG
+                                                    } else {
+                                                        crate::icons::GLOBE_SVG
+                                                    })
                                                     .size(px(13.0))
                                                     .text_color(t.accent),
                                             )
@@ -2796,7 +2809,11 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                     )
                                     .child(
                                         gpui::svg()
-                                            .data(crate::icons::CHEVRON_DOWN_SVG)
+                                            .data(if is_open {
+                                                crate::icons::CHEVRON_UP_SVG
+                                            } else {
+                                                crate::icons::CHEVRON_DOWN_SVG
+                                            })
                                             .size(px(11.0))
                                             .text_color(t.text_muted),
                                     ),
@@ -2804,21 +2821,18 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                             .when(is_open, |el| {
                                 el.child(
                                     div()
-                                        .id("update-mirror-dropdown-popover")
-                                        .absolute()
-                                        .top(px(34.0))
-                                        .right_0()
-                                        .w(px(240.0))
+                                        .id("update-mirror-dropdown-menu")
+                                        .w_full()
                                         .bg(t.card_bg)
                                         .border_1()
                                         .border_color(t.card_border)
                                         .rounded(px(6.0))
-                                        .shadow_lg()
+                                        .shadow_md()
                                         .p(px(4.0))
                                         .flex()
                                         .flex_col()
                                         .gap(px(2.0))
-                                        .children(mirror_options.into_iter().map(|(m, label)| {
+                                        .children(mirror_options.into_iter().map(|(m, label, icon)| {
                                             let is_selected = m == current_mirror;
                                             div()
                                                 .id(gpui::SharedString::from(format!("mirror-opt-{:?}", m)))
@@ -2839,10 +2853,22 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                                 }))
                                                 .child(
                                                     div()
-                                                        .text_size(px(11.5))
-                                                        .text_color(if is_selected { t.accent } else { t.text_primary })
-                                                        .font_weight(if is_selected { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
-                                                        .child(label.to_string()),
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(px(6.0))
+                                                        .child(
+                                                            gpui::svg()
+                                                                .data(icon)
+                                                                .size(px(12.0))
+                                                                .text_color(if is_selected { t.accent } else { t.text_muted }),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(11.5))
+                                                                .text_color(if is_selected { t.accent } else { t.text_primary })
+                                                                .font_weight(if is_selected { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
+                                                                .child(label.to_string()),
+                                                        ),
                                                 )
                                                 .when(is_selected, |s| {
                                                     s.child(
@@ -2859,66 +2885,6 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
             })
             .into_any_element(),
     ];
-
-    // If Custom mirror is selected, show input fields
-    if ws.settings.update_mirror == aitoolplus_core::updater::UpdateMirror::Custom {
-        update_items.push(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .p(px(10.0))
-                .rounded(px(8.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(t.card_border)
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(t.text_secondary)
-                        .child(i.t(
-                            "自定义 CDN / 代理前缀（如：https://ghproxy.net/ 或自建 Cloudflare Worker URL，支持 {} 占位符）：",
-                            "Custom CDN / proxy prefix (e.g. https://ghproxy.net/ or your Cloudflare Worker URL, supports {}):",
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(div().flex_1().child(ws.ui.custom_mirror_input.clone()))
-                        .child(button_l(
-                            "save-custom-mirror-btn",
-                            i.t("保存 CDN 前缀", "Save Prefix"),
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                let val = ws
-                                    .ui
-                                    .custom_mirror_input
-                                    .read(cx)
-                                    .text()
-                                    .trim()
-                                    .to_string();
-                                ws.settings.custom_update_mirror_url = val;
-                                (ws.callbacks.save_settings)(&ws.settings);
-                                ws.ui.toast(
-                                    ws.i18n
-                                        .t(
-                                            "自定义 CDN 前缀已保存",
-                                            "Custom CDN prefix saved",
-                                        )
-                                        .to_string(),
-                                    false,
-                                );
-                                cx.notify();
-                            },
-                        )),
-                )
-                .into_any_element(),
-        );
-    }
 
     // Check for updates action bar
     let is_checking = ws.ui.update_checking;

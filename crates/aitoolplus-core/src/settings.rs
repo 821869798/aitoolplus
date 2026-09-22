@@ -411,7 +411,7 @@ fn default_true() -> bool {
 
 fn default_update_mirror() -> crate::updater::UpdateMirror {
     if system_is_chinese() {
-        crate::updater::UpdateMirror::GhProxyNet
+        crate::updater::UpdateMirror::GhProxy
     } else {
         crate::updater::UpdateMirror::Official
     }

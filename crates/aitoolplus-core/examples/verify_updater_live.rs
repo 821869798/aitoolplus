@@ -201,16 +201,8 @@ fn main() {
     let orig = "https://github.com/821869798/aitoolplus/releases/download/v0.2.0/aitoolplus-setup.exe";
     assert_eq!(UpdateMirror::Official.apply_url(orig, ""), orig);
     assert_eq!(
-        UpdateMirror::GhProxyNet.apply_url(orig, ""),
-        format!("https://ghproxy.net/{orig}")
-    );
-    assert_eq!(
-        UpdateMirror::MirrorGhProxy.apply_url(orig, ""),
-        format!("https://mirror.ghproxy.com/{orig}")
-    );
-    assert_eq!(
-        UpdateMirror::Custom.apply_url(orig, "https://cdn.mycustom.io/"),
-        format!("https://cdn.mycustom.io/{orig}")
+        UpdateMirror::GhProxy.apply_url(orig, ""),
+        format!("https://gh-proxy.com/{orig}")
     );
     println!("[PASS] Test 6: All mirror URL rewriting rules passed!");
 

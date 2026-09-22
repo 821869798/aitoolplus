@@ -17,119 +17,67 @@ pub const DEFAULT_RELEASES_API: &str =
 #[serde(rename_all = "lowercase")]
 pub enum UpdateMirror {
     #[default]
+    #[serde(
+        alias = "gh_proxy",
+        alias = "ghproxy",
+        alias = "ghproxy_com",
+        alias = "ghproxy_net",
+        alias = "mirror_ghproxy",
+        alias = "custom"
+    )]
+    GhProxy,
+    #[serde(alias = "github", alias = "direct")]
     Official,
-    GhProxyNet,
-    MirrorGhProxy,
-    GhProxyCom,
-    Custom,
 }
 
 impl UpdateMirror {
-    pub const ALL: &'static [UpdateMirror] = &[
-        UpdateMirror::Official,
-        UpdateMirror::GhProxyNet,
-        UpdateMirror::MirrorGhProxy,
-        UpdateMirror::GhProxyCom,
-        UpdateMirror::Custom,
-    ];
+    pub const ALL: &'static [UpdateMirror] = &[UpdateMirror::GhProxy, UpdateMirror::Official];
 
     pub fn id(&self) -> &'static str {
         match self {
+            Self::GhProxy => "ghproxy",
             Self::Official => "official",
-            Self::GhProxyNet => "ghproxy_net",
-            Self::MirrorGhProxy => "mirror_ghproxy",
-            Self::GhProxyCom => "ghproxy_com",
-            Self::Custom => "custom",
         }
     }
 
     pub fn from_id(id: &str) -> Self {
         match id {
-            "ghproxy_net" => Self::GhProxyNet,
-            "mirror_ghproxy" => Self::MirrorGhProxy,
-            "ghproxy_com" => Self::GhProxyCom,
-            "custom" => Self::Custom,
-            _ => Self::Official,
+            "official" | "github" | "direct" => Self::Official,
+            _ => Self::GhProxy,
         }
     }
 
     pub fn display_name(&self, is_zh: bool) -> &'static str {
         match self {
+            Self::GhProxy => {
+                if is_zh {
+                    "GhProxy 镜像加速 (gh-proxy.com)"
+                } else {
+                    "GhProxy Mirror (gh-proxy.com)"
+                }
+            }
             Self::Official => {
                 if is_zh {
-                    "GitHub 官方直连"
+                    "GitHub 官方 (直连)"
                 } else {
                     "GitHub Official (Direct)"
-                }
-            }
-            Self::GhProxyNet => {
-                if is_zh {
-                    "国内高速镜像 (ghproxy.net)"
-                } else {
-                    "China Mirror (ghproxy.net)"
-                }
-            }
-            Self::MirrorGhProxy => {
-                if is_zh {
-                    "国内备用镜像 (mirror.ghproxy.com)"
-                } else {
-                    "China Mirror (mirror.ghproxy.com)"
-                }
-            }
-            Self::GhProxyCom => {
-                if is_zh {
-                    "国内备用镜像 (gh-proxy.com)"
-                } else {
-                    "China Mirror (gh-proxy.com)"
-                }
-            }
-            Self::Custom => {
-                if is_zh {
-                    "自定义 CDN / 代理前缀"
-                } else {
-                    "Custom CDN / Mirror Prefix"
                 }
             }
         }
     }
 
-    pub fn apply_url(&self, original_url: &str, custom_prefix: &str) -> String {
+    pub fn apply_url(&self, original_url: &str, _custom_prefix: &str) -> String {
         let trimmed = original_url.trim();
         if trimmed.is_empty() {
             return String::new();
         }
         match self {
             Self::Official => trimmed.to_string(),
-            Self::GhProxyNet => {
-                if trimmed.starts_with("https://ghproxy.net/") {
-                    trimmed.to_string()
-                } else {
-                    format!("https://ghproxy.net/{}", trimmed)
-                }
-            }
-            Self::MirrorGhProxy => {
-                if trimmed.starts_with("https://mirror.ghproxy.com/") {
-                    trimmed.to_string()
-                } else {
-                    format!("https://mirror.ghproxy.com/{}", trimmed)
-                }
-            }
-            Self::GhProxyCom => {
+            Self::GhProxy => {
                 if trimmed.starts_with("https://gh-proxy.com/") {
                     trimmed.to_string()
                 } else {
-                    format!("https://gh-proxy.com/{}", trimmed)
-                }
-            }
-            Self::Custom => {
-                let prefix = custom_prefix.trim();
-                if prefix.is_empty() {
-                    trimmed.to_string()
-                } else if prefix.contains("{}") {
-                    prefix.replace("{}", trimmed)
-                } else {
-                    let clean_prefix = prefix.trim_end_matches('/');
-                    format!("{clean_prefix}/{trimmed}")
+                    format!("https://gh-proxy.com/{trimmed}")
                 }
             }
         }
@@ -721,20 +669,13 @@ mod tests {
         let orig = "https://github.com/aitoolplus/aitoolplus/releases/download/v0.1.0/aitoolplus-setup.exe";
         assert_eq!(UpdateMirror::Official.apply_url(orig, ""), orig);
         assert_eq!(
-            UpdateMirror::GhProxyNet.apply_url(orig, ""),
-            format!("https://ghproxy.net/{orig}")
+            UpdateMirror::GhProxy.apply_url(orig, ""),
+            format!("https://gh-proxy.com/{orig}")
         );
+        // Idempotent when already prefixed
         assert_eq!(
-            UpdateMirror::MirrorGhProxy.apply_url(orig, ""),
-            format!("https://mirror.ghproxy.com/{orig}")
-        );
-        assert_eq!(
-            UpdateMirror::Custom.apply_url(orig, "https://cdn.example.com"),
-            format!("https://cdn.example.com/{orig}")
-        );
-        assert_eq!(
-            UpdateMirror::Custom.apply_url(orig, "https://cdn.example.com/proxy?url={}"),
-            format!("https://cdn.example.com/proxy?url={orig}")
+            UpdateMirror::GhProxy.apply_url(&format!("https://gh-proxy.com/{orig}"), ""),
+            format!("https://gh-proxy.com/{orig}")
         );
     }
 
