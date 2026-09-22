@@ -2734,7 +2734,7 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
 
                 div()
                     .flex()
-                    .items_start()
+                    .items_center()
                     .justify_between()
                     .w_full()
                     .child(
@@ -2761,10 +2761,8 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                     )
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
+                            .relative()
                             .w(px(260.0))
-                            .gap(px(4.0))
                             .child(
                                 div()
                                     .id("update-mirror-dropdown-trigger")
@@ -2819,19 +2817,32 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                     ),
                             )
                             .when(is_open, |el| {
-                                el.child(
+                                el.child(gpui::deferred(
                                     div()
                                         .id("update-mirror-dropdown-menu")
-                                        .w_full()
+                                        .occlude()
+                                        .absolute()
+                                        .top(px(34.0))
+                                        .right_0()
+                                        .w(px(260.0))
                                         .bg(t.card_bg)
                                         .border_1()
                                         .border_color(t.card_border)
                                         .rounded(px(6.0))
-                                        .shadow_md()
+                                        .shadow_xl()
                                         .p(px(4.0))
                                         .flex()
                                         .flex_col()
                                         .gap(px(2.0))
+                                        .on_mouse_down_out({
+                                            let entity = cx.entity().clone();
+                                            move |_ev, _window, cx| {
+                                                entity.update(cx, |ws, cx| {
+                                                    ws.ui.update_mirror_dropdown_open = false;
+                                                    cx.notify();
+                                                });
+                                            }
+                                        })
                                         .children(mirror_options.into_iter().map(|(m, label, icon)| {
                                             let is_selected = m == current_mirror;
                                             div()
@@ -2879,7 +2890,7 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                                     )
                                                 })
                                         })),
-                                )
+                                ))
                             }),
                     )
             })
