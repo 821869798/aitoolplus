@@ -271,24 +271,46 @@ fn sweep_stale_model_providers(current: &mut toml_edit::DocumentMut, next: &toml
     }
 }
 
-/// The provider record's settings_config for Codex is TOML text.
+/// The provider record's settings_config for Codex is TOML text or JSON containing config/toml.
 fn provider_toml_text(record_settings: &str) -> String {
-    // UI/presets store Codex config as {"toml":"..."}; imported legacy
-    // records may still contain raw TOML text.
+    // UI/presets store Codex config as {"config":"..."} or {"toml":"..."};
+    // imported legacy records may still contain raw TOML text.
     let trimmed = record_settings.trim();
     if trimmed.starts_with('{') {
         serde_json::from_str::<Value>(trimmed)
             .ok()
-            .and_then(|value| value.get("toml").and_then(Value::as_str).map(String::from))
+            .and_then(|value| {
+                value
+                    .get("config")
+                    .or_else(|| value.get("toml"))
+                    .and_then(Value::as_str)
+                    .map(String::from)
+            })
             .unwrap_or_default()
     } else {
         trimmed.to_string()
     }
 }
 
-/// Extract the managed api key from a provider's TOML text (`api_key` under
-/// a `[model_providers.x]` table).
-fn extract_provider_api_key(provider_toml: &str) -> Option<String> {
+/// Extract the managed api key from JSON auth or TOML text.
+fn extract_provider_api_key(record_settings: &str, provider_toml: &str) -> Option<String> {
+    let trimmed = record_settings.trim();
+    if trimmed.starts_with('{') {
+        if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+            if let Some(auth) = val.get("auth").and_then(Value::as_object) {
+                if let Some(k) = auth
+                    .get("OPENAI_API_KEY")
+                    .or_else(|| auth.get("api_key"))
+                    .or_else(|| auth.get("token"))
+                    .and_then(Value::as_str)
+                {
+                    if !k.trim().is_empty() {
+                        return Some(k.trim().to_string());
+                    }
+                }
+            }
+        }
+    }
     let doc = parse_toml_document(provider_toml, "provider config").ok()?;
     if let Some(key) = doc.get("model_providers").and_then(|t| t.as_table()) {
         for (_, item) in key.iter() {
@@ -333,18 +355,43 @@ impl ToolAdapter for CodexAdapter {
 
         let _ = ctx.strategy; // Codex uses its own TOML-layer merge.
 
+        // Handle model catalog if present in provider settings
+        let mut catalog_file_opt = None;
+        if let Ok(val) = serde_json::from_str::<Value>(&ctx.provider.settings_config) {
+            if let Some(models) = val
+                .get("modelCatalog")
+                .and_then(|mc| mc.get("models"))
+                .and_then(Value::as_array)
+            {
+                if !models.is_empty() {
+                    let cat_path = root.join("cc-switch-model-catalog.json");
+                    let cat_val = serde_json::json!({ "models": models });
+                    let cat_text = serde_json::to_string_pretty(&cat_val).unwrap_or_default();
+                    write_atomic(&cat_path, &cat_text)?;
+                    files.push(cat_path.clone());
+                    catalog_file_opt = Some(cat_path);
+                }
+            }
+        }
+
         // Remove the previous provider's footprint: any root `model_provider`
         // + `[model_providers.*]` tables the new layer does not declare.
-        // Without per-record snapshots this is the faithful approximation of
-        // upstream's previous-managed removal (also cleans dangling gateways).
-        let final_toml =
+        let mut final_toml =
             build_written_config_toml(&existing_cfg, Some(&provider_toml), &next_managed, true)
                 .map_err(ApplyError::Message)?;
+
+        if let Some(cat_path) = catalog_file_opt {
+            let cat_str = cat_path.to_string_lossy().replace('\\', "/");
+            if !final_toml.contains("model_catalog_json") {
+                final_toml = format!("{final_toml}\nmodel_catalog_json = \"{cat_str}\"\n");
+            }
+        }
+
         write_atomic(&cfg, &final_toml)?;
         files.push(cfg);
 
         // auth.json: replace only managed fields, keep OAuth runtime data.
-        if let Some(api_key) = extract_provider_api_key(&provider_toml) {
+        if let Some(api_key) = extract_provider_api_key(&ctx.provider.settings_config, &provider_toml) {
             let existing_auth: Value = if auth.exists() {
                 serde_json::from_str(&std::fs::read_to_string(&auth).unwrap_or_default())
                     .unwrap_or(Value::Object(Map::new()))

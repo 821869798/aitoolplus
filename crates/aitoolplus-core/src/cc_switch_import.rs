@@ -143,16 +143,23 @@ pub fn import_from_cc_switch(
         let existing = section.providers.iter_mut().find(|p| p.id == target_id || p.name == r.name);
 
         if let Some(p) = existing {
-            if (p.settings_config.trim().is_empty() || p.settings_config == "{}") && settings_config != "{}" {
+            if settings_config != "{}" && !settings_config.trim().is_empty() {
                 p.settings_config = settings_config;
             }
-            if p.website_url.is_none() && r.website_url.is_some() {
+            p.name = r.name;
+            p.category = category;
+            if r.website_url.is_some() {
                 p.website_url = r.website_url;
             }
-            if p.meta.is_none() && meta_val.is_some() {
+            if meta_val.is_some() {
                 p.meta = meta_val;
             }
-            if tool_id != ToolId::Pi && is_current {
+            if r.notes.is_some() {
+                p.notes = r.notes;
+            }
+            if tool_id == ToolId::Pi {
+                p.is_applied = true;
+            } else if is_current {
                 p.is_applied = true;
             }
             p.touch();

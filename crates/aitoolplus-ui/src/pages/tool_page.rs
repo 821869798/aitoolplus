@@ -6576,9 +6576,19 @@ fn extract_provider_config(tool: ToolId, raw_json: &str) -> ExtractedProviderCon
                     cfg.custom_headers = v.to_string();
                 }
             }
+            if cfg.base_url.is_empty() {
+                if let Some(v) = val.get("baseUrl").or_else(|| val.get("base_url")).or_else(|| val.get("ANTHROPIC_BASE_URL")).and_then(Value::as_str) {
+                    cfg.base_url = v.to_string();
+                }
+            }
+            if cfg.api_key.is_empty() {
+                if let Some(v) = val.get("apiKey").or_else(|| val.get("api_key")).or_else(|| val.get("ANTHROPIC_AUTH_TOKEN")).or_else(|| val.get("ANTHROPIC_API_KEY")).and_then(Value::as_str) {
+                    cfg.api_key = v.to_string();
+                }
+            }
         }
         ToolId::Codex => {
-            let toml_text = val.get("toml").and_then(Value::as_str).unwrap_or(raw_json);
+            let toml_text = val.get("config").or_else(|| val.get("toml")).and_then(Value::as_str).unwrap_or(raw_json);
             if let Ok(doc) = toml_text.parse::<toml_edit::DocumentMut>() {
                 if let Some(m) = doc.get("model").and_then(|v| v.as_str()) {
                     cfg.model = m.to_string();
@@ -6598,8 +6608,39 @@ fn extract_provider_config(tool: ToolId, raw_json: &str) -> ExtractedProviderCon
                             if let Some(k) = tbl.get("api_key").and_then(|v| v.as_str()) {
                                 cfg.api_key = k.to_string();
                             }
+                            if let Some(w) = tbl.get("wire_api").and_then(|v| v.as_str()) {
+                                cfg.codex_wire_api = w.to_string();
+                            }
                         }
                     }
+                }
+            }
+            if cfg.api_key.is_empty() {
+                if let Some(auth) = val.get("auth").and_then(Value::as_object) {
+                    if let Some(k) = auth.get("OPENAI_API_KEY").or_else(|| auth.get("api_key")).or_else(|| auth.get("token")).and_then(Value::as_str) {
+                        cfg.api_key = k.trim().to_string();
+                    }
+                }
+            }
+            if cfg.base_url.is_empty() {
+                if let Some(v) = val.get("baseUrl").or_else(|| val.get("base_url")).and_then(Value::as_str) {
+                    cfg.base_url = v.trim().to_string();
+                }
+            }
+            if cfg.api_key.is_empty() {
+                if let Some(v) = val.get("apiKey").or_else(|| val.get("api_key")).and_then(Value::as_str) {
+                    cfg.api_key = v.trim().to_string();
+                }
+            }
+            if cfg.model.is_empty() {
+                if let Some(first_m) = val.get("modelCatalog")
+                    .and_then(|mc| mc.get("models"))
+                    .and_then(Value::as_array)
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.get("model"))
+                    .and_then(Value::as_str)
+                {
+                    cfg.model = first_m.to_string();
                 }
             }
         }
@@ -6623,6 +6664,16 @@ fn extract_provider_config(tool: ToolId, raw_json: &str) -> ExtractedProviderCon
                     cfg.model = v.to_string();
                 }
             }
+            if cfg.api_key.is_empty() {
+                if let Some(v) = val.get("apiKey").or_else(|| val.get("api_key")).and_then(Value::as_str) {
+                    cfg.api_key = v.to_string();
+                }
+            }
+            if cfg.base_url.is_empty() {
+                if let Some(v) = val.get("baseUrl").or_else(|| val.get("base_url")).and_then(Value::as_str) {
+                    cfg.base_url = v.to_string();
+                }
+            }
         }
         _ => {
             if let Some(v) = val
@@ -6641,6 +6692,7 @@ fn extract_provider_config(tool: ToolId, raw_json: &str) -> ExtractedProviderCon
             if let Some(v) = val
                 .get("apiKey")
                 .or_else(|| val.get("api_key"))
+                .or_else(|| val.get("_auth").and_then(|a| a.get("key")))
                 .and_then(Value::as_str)
             {
                 cfg.api_key = v.to_string();
@@ -6653,6 +6705,8 @@ fn extract_provider_config(tool: ToolId, raw_json: &str) -> ExtractedProviderCon
             }
             if let Some(v) = val.get("model").and_then(Value::as_str) {
                 cfg.model = v.to_string();
+            } else if let Some(first_m) = val.get("models").and_then(Value::as_object).and_then(|m| m.keys().next()) {
+                cfg.model = first_m.clone();
             }
         }
     }
@@ -6994,6 +7048,64 @@ pub fn open_provider_dialog(
         }
     }
 
+    let mut codex_catalog_models = Vec::new();
+    if tool == ToolId::Codex {
+        if let Ok(val) = serde_json::from_str::<Value>(&raw_config) {
+            if let Some(models) = val
+                .get("modelCatalog")
+                .and_then(|mc| mc.get("models"))
+                .and_then(Value::as_array)
+            {
+                for (idx, m) in models.iter().enumerate() {
+                    let d_name = m.get("displayName").and_then(Value::as_str).unwrap_or("");
+                    let m_name = m.get("model").and_then(Value::as_str).unwrap_or("");
+                    let cw = m
+                        .get("contextWindow")
+                        .map(|v| {
+                            if let Some(s) = v.as_str() {
+                                s.to_string()
+                            } else if let Some(n) = v.as_i64() {
+                                n.to_string()
+                            } else {
+                                String::new()
+                            }
+                        })
+                        .unwrap_or_default();
+                    let reasoning = if let Some(arr) = m.get("reasoningLevels").and_then(Value::as_array) {
+                        arr.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",")
+                    } else if let Some(s) = m.get("reasoningLevels").and_then(Value::as_str) {
+                        s.to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    let display_name = cx.new(|cx| {
+                        let mut inp = TextInput::new(i.t("例如 DeepSeek V3", "e.g. DeepSeek V3"), cx);
+                        inp.set_text_silent(d_name.to_string(), cx);
+                        inp
+                    });
+                    let model_ent = cx.new(|cx| {
+                        let mut inp = TextInput::new(i.t("实际模型如 deepseek-chat", "Model name e.g. deepseek-chat"), cx);
+                        inp.set_text_silent(m_name.to_string(), cx);
+                        inp
+                    });
+                    let cw_ent = cx.new(|cx| {
+                        let mut inp = TextInput::new(i.t("如 128000", "e.g. 128000"), cx);
+                        inp.set_text_silent(cw, cx);
+                        inp
+                    });
+                    codex_catalog_models.push(crate::pages::CodexCatalogModelDraft {
+                        key: format!("codex_cat_{idx}"),
+                        display_name,
+                        model: model_ent,
+                        context_window: cw_ent,
+                        reasoning_levels: reasoning,
+                    });
+                }
+            }
+        }
+    }
+
     ws.ui.provider_dialog = Some(ProviderDialogState {
         editing_id,
         tool,
@@ -7024,6 +7136,7 @@ pub fn open_provider_dialog(
         pi_models,
         codex_wire_api: extracted.codex_wire_api,
         codex_reasoning_effort: extracted.codex_reasoning_effort,
+        codex_catalog_models,
         notes,
         website,
         preset_index: None,
@@ -7171,6 +7284,7 @@ pub fn render_provider_dialog(
         pi_models,
         codex_wire_api,
         codex_reasoning_effort,
+        codex_catalog_models,
         notes,
         website,
         preset_index,
@@ -7740,6 +7854,94 @@ pub fn render_provider_dialog(
                             ));
                         }
                         fmt_row
+                    }),
+            );
+        }
+        if tool == ToolId::Codex && category != "official" {
+            connection_section = connection_section.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(field_label(i.t("上游协议格式 (Upstream Format)", "Upstream Format")))
+                    .child({
+                        let formats = [
+                            ("responses", "Responses (原生直连)"),
+                            ("openai_chat", "Chat Completions (需开启路由)"),
+                            ("anthropic", "Anthropic Messages (需开启路由)"),
+                        ];
+                        let mut fmt_row = div().flex().gap(px(6.0)).flex_wrap();
+                        for (f_val, f_lbl) in formats {
+                            let is_curr = if codex_wire_api.is_empty() {
+                                f_val == "responses"
+                            } else {
+                                codex_wire_api == f_val
+                            };
+                            let f_val2 = f_val.to_string();
+                            fmt_row = fmt_row.child(button_l(
+                                gpui::SharedString::from(format!("codex-fmt-{f_val}")),
+                                f_lbl,
+                                if is_curr {
+                                    ButtonVariant::Primary
+                                } else {
+                                    ButtonVariant::Secondary
+                                },
+                                &t,
+                                cx,
+                                move |ws, _ev, _w, cx| {
+                                    if let Some(dialog) = ws.ui.provider_dialog.as_mut() {
+                                        dialog.codex_wire_api = f_val2.clone();
+                                    }
+                                    cx.notify();
+                                },
+                            ));
+                        }
+                        fmt_row
+                    }),
+            );
+
+            connection_section = connection_section.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(field_label(i.t("思考等级 (Reasoning Effort)", "Reasoning Effort")))
+                    .child({
+                        let efforts = [
+                            ("default", "默认 (Default)"),
+                            ("none", "none"),
+                            ("low", "low"),
+                            ("medium", "medium"),
+                            ("high", "high"),
+                            ("xhigh", "xhigh"),
+                        ];
+                        let mut eff_row = div().flex().gap(px(6.0)).flex_wrap();
+                        for (e_val, e_lbl) in efforts {
+                            let is_curr = if codex_reasoning_effort.is_empty() {
+                                e_val == "default"
+                            } else {
+                                codex_reasoning_effort == e_val
+                            };
+                            let e_val2 = e_val.to_string();
+                            eff_row = eff_row.child(button_l(
+                                gpui::SharedString::from(format!("codex-eff-{e_val}")),
+                                e_lbl,
+                                if is_curr {
+                                    ButtonVariant::Primary
+                                } else {
+                                    ButtonVariant::Secondary
+                                },
+                                &t,
+                                cx,
+                                move |ws, _ev, _w, cx| {
+                                    if let Some(dialog) = ws.ui.provider_dialog.as_mut() {
+                                        dialog.codex_reasoning_effort = e_val2.clone();
+                                    }
+                                    cx.notify();
+                                },
+                            ));
+                        }
+                        eff_row
                     }),
             );
         }
@@ -8479,6 +8681,309 @@ pub fn render_provider_dialog(
             }
 
             pi_sec.into_any_element()
+        } else if tool == ToolId::Codex {
+            // Codex Model Configuration
+            let mut codex_sec = div().flex().flex_col().gap(px(10.0));
+
+            // 1. Default Model Card
+            let mut def_card = div()
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .flex()
+                .flex_col()
+                .gap(px(8.0));
+
+            def_card = def_card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(t.text_primary)
+                            .child(i.t("默认模型 (Default Model)", "Default Model")),
+                    ),
+            );
+
+            def_card = def_card.child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(t.text_muted)
+                    .child(i.t(
+                        "Codex 默认请求的模型，随时可改。留空且配置了模型映射时，默认使用映射第一行。",
+                        "Default model for Codex. Leave empty to use the first mapped model.",
+                    )),
+            );
+
+            let def_row = div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(div().flex_1().child(render_model_input_with_fetch(
+                    "codex_default_model".to_string(),
+                    model.clone(),
+                    None,
+                    cx,
+                )))
+                .child({
+                    let t2 = t.clone();
+                    button_with_icon_loading_l(
+                        "btn-fetch-models-codex-def",
+                        if has_models { crate::icons::REFRESH_SVG } else { crate::icons::DOWNLOAD_SVG },
+                        if is_fetching_models {
+                            i.t("获取中...", "Fetching...")
+                        } else if has_models {
+                            i.t("重新获取", "Refresh")
+                        } else {
+                            i.t("获取上游模型", "Fetch Models")
+                        },
+                        ButtonVariant::Secondary,
+                        is_fetching_models,
+                        &t2,
+                        cx,
+                        |ws, _ev, _w, cx| {
+                            fetch_upstream_models_for_dialog(ws, cx);
+                        },
+                    )
+                });
+            def_card = def_card.child(def_row);
+            codex_sec = codex_sec.child(def_card);
+
+            // 2. Model Mapping Card
+            let mut map_card = div()
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .bg(t.sidebar_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .flex()
+                .flex_col()
+                .gap(px(10.0));
+
+            map_card = map_card.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(t.text_primary)
+                                    .child(i.t("模型映射 (Model Mapping)", "Model Mapping")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(t.text_muted)
+                                    .child(i.t(
+                                        "配置 Codex 菜单显示名与实际请求模型的映射（多模型支持）",
+                                        "Configure model mapping between menu display name and actual upstream model",
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child({
+                                let t2 = t.clone();
+                                button_with_icon_loading_l(
+                                    "btn-fetch-models-codex-map",
+                                    if has_models { crate::icons::REFRESH_SVG } else { crate::icons::DOWNLOAD_SVG },
+                                    if is_fetching_models {
+                                        i.t("获取中...", "Fetching...")
+                                    } else if has_models {
+                                        i.t("重新获取", "Refresh")
+                                    } else {
+                                        i.t("获取上游模型", "Fetch Models")
+                                    },
+                                    ButtonVariant::Secondary,
+                                    is_fetching_models,
+                                    &t2,
+                                    cx,
+                                    |ws, _ev, _w, cx| {
+                                        fetch_upstream_models_for_dialog(ws, cx);
+                                    },
+                                )
+                            })
+                            .child({
+                                let t2 = t.clone();
+                                button_with_icon_l(
+                                    "btn-add-codex-model",
+                                    crate::icons::PLUS_SVG,
+                                    i.t("添加模型", "Add Model"),
+                                    ButtonVariant::Secondary,
+                                    &t2,
+                                    cx,
+                                    |ws, _ev, _w, cx| {
+                                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                            let idx = d.codex_catalog_models.len();
+                                            let display_name = cx.new(|cx| TextInput::new(ws.i18n.t("例如 DeepSeek V3", "e.g. DeepSeek V3"), cx));
+                                            let model_ent = cx.new(|cx| TextInput::new(ws.i18n.t("实际模型如 deepseek-chat", "Model e.g. deepseek-chat"), cx));
+                                            let cw_ent = cx.new(|cx| {
+                                                let mut inp = TextInput::new(ws.i18n.t("如 128000", "e.g. 128000"), cx);
+                                                inp.set_text_silent("128000", cx);
+                                                inp
+                                            });
+                                            d.codex_catalog_models.push(crate::pages::CodexCatalogModelDraft {
+                                                key: format!("codex_cat_{idx}"),
+                                                display_name,
+                                                model: model_ent,
+                                                context_window: cw_ent,
+                                                reasoning_levels: String::new(),
+                                            });
+                                        }
+                                        cx.notify();
+                                    },
+                                )
+                            }),
+                    ),
+            );
+
+            // Fetch error banner
+            if let Some(err_txt) = &fetch_error {
+                let t2 = t.clone();
+                let dismiss_btn = crate::components::icon_button_svg(
+                    "btn-dismiss-codex-fetch-err",
+                    crate::icons::X_SVG,
+                    i.t("关闭", "Close"),
+                    false,
+                    &t2,
+                    cx,
+                    |ws, _, _, cx| {
+                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                            d.fetch_error = None;
+                        }
+                        cx.notify();
+                    },
+                );
+                map_card = map_card.child(crate::components::error_strip(
+                    "codex-fetch-err-strip",
+                    i.t("获取模型失败", "Fetch models failed"),
+                    err_txt,
+                    &t2,
+                    cx,
+                    Some(dismiss_btn),
+                ));
+            }
+
+            if codex_catalog_models.is_empty() {
+                map_card = map_card.child(
+                    div()
+                        .py(px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(12.0))
+                        .text_color(t.text_muted)
+                        .child(i.t(
+                            "暂无模型映射配置（非必填），点击右上角【添加模型】或【获取上游模型】进行多模型映射",
+                            "No model mapping configured. Click Add Model or Fetch Models.",
+                        )),
+                );
+            } else {
+                // Table header
+                map_card = map_card.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .px(px(2.0))
+                        .text_size(px(11.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.text_secondary)
+                        .child(div().w(px(160.0)).child(i.t("菜单显示名", "Menu Display Name")))
+                        .child(div().flex_1().child(i.t("实际请求模型 *", "Actual Request Model *")))
+                        .child(div().w(px(100.0)).child(i.t("上下文窗口", "Context Window")))
+                        .child(div().w(px(90.0)).child(i.t("思考等级", "Reasoning Levels")))
+                        .child(div().w(px(28.0))),
+                );
+
+                for (idx, draft) in codex_catalog_models.iter().enumerate() {
+                    let t2 = t.clone();
+                    let current_reasoning = draft.reasoning_levels.clone();
+
+                    let row_div = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .p(px(6.0))
+                        .rounded(px(6.0))
+                        .bg(t2.card_bg)
+                        .border_1()
+                        .border_color(t2.card_border)
+                        .child(div().w(px(160.0)).child(input_container(&t2, draft.display_name.clone())))
+                        .child(div().flex_1().child(render_model_input_with_fetch(
+                            format!("codex_row_{idx}"),
+                            draft.model.clone(),
+                            Some(draft.display_name.clone()),
+                            cx,
+                        )))
+                        .child(div().w(px(100.0)).child(input_container(&t2, draft.context_window.clone())))
+                        .child({
+                            let label = if current_reasoning.is_empty() {
+                                i.t("未设置", "Not set").to_string()
+                            } else {
+                                current_reasoning.clone()
+                            };
+                            button_l(
+                                gpui::SharedString::from(format!("btn-codex-row-eff-{idx}")),
+                                gpui::SharedString::from(label),
+                                ButtonVariant::Secondary,
+                                &t2,
+                                cx,
+                                move |ws, _ev, _w, cx| {
+                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                        if let Some(m) = d.codex_catalog_models.get_mut(idx) {
+                                            m.reasoning_levels = match m.reasoning_levels.as_str() {
+                                                "" => "none".to_string(),
+                                                "none" => "low".to_string(),
+                                                "low" => "medium".to_string(),
+                                                "medium" => "high".to_string(),
+                                                "high" => "xhigh".to_string(),
+                                                _ => String::new(),
+                                            };
+                                        }
+                                    }
+                                    cx.notify();
+                                },
+                            )
+                        })
+                        .child(crate::components::icon_button_svg(
+                            format!("btn-del-codex-model-{idx}"),
+                            crate::icons::TRASH_SVG,
+                            i.t("移除模型", "Remove model"),
+                            true,
+                            &t2,
+                            cx,
+                            move |ws, _ev, _w, cx| {
+                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                    d.codex_catalog_models.remove(idx);
+                                    let msg = ws.i18n.t("已移除模型", "Model removed").to_string();
+                                    ws.ui.toast(msg, false);
+                                }
+                                cx.notify();
+                            },
+                        ));
+
+                    map_card = map_card.child(row_div);
+                }
+            }
+
+            codex_sec = codex_sec.child(map_card);
+            codex_sec.into_any_element()
         } else {
             // Model section for Claude Code / generic tools
             let mut sec = div()
@@ -9783,6 +10288,7 @@ pub struct ProviderFormData<'a> {
     pub pi_models: &'a [Value],
     pub codex_wire_api: &'a str,
     pub codex_reasoning_effort: &'a str,
+    pub codex_catalog_models: &'a [Value],
     pub custom_user_agent: &'a str,
     pub custom_headers: &'a str,
     pub headers_map: &'a [(String, String)],
@@ -9816,6 +10322,7 @@ fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String
         pi_models,
         codex_wire_api,
         codex_reasoning_effort,
+        codex_catalog_models,
         custom_user_agent,
         custom_headers,
         headers_map,
@@ -9968,17 +10475,34 @@ fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String
         }
         ToolId::Codex => {
             let val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
-            let existing_toml = val.get("toml").and_then(Value::as_str).unwrap_or(raw_settings_json);
+            let existing_toml = val
+                .get("config")
+                .or_else(|| val.get("toml"))
+                .and_then(Value::as_str)
+                .unwrap_or(raw_settings_json);
             let mut doc = existing_toml.parse::<toml_edit::DocumentMut>().unwrap_or_default();
-            if !model.trim().is_empty() {
-                doc.insert("model", toml_edit::value(model.trim()));
+
+            let effective_model = if !model.trim().is_empty() {
+                model.trim().to_string()
+            } else if let Some(first_cat) = codex_catalog_models.first().and_then(|v| v.get("model")).and_then(Value::as_str) {
+                first_cat.to_string()
+            } else {
+                String::new()
+            };
+
+            if !effective_model.is_empty() {
+                doc.insert("model", toml_edit::value(effective_model));
             }
             if codex_reasoning_effort != "default" && !codex_reasoning_effort.trim().is_empty() {
                 doc.insert("model_reasoning_effort", toml_edit::value(codex_reasoning_effort.trim()));
             }
-            if !codex_wire_api.trim().is_empty() {
-                doc.insert("wire_api", toml_edit::value(codex_wire_api.trim()));
-            }
+            let wire = if !codex_wire_api.trim().is_empty() {
+                codex_wire_api.trim()
+            } else {
+                "responses"
+            };
+            doc.insert("wire_api", toml_edit::value(wire));
+
             if !base_url.trim().is_empty() || !api_key.trim().is_empty() {
                 let mp = doc.entry("model_providers").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
                 if let Some(mp_tbl) = mp.as_table_mut() {
@@ -9990,15 +10514,31 @@ fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String
                         if !api_key.trim().is_empty() {
                             cp_tbl.insert("api_key", toml_edit::value(api_key.trim()));
                         }
-                        cp_tbl.insert("wire_api", toml_edit::value(codex_wire_api.trim()));
+                        cp_tbl.insert("wire_api", toml_edit::value(wire));
                     }
                 }
                 doc.insert("model_provider", toml_edit::value("custom"));
             }
             let toml_str = doc.to_string();
-            let mut obj = serde_json::Map::new();
-            obj.insert("toml".into(), Value::String(toml_str));
-            Ok(serde_json::to_string_pretty(&Value::Object(obj)).unwrap_or_default())
+
+            let mut auth_obj = val.get("auth").and_then(Value::as_object).cloned().unwrap_or_default();
+            if !api_key.trim().is_empty() {
+                auth_obj.insert("OPENAI_API_KEY".into(), Value::String(api_key.trim().into()));
+            }
+
+            let mut out = serde_json::Map::new();
+            out.insert("auth".into(), Value::Object(auth_obj));
+            out.insert("config".into(), Value::String(toml_str.clone()));
+            out.insert("toml".into(), Value::String(toml_str));
+            if !codex_catalog_models.is_empty() {
+                out.insert(
+                    "modelCatalog".into(),
+                    serde_json::json!({
+                        "models": codex_catalog_models
+                    }),
+                );
+            }
+            Ok(serde_json::to_string_pretty(&Value::Object(out)).unwrap_or_default())
         }
         ToolId::GeminiCli => {
             let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({ "env": {} }));
@@ -10053,6 +10593,32 @@ fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String
                     } else {
                         obj.remove("headers");
                     }
+                }
+            }
+            Ok(serde_json::to_string_pretty(&val).unwrap_or_default())
+        }
+        ToolId::OpenCode => {
+            let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
+            if !val.is_object() {
+                val = serde_json::json!({});
+            }
+            if let Some(obj) = val.as_object_mut() {
+                if !base_url.trim().is_empty() {
+                    obj.insert("baseUrl".into(), Value::String(base_url.trim().into()));
+                    let options = obj.entry("options").or_insert_with(|| serde_json::json!({}));
+                    if let Some(opt_obj) = options.as_object_mut() {
+                        opt_obj.insert("baseURL".into(), Value::String(base_url.trim().into()));
+                    }
+                }
+                if !api_key.trim().is_empty() {
+                    obj.insert("apiKey".into(), Value::String(api_key.trim().into()));
+                    let options = obj.entry("options").or_insert_with(|| serde_json::json!({}));
+                    if let Some(opt_obj) = options.as_object_mut() {
+                        opt_obj.insert("apiKey".into(), Value::String(api_key.trim().into()));
+                    }
+                }
+                if !model.trim().is_empty() {
+                    obj.insert("model".into(), Value::String(model.trim().into()));
                 }
             }
             Ok(serde_json::to_string_pretty(&val).unwrap_or_default())
@@ -10211,6 +10777,39 @@ fn save_provider(
         }
     }
 
+    let mut codex_catalog_models_json = Vec::new();
+    if tool == ToolId::Codex {
+        for draft in &state.codex_catalog_models {
+            let d_name = draft.display_name.update(cx, |inp, _| inp.text().trim().to_string());
+            let m_name = draft.model.update(cx, |inp, _| inp.text().trim().to_string());
+            let cw = draft.context_window.update(cx, |inp, _| inp.text().trim().to_string());
+            let reasoning = &draft.reasoning_levels;
+            if !m_name.is_empty() || !d_name.is_empty() {
+                let mut obj = serde_json::Map::new();
+                obj.insert(
+                    "displayName".to_string(),
+                    Value::String(if d_name.is_empty() {
+                        m_name.clone()
+                    } else {
+                        d_name
+                    }),
+                );
+                obj.insert("model".to_string(), Value::String(m_name));
+                if !cw.is_empty() {
+                    obj.insert("contextWindow".to_string(), Value::String(cw));
+                }
+                if !reasoning.is_empty() {
+                    let levels: Vec<Value> = reasoning
+                        .split(',')
+                        .map(|s| Value::String(s.trim().to_string()))
+                        .collect();
+                    obj.insert("reasoningLevels".to_string(), Value::Array(levels));
+                }
+                codex_catalog_models_json.push(Value::Object(obj));
+            }
+        }
+    }
+
     let form_data = ProviderFormData {
         tool,
         category: &category,
@@ -10237,6 +10836,7 @@ fn save_provider(
         pi_models: &pi_models_json,
         codex_wire_api: &codex_wire_api,
         codex_reasoning_effort: &codex_reasoning_effort,
+        codex_catalog_models: &codex_catalog_models_json,
         custom_user_agent: &custom_user_agent_txt,
         custom_headers: &effective_custom_headers,
         headers_map: &headers_kv,
@@ -10255,7 +10855,7 @@ fn save_provider(
 
     let _ = ws.store.update(|store| {
         let section = store.tool_mut(tool);
-        match editing_id {
+        match editing_id.clone() {
             Some(id) => {
                 aitoolplus_core::providers::update(&mut section.providers, &id, |p| {
                     p.name = name_txt.clone();
@@ -10290,15 +10890,48 @@ fn save_provider(
     });
     ws.persist_store();
 
-    // Re-apply if this was the active provider for Pi / OhMyPi
+    // Re-apply if this was the saved/active provider for Pi / OhMyPi
     if tool == ToolId::Pi {
-        if let Some(applied) = ws.store.store().tool(tool).providers.iter().find(|p| p.is_applied).cloned() {
-            let _ = aitoolplus_core::pi_runtime::apply_provider(&ws.paths, &applied);
+        let saved_target_id = editing_id.clone().unwrap_or_else(|| {
+            let key = if !pi_provider_key_txt.is_empty() {
+                pi_provider_key_txt.clone()
+            } else {
+                name_txt.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == '-').collect()
+            };
+            let key = if key.is_empty() { "custom".to_string() } else { key };
+            format!("pi:{key}")
+        });
+
+        // Ensure this saved provider is marked applied and persisted to ~/.pi/agent/models.json
+        let _ = ws.store.update(|store| {
+            if let Some(p) = store.tool_mut(ToolId::Pi).providers.iter_mut().find(|p| p.id == saved_target_id) {
+                p.is_applied = true;
+            }
+        });
+        ws.persist_store();
+
+        if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == saved_target_id).cloned() {
+            let _ = aitoolplus_core::pi_runtime::apply_provider(&ws.paths, &saved);
         }
     } else if tool == ToolId::OhMyPi {
-        if let Some(applied) = ws.store.store().tool(tool).providers.iter().find(|p| p.is_applied).cloned() {
+        let saved_target_id = editing_id.clone().unwrap_or_else(|| {
+            let key = if !pi_provider_key_txt.is_empty() {
+                pi_provider_key_txt.clone()
+            } else {
+                name_txt.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == '-').collect()
+            };
+            let key = if key.is_empty() { "custom".to_string() } else { key };
+            format!("omp:{key}")
+        });
+        let _ = ws.store.update(|store| {
+            if let Some(p) = store.tool_mut(ToolId::OhMyPi).providers.iter_mut().find(|p| p.id == saved_target_id) {
+                p.is_applied = true;
+            }
+        });
+        ws.persist_store();
+        if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == saved_target_id).cloned() {
             let omp_paths = aitoolplus_core::oh_my_pi::OmpRuntimePaths::from_paths(&ws.paths);
-            let _ = aitoolplus_core::oh_my_pi::apply_provider(&omp_paths, &applied);
+            let _ = aitoolplus_core::oh_my_pi::apply_provider(&omp_paths, &saved);
         }
     }
 
@@ -10544,6 +11177,7 @@ mod tests {
             pi_models: &[],
             codex_wire_api: "",
             codex_reasoning_effort: "",
+            codex_catalog_models: &[],
             custom_user_agent: "claude-cli/2.1.237 (external, cli)",
             custom_headers: "X-Krill-Custom: 123",
             headers_map: &[],
@@ -10644,6 +11278,7 @@ mod tests {
             pi_models: &pi_models,
             codex_wire_api: "",
             codex_reasoning_effort: "",
+            codex_catalog_models: &[],
             custom_user_agent: "Kilo-Code/1.0",
             custom_headers: "",
             headers_map: &[("X-Title".to_string(), "DeepSeekApp".to_string())],
@@ -10682,6 +11317,58 @@ mod tests {
         assert_eq!(models[1]["id"], "deepseek-reasoner");
         assert_eq!(models[1]["reasoning"], true);
         assert_eq!(models[1]["input"], serde_json::json!(["text", "image"]));
+    }
+
+    #[test]
+    fn test_codex_provider_settings_building() {
+        let catalog = vec![
+            serde_json::json!({
+                "displayName": "DeepSeek V3",
+                "model": "deepseek-chat",
+                "contextWindow": "64000",
+                "reasoningLevels": ["none"]
+            })
+        ];
+        let form = ProviderFormData {
+            tool: ToolId::Codex,
+            category: "custom",
+            base_url: "https://api.deepseek.com/v1",
+            api_key: "sk-test-codex",
+            api_format: "openai_responses",
+            model: "deepseek-chat",
+            sonnet_model: "",
+            sonnet_name: "",
+            opus_model: "",
+            opus_name: "",
+            haiku_model: "",
+            haiku_name: "",
+            fable_model: "",
+            fable_name: "",
+            subagent_model: "",
+            sonnet_1m: false,
+            opus_1m: false,
+            haiku_1m: false,
+            fable_1m: false,
+            subagent_1m: false,
+            pi_provider_key: "",
+            pi_api_format: "",
+            pi_models: &[],
+            codex_wire_api: "responses",
+            codex_reasoning_effort: "low",
+            codex_catalog_models: &catalog,
+            custom_user_agent: "",
+            custom_headers: "",
+            headers_map: &[],
+            raw_settings_json: "{}",
+        };
+
+        let settings_str = build_provider_settings(&form).expect("should build Codex settings");
+        let parsed: Value = serde_json::from_str(&settings_str).expect("must be valid JSON");
+        assert_eq!(parsed["auth"]["OPENAI_API_KEY"], "sk-test-codex");
+        let toml_str = parsed["config"].as_str().unwrap();
+        assert!(toml_str.contains("model = \"deepseek-chat\""));
+        assert!(toml_str.contains("base_url = \"https://api.deepseek.com/v1\""));
+        assert_eq!(parsed["modelCatalog"]["models"][0]["displayName"], "DeepSeek V3");
     }
 
     #[test]

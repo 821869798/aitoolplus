@@ -478,6 +478,15 @@ pub struct PiModelDraft {
     pub is_expanded: bool,
 }
 
+#[derive(Clone)]
+pub struct CodexCatalogModelDraft {
+    pub key: String,
+    pub display_name: gpui::Entity<TextInput>,
+    pub model: gpui::Entity<TextInput>,
+    pub context_window: gpui::Entity<TextInput>,
+    pub reasoning_levels: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProviderDialogTab {
     #[default]
@@ -537,6 +546,7 @@ pub struct ProviderDialogState {
     // Codex specific
     pub codex_wire_api: String,
     pub codex_reasoning_effort: String,
+    pub codex_catalog_models: Vec<CodexCatalogModelDraft>,
 
     // Meta & Advanced
     pub notes: gpui::Entity<TextInput>,

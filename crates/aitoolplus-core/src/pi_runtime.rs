@@ -153,7 +153,7 @@ pub fn set_provider_enabled(
     let key = provider
         .id
         .strip_prefix("pi:")
-        .ok_or_else(|| "Pi provider record has no runtime key".to_string())?;
+        .unwrap_or(&provider.id);
     let incoming: Value = serde_json::from_str(&provider.settings_config)
         .map_err(|e| format!("invalid Pi provider JSON: {e}"))?;
 
