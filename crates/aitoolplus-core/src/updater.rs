@@ -226,14 +226,33 @@ pub fn check_latest(current_version: &str) -> Result<UpdateInfo, String> {
 }
 
 pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, String> {
-    let response = ureq::AgentBuilder::new()
+    let res = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .get(api)
         .set("Accept", "application/vnd.github+json, application/json")
         .set("User-Agent", "AIToolPlus-Updater")
-        .call()
-        .map_err(|error| format!("update check failed: {error}"))?;
+        .call();
+
+    let response = match res {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(404, _)) => {
+            let current = normalize_version(current_version);
+            return Ok(UpdateInfo {
+                current_version: current.clone(),
+                latest_version: current,
+                update_available: false,
+                release_url: "https://github.com/821869798/aitoolplus/releases".to_string(),
+                release_notes: String::new(),
+                published_at: None,
+                assets: Vec::new(),
+            });
+        }
+        Err(ureq::Error::Status(403, _)) => {
+            return Err("GitHub API rate limit exceeded (HTTP 403), please try again later".to_string());
+        }
+        Err(error) => return Err(format!("update check failed: {error}")),
+    };
 
     let payload: ReleasePayload = response
         .into_json()
@@ -766,5 +785,163 @@ mod tests {
         assert_eq!(std::fs::metadata(&out_file).unwrap().len(), 1024);
         assert!(progress_count >= 1);
     }
+
+    #[test]
+    fn update_check_404_handles_gracefully_as_up_to_date() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 23\r\nConnection: close\r\n\r\n{\"message\":\"Not Found\"}";
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let info = check_latest_at(&format!("http://{address}/latest"), "0.1.0").unwrap();
+        server.join().unwrap();
+        assert!(!info.update_available);
+        assert_eq!(info.current_version, "0.1.0");
+        assert_eq!(info.latest_version, "0.1.0");
+        assert!(info.assets.is_empty());
+    }
+
+    #[test]
+    fn update_check_403_rate_limit_returns_friendly_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 31\r\nConnection: close\r\n\r\n{\"message\":\"API rate limit\"}";
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let err = check_latest_at(&format!("http://{address}/latest"), "0.1.0").unwrap_err();
+        server.join().unwrap();
+        assert!(err.contains("rate limit"));
+    }
+
+    #[test]
+    fn full_in_app_update_lifecycle_e2e() {
+        use sha2::{Digest, Sha256};
+
+        let payload_bytes = vec![0x90; 8192];
+        let mut hasher = Sha256::new();
+        hasher.update(&payload_bytes);
+        let expected_sha256 = format!("{:x}", hasher.finalize());
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let payload_clone = payload_bytes.clone();
+        let server = std::thread::spawn(move || {
+            // First connection: /api/latest
+            let (mut stream1, _) = listener.accept().unwrap();
+            let mut reader1 = BufReader::new(stream1.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader1.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let release_json = serde_json::json!({
+                "tag_name": "v0.2.0",
+                "html_url": "https://github.com/821869798/aitoolplus/releases/tag/v0.2.0",
+                "body": "### What's New in v0.2.0\n- In-app update support\n- UI bug fixes",
+                "published_at": "2026-09-22T19:00:00Z",
+                "assets": [
+                    {
+                        "name": "aitoolplus-setup.exe",
+                        "browser_download_url": format!("http://{address}/download/aitoolplus-setup.exe"),
+                        "size": payload_clone.len() as u64
+                    }
+                ]
+            }).to_string();
+            let resp1 = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{release_json}",
+                release_json.len()
+            );
+            stream1.write_all(resp1.as_bytes()).unwrap();
+
+            // Second connection: /download/aitoolplus-setup.exe
+            let (mut stream2, _) = listener.accept().unwrap();
+            let mut reader2 = BufReader::new(stream2.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader2.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let resp2 = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload_clone.len()
+            );
+            stream2.write_all(resp2.as_bytes()).unwrap();
+            stream2.write_all(&payload_clone).unwrap();
+        });
+
+        // 1. Check for updates from current v0.1.0
+        let update_info = check_latest_at(&format!("http://{address}/api/latest"), "0.1.0").unwrap();
+        assert!(update_info.update_available);
+        assert_eq!(update_info.latest_version, "0.2.0");
+        assert_eq!(update_info.current_version, "0.1.0");
+        assert!(update_info.release_notes.contains("In-app update support"));
+
+        // 2. Select best asset
+        let asset = best_asset(&update_info).expect("asset found");
+        assert_eq!(asset.name, "aitoolplus-setup.exe");
+        assert_eq!(asset.size, 8192);
+
+        // 3. Download asset with progress tracking
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target_file = temp_dir.path().join(&asset.name);
+
+        let mut progress_events = Vec::new();
+        let downloaded = download_with_progress(
+            &asset.download_url,
+            asset.size,
+            &target_file,
+            |p| {
+                progress_events.push(p);
+                true
+            },
+        ).expect("download succeeds");
+
+        server.join().unwrap();
+
+        // 4. Verify downloaded file integrity
+        assert_eq!(downloaded, target_file);
+        assert!(target_file.is_file());
+        let disk_bytes = std::fs::read(&target_file).unwrap();
+        assert_eq!(disk_bytes, payload_bytes);
+
+        // 5. Verify SHA-256 calculation
+        assert!(verify_asset_sha256(&target_file, &expected_sha256).unwrap());
+        assert!(!verify_asset_sha256(&target_file, "wrong_hash").unwrap());
+
+        // 6. Verify progress sequence reached 100%
+        assert!(!progress_events.is_empty());
+        let last_event = progress_events.last().unwrap();
+        assert_eq!(last_event.downloaded, 8192);
+        assert_eq!(last_event.total, 8192);
+        assert_eq!(last_event.percentage, 100.0);
+    }
 }
+
 
