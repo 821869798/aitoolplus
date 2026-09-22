@@ -139,7 +139,7 @@ pub fn apply_provider(
     let route = provider
         .id
         .strip_prefix("dsh:")
-        .ok_or("dsh provider record must carry route id")?;
+        .unwrap_or(&provider.id);
 
     let raw = read_settings(paths)?;
     let mut doc: serde_yaml::Value = if raw.trim().is_empty() {

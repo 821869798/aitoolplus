@@ -162,7 +162,7 @@ pub fn save_profile(paths: &ClaudeDesktopPaths, provider: &ProviderRecord) -> Re
     let profile_id = provider
         .id
         .strip_prefix("cd:")
-        .ok_or("claude desktop provider must carry profile id")?
+        .unwrap_or(&provider.id)
         .to_string();
     let mut profile: Value = serde_json::from_str(&provider.settings_config)
         .map_err(|e| format!("invalid profile JSON: {e}"))?;
@@ -184,7 +184,7 @@ pub fn apply_profile(
     let profile_id = provider
         .id
         .strip_prefix("cd:")
-        .ok_or("claude desktop provider must carry profile id")?
+        .unwrap_or(&provider.id)
         .to_string();
     save_profile(paths, provider)?;
 

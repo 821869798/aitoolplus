@@ -265,4 +265,80 @@ mod tests {
             .count();
         assert!(count <= BACKUP_KEEP, "too many backups: {count}");
     }
+
+    #[test]
+    fn test_apply_updated_provider_takes_effect_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let data = dir.path().join("data");
+        let paths = Paths::new(&home, &data);
+
+        // 1. ClaudeCode: initial apply, then update and re-apply
+        let mut p_claude = ProviderRecord::new("Claude Initial", "custom");
+        p_claude.set_settings(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://init.example.com",
+                "ANTHROPIC_AUTH_TOKEN": "init-key"
+            }
+        }));
+        let ctx1 = ApplyCtx {
+            paths: &paths,
+            common_config: "{}",
+            provider: &p_claude,
+            strategy: MergeStrategy::default(),
+            provider_optional: false,
+        };
+        adapter_for(ToolId::ClaudeCode).apply(&ctx1).unwrap();
+        let claude_cfg = paths.primary_config(ToolId::ClaudeCode);
+        let val1: Value = serde_json::from_str(&fs::read_to_string(&claude_cfg).unwrap()).unwrap();
+        assert_eq!(val1["env"]["ANTHROPIC_BASE_URL"], "https://init.example.com");
+
+        // Now modify provider: new base URL & key
+        p_claude.set_settings(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://updated.example.com",
+                "ANTHROPIC_AUTH_TOKEN": "updated-key"
+            }
+        }));
+        let ctx2 = ApplyCtx {
+            paths: &paths,
+            common_config: "{}",
+            provider: &p_claude,
+            strategy: MergeStrategy::default(),
+            provider_optional: false,
+        };
+        adapter_for(ToolId::ClaudeCode).apply(&ctx2).unwrap();
+        let val2: Value = serde_json::from_str(&fs::read_to_string(&claude_cfg).unwrap()).unwrap();
+        assert_eq!(val2["env"]["ANTHROPIC_BASE_URL"], "https://updated.example.com");
+        assert_eq!(val2["env"]["ANTHROPIC_AUTH_TOKEN"], "updated-key");
+
+        // 2. Codex: initial apply, then update model and base_url
+        let mut p_codex = ProviderRecord::new("Codex Initial", "custom");
+        p_codex.settings_config = r#"{"config":"model = \"gpt-4o\"\n[model_providers.custom]\nbase_url = \"https://init-codex.com\"\napi_key = \"k1\""}"#.into();
+        let codex_ctx1 = ApplyCtx {
+            paths: &paths,
+            common_config: "",
+            provider: &p_codex,
+            strategy: MergeStrategy::default(),
+            provider_optional: false,
+        };
+        adapter_for(ToolId::Codex).apply(&codex_ctx1).unwrap();
+        let codex_cfg = paths.tool_root(ToolId::Codex).join("config.toml");
+        let codex_content1 = fs::read_to_string(&codex_cfg).unwrap();
+        assert!(codex_content1.contains("https://init-codex.com"));
+
+        // Now update Codex provider
+        p_codex.settings_config = r#"{"config":"model = \"o3-mini\"\n[model_providers.custom]\nbase_url = \"https://updated-codex.com\"\napi_key = \"k2\""}"#.into();
+        let codex_ctx2 = ApplyCtx {
+            paths: &paths,
+            common_config: "",
+            provider: &p_codex,
+            strategy: MergeStrategy::default(),
+            provider_optional: false,
+        };
+        adapter_for(ToolId::Codex).apply(&codex_ctx2).unwrap();
+        let codex_content2 = fs::read_to_string(&codex_cfg).unwrap();
+        assert!(codex_content2.contains("https://updated-codex.com"));
+        assert!(codex_content2.contains("o3-mini"));
+    }
 }

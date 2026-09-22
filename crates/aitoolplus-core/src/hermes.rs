@@ -135,7 +135,7 @@ pub fn apply_provider(
     let key = provider
         .id
         .strip_prefix("hermes:")
-        .ok_or("hermes provider record must carry key")?;
+        .unwrap_or(&provider.id);
 
     let mut doc = read_config(paths)?;
     if !matches!(doc, serde_yaml::Value::Mapping(_)) {

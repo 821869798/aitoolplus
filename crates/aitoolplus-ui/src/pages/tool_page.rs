@@ -10340,6 +10340,11 @@ fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String
             if !val.is_object() {
                 val = serde_json::json!({ "env": {} });
             }
+            if tool == ToolId::ClaudeDesktop && !base_url.trim().is_empty() {
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("inferenceGatewayBaseUrl".into(), Value::String(base_url.trim().into()));
+                }
+            }
             if val.get("env").is_none() {
                 if let Some(obj) = val.as_object_mut() {
                     obj.insert("env".into(), serde_json::json!({}));
@@ -10910,10 +10915,31 @@ fn save_provider(
         }
     };
 
+    let was_applied = editing_id.as_ref().and_then(|id| {
+        ws.store
+            .store()
+            .tool(tool)
+            .providers
+            .iter()
+            .find(|p| p.id == *id)
+            .map(|p| p.is_applied)
+    }).unwrap_or(false);
+
+    let has_other_applied = ws.store
+        .store()
+        .tool(tool)
+        .providers
+        .iter()
+        .filter(|p| editing_id.as_ref().map(|id| p.id != *id).unwrap_or(true))
+        .any(|p| p.is_applied);
+    let should_apply_new = editing_id.is_none() && !has_other_applied;
+
+    let mut saved_target_id = String::new();
     let _ = ws.store.update(|store| {
         let section = store.tool_mut(tool);
         match editing_id.clone() {
             Some(id) => {
+                saved_target_id = id.clone();
                 aitoolplus_core::providers::update(&mut section.providers, &id, |p| {
                     p.name = name_txt.clone();
                     p.category = category.clone();
@@ -10941,15 +10967,19 @@ fn save_provider(
                 p.notes = (!notes_txt.is_empty()).then(|| notes_txt.clone());
                 p.website_url = (!website_txt.is_empty()).then(|| website_txt.clone());
                 p.set_meta(&meta);
+                if should_apply_new {
+                    p.is_applied = true;
+                }
+                saved_target_id = p.id.clone();
                 section.providers.push(p);
             }
         }
     });
     ws.persist_store();
 
-    // Re-apply if this was the saved/active provider for Pi / OhMyPi
+    // Re-apply if this was the saved/active provider for Pi / OhMyPi or any other agent
     if tool == ToolId::Pi {
-        let saved_target_id = editing_id.clone().unwrap_or_else(|| {
+        let pi_target_id = editing_id.clone().unwrap_or_else(|| {
             let key = if !pi_provider_key_txt.is_empty() {
                 pi_provider_key_txt.clone()
             } else {
@@ -10961,17 +10991,17 @@ fn save_provider(
 
         // Ensure this saved provider is marked applied and persisted to ~/.pi/agent/models.json
         let _ = ws.store.update(|store| {
-            if let Some(p) = store.tool_mut(ToolId::Pi).providers.iter_mut().find(|p| p.id == saved_target_id) {
+            if let Some(p) = store.tool_mut(ToolId::Pi).providers.iter_mut().find(|p| p.id == pi_target_id) {
                 p.is_applied = true;
             }
         });
         ws.persist_store();
 
-        if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == saved_target_id).cloned() {
+        if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == pi_target_id).cloned() {
             let _ = aitoolplus_core::pi_runtime::apply_provider(&ws.paths, &saved);
         }
     } else if tool == ToolId::OhMyPi {
-        let saved_target_id = editing_id.clone().unwrap_or_else(|| {
+        let omp_target_id = editing_id.clone().unwrap_or_else(|| {
             let key = if !pi_provider_key_txt.is_empty() {
                 pi_provider_key_txt.clone()
             } else {
@@ -10981,14 +11011,34 @@ fn save_provider(
             format!("omp:{key}")
         });
         let _ = ws.store.update(|store| {
-            if let Some(p) = store.tool_mut(ToolId::OhMyPi).providers.iter_mut().find(|p| p.id == saved_target_id) {
+            if let Some(p) = store.tool_mut(ToolId::OhMyPi).providers.iter_mut().find(|p| p.id == omp_target_id) {
                 p.is_applied = true;
             }
         });
         ws.persist_store();
-        if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == saved_target_id).cloned() {
+        if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == omp_target_id).cloned() {
             let omp_paths = aitoolplus_core::oh_my_pi::OmpRuntimePaths::from_paths(&ws.paths);
             let _ = aitoolplus_core::oh_my_pi::apply_provider(&omp_paths, &saved);
+        }
+    } else if was_applied || should_apply_new {
+        let common = ws.store.store().tool(tool).common_config.clone();
+        if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == saved_target_id).cloned() {
+            let adapter = aitoolplus_core::adapters::adapter_for(tool);
+            let ctx = aitoolplus_core::adapters::ApplyCtx {
+                paths: &ws.paths,
+                common_config: &common,
+                provider: &saved,
+                strategy: aitoolplus_core::config::MergeStrategy::default(),
+                provider_optional: false,
+            };
+            match adapter.apply(&ctx) {
+                Ok(report) => {
+                    tracing::info!("Auto-applied updated provider {} for {:?} ({} files)", saved_target_id, tool, report.files.len());
+                }
+                Err(e) => {
+                    tracing::error!("Failed to re-apply updated provider {} for {:?}: {e}", saved_target_id, tool);
+                }
+            }
         }
     }
 
