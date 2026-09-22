@@ -47,10 +47,11 @@ jobs:
         run: |
           cargo build --release -p aitoolplus
 
-      - name: Package NSIS Installer
+      - name: Package NSIS Installer and Portable Archive
         shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
+          powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1 -SkipBuild
+          Compress-Archive -Path target/release/aitoolplus.exe -DestinationPath target/dist/aitoolplus-windows-x86_64.zip -Force
 
       - name: Compute Checksum and Generate latest.json
         id: manifest
@@ -62,6 +63,12 @@ jobs:
           }
           $hash = (Get-FileHash $installerPath -Algorithm SHA256).Hash.ToLower()
           $hash | Out-File -FilePath "target/dist/aitoolplus-setup.exe.sha256" -Encoding ascii
+
+          $zipPath = "target/dist/aitoolplus-windows-x86_64.zip"
+          if (Test-Path $zipPath) {
+            $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
+            $zipHash | Out-File -FilePath "target/dist/aitoolplus-windows-x86_64.zip.sha256" -Encoding ascii
+          }
 
           $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "${{ github.event.inputs.tag }}" }
           $version = $tag.TrimStart('v')
@@ -95,6 +102,8 @@ jobs:
           files: |
             target/dist/aitoolplus-setup.exe
             target/dist/aitoolplus-setup.exe.sha256
+            target/dist/aitoolplus-windows-x86_64.zip
+            target/dist/aitoolplus-windows-x86_64.zip.sha256
             target/dist/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

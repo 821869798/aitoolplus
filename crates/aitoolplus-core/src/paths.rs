@@ -28,22 +28,10 @@ impl Paths {
             .or_else(home_dir)
             .unwrap_or_else(|| PathBuf::from("."));
 
-        let portable_data = std::env::current_exe().ok().and_then(|exe| {
-            let dir = exe.parent()?;
-            let marker = dir.join(".portable");
-            let data_dir = dir.join("data");
-            if marker.exists() || data_dir.is_dir() {
-                Some(data_dir)
-            } else {
-                None
-            }
-        });
-
         let app_data = std::env::var("AITOOLPLUS_APPDATA")
             .ok()
             .filter(|s| !s.is_empty())
             .map(PathBuf::from)
-            .or(portable_data)
             .unwrap_or_else(|| default_app_data(&home));
 
         let mut tool_roots = std::collections::HashMap::new();
@@ -78,13 +66,9 @@ impl Paths {
     }
 
     /// Whether this Paths instance is running in portable mode.
+    /// In aitoolplus, user configuration and data are unified in ~/.aitoolplus (matching cc-switch ~/.cc-switch),
+    /// without requiring any .portable marker file.
     pub fn is_portable(&self) -> bool {
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent()
-            && (dir.join(".portable").exists() || self.app_data == dir.join("data"))
-        {
-            return true;
-        }
         false
     }
 
@@ -266,15 +250,8 @@ mod tests {
     }
 
     #[test]
-    fn portable_marker_detection_concept() {
-        let temp = tempfile::tempdir().unwrap();
-        let exe = temp.path().join("aitoolplus.exe");
-        std::fs::write(&exe, b"dummy").unwrap();
-        let marker = temp.path().join(".portable");
-        assert!(!marker.exists());
-        std::fs::write(&marker, b"").unwrap();
-        assert!(marker.exists());
-        let data = temp.path().join("data");
-        assert_eq!(marker.parent().unwrap().join("data"), data);
+    fn default_app_data_points_to_home_aitoolplus() {
+        let home = PathBuf::from("/home/user");
+        assert_eq!(default_app_data(&home), PathBuf::from("/home/user/.aitoolplus"));
     }
 }

@@ -2598,27 +2598,16 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                 .text_size(px(12.5))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
-                                .child(i.t("数据存储模式：", "Data Storage Mode:")),
+                                .child(i.t("数据存储目录：", "Data Storage Directory:")),
                         )
-                        .child(if ws.paths.is_portable() {
-                            crate::components::badge(
-                                &t,
-                                i.t(
-                                    "便携模式：已激活（保存在应用同级 data/ 目录）",
-                                    "Portable: Active (app data/ folder)",
-                                ),
-                                crate::components::BadgeKind::Success,
-                            )
-                        } else {
-                            crate::components::badge(
-                                &t,
-                                i.t(
-                                    "系统模式（保存在用户 AppData）",
-                                    "Standard Mode (%APPDATA%)",
-                                ),
-                                crate::components::BadgeKind::Neutral,
-                            )
-                        }),
+                        .child(crate::components::badge(
+                            &t,
+                            i.t(
+                                "~/.aitoolplus（统一用户数据目录，对标 CC-Switch）",
+                                "~/.aitoolplus (User Profile, CC-Switch Parity)",
+                            ),
+                            crate::components::BadgeKind::Success,
+                        )),
                 )
                 .child(
                     div()
