@@ -5,8 +5,8 @@
   <p>GPU Hardware-Accelerated Native Rendering · Sub-100ms Cold Start · Ultra-Low Memory · Zero Electron or WebView Overhead</p>
 
   <p>
-    <a href="https://github.com/aitoolplus/aitoolplus/releases/latest"><img src="https://img.shields.io/github/v/release/aitoolplus/aitoolplus?style=for-the-badge&color=2563eb" alt="Latest Release" /></a>
-    <a href="https://github.com/aitoolplus/aitoolplus/releases"><img src="https://img.shields.io/github/downloads/aitoolplus/aitoolplus/total?style=for-the-badge&color=10b981" alt="Downloads" /></a>
+    <a href="https://github.com/821869798/aitoolplus/releases/latest"><img src="https://img.shields.io/github/v/release/821869798/aitoolplus?style=for-the-badge&color=2563eb" alt="Latest Release" /></a>
+    <a href="https://github.com/821869798/aitoolplus/releases"><img src="https://img.shields.io/github/downloads/821869798/aitoolplus/total?style=for-the-badge&color=10b981" alt="Downloads" /></a>
     <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-2024%20(1.91+)-dea584?style=for-the-badge&logo=rust&logoColor=white" alt="Rust Edition 2024" /></a>
     <a href="https://github.com/zed-industries/zed"><img src="https://img.shields.io/badge/UI-GPUI%20Kit-7c3aed?style=for-the-badge" alt="GPUI Kit" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-blue?style=for-the-badge" alt="License: GPL-3.0-or-later" /></a>
@@ -21,7 +21,7 @@
     <a href="#technology-stack">Tech Stack</a> ·
     <a href="#development--building">Development</a> ·
     <a href="#acknowledgements">Acknowledgements</a> ·
-    <a href="https://github.com/aitoolplus/aitoolplus/releases/latest">Latest Release</a>
+    <a href="https://github.com/821869798/aitoolplus/releases/latest">Latest Release</a>
   </p>
 
   <p><img src="docs/screenshots/verify-sidebar-and-providers-v2.png" alt="AIToolPlus Overview Banner" width="860" /></p>
@@ -59,7 +59,7 @@ Built with **pure Rust** and powered by the **GPUI Kit** framework (the same eng
 
 ### Windows Official Installer
 
-Download the official setup installer directly from the [GitHub Releases Page](https://github.com/aitoolplus/aitoolplus/releases/latest):
+Download the official setup installer directly from the [GitHub Releases Page](https://github.com/821869798/aitoolplus/releases/latest):
 - File: `aitoolplus-setup.exe`
 - Built with standard NSIS installer packaging, featuring smooth upgrades, clean uninstallation, and zero registry bloat.
 - **In-App Auto Update**: Features one-click update checks, real-time download progress with EMA smoothing, and domestic CDN mirror acceleration.

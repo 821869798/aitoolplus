@@ -5,8 +5,8 @@
   <p>原生 GPU 硬件加速渲染 · 毫秒级冷启动 · 极低内存开销 · 告别 Electron 与 WebView 臃肿卡顿</p>
 
   <p>
-    <a href="https://github.com/aitoolplus/aitoolplus/releases/latest"><img src="https://img.shields.io/github/v/release/aitoolplus/aitoolplus?style=for-the-badge&color=2563eb" alt="Latest Release" /></a>
-    <a href="https://github.com/aitoolplus/aitoolplus/releases"><img src="https://img.shields.io/github/downloads/aitoolplus/aitoolplus/total?style=for-the-badge&color=10b981" alt="Downloads" /></a>
+    <a href="https://github.com/821869798/aitoolplus/releases/latest"><img src="https://img.shields.io/github/v/release/821869798/aitoolplus?style=for-the-badge&color=2563eb" alt="Latest Release" /></a>
+    <a href="https://github.com/821869798/aitoolplus/releases"><img src="https://img.shields.io/github/downloads/821869798/aitoolplus/total?style=for-the-badge&color=10b981" alt="Downloads" /></a>
     <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-2024%20(1.91+)-dea584?style=for-the-badge&logo=rust&logoColor=white" alt="Rust Edition 2024" /></a>
     <a href="https://github.com/zed-industries/zed"><img src="https://img.shields.io/badge/UI-GPUI%20Kit-7c3aed?style=for-the-badge" alt="GPUI Kit" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0--or--later-blue?style=for-the-badge" alt="License: GPL-3.0-or-later" /></a>
@@ -21,7 +21,7 @@
     <a href="#技术栈">技术栈</a> ·
     <a href="#开发与构建">开发与构建</a> ·
     <a href="#鸣谢">鸣谢</a> ·
-    <a href="https://github.com/aitoolplus/aitoolplus/releases/latest">最新发布</a>
+    <a href="https://github.com/821869798/aitoolplus/releases/latest">最新发布</a>
   </p>
 
   <p><img src="docs/screenshots/verify-sidebar-and-providers-v2.png" alt="AIToolPlus 主界面概览" width="860" /></p>
@@ -59,7 +59,7 @@
 
 ### Windows 官方安装程序
 
-前往 [GitHub Releases 最新发布页](https://github.com/aitoolplus/aitoolplus/releases/latest) 下载官方安装程序：
+前往 [GitHub Releases 最新发布页](https://github.com/821869798/aitoolplus/releases/latest) 下载官方安装程序：
 - 文件名：`aitoolplus-setup.exe`
 - 采用标准 NSIS 打包，内置安全静默升级与卸载支持。
 - **支持应用内自动更新**：支持一键检查新版本，并内置国内高速 CDN 镜像加速下载。

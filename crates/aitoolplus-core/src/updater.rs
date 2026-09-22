@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_RELEASES_API: &str =
-    "https://api.github.com/repos/aitoolplus/aitoolplus/releases/latest";
+    "https://api.github.com/repos/821869798/aitoolplus/releases/latest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -293,7 +293,7 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
                 current_version: current.clone(),
                 latest_version: latest.clone(),
                 update_available: compare_versions(&latest, &current).is_gt(),
-                release_url: format!("https://github.com/aitoolplus/aitoolplus/releases/tag/v{latest}"),
+                release_url: format!("https://github.com/821869798/aitoolplus/releases/tag/v{latest}"),
                 release_notes: tauri_rel.notes.unwrap_or_default().chars().take(20_000).collect(),
                 published_at: tauri_rel.pub_date,
                 assets,
