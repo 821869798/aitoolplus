@@ -3038,6 +3038,7 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                             ws.ui.update_checking = false;
                             ws.settings.last_update_check_time =
                                 Some(chrono::Utc::now().to_rfc3339());
+                            ws.settings.dismissed_update_version = None;
                             (ws.callbacks.save_settings)(&ws.settings);
                             match result {
                                 Ok(inf) => {
@@ -3233,6 +3234,7 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                 {
                     let path_for_install = downloaded_path.clone();
                     let path_for_reveal = downloaded_path.clone();
+                    let rel_url_ready = info.release_url.clone();
 
                     let ready_row = div()
                         .flex()
@@ -3277,6 +3279,18 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                         .parent()
                                         .unwrap_or(&path_for_reveal),
                                 );
+                            },
+                        ))
+                        .child(button_l(
+                            "ready-release-notes-btn",
+                            i.t("查看发行说明", "Release Notes"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            move |_, _, _, cx| {
+                                if !rel_url_ready.is_empty() {
+                                    cx.open_url(&rel_url_ready);
+                                }
                             },
                         ))
                         .child(button_l(
@@ -3490,12 +3504,70 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                         },
                     );
 
+                    let rel_url = info.release_url.clone();
+                    let notes_btn = button_l(
+                        "open-release-notes-btn",
+                        i.t("查看发行说明", "Release Notes"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |_, _, _, cx| {
+                            if !rel_url.is_empty() {
+                                cx.open_url(&rel_url);
+                            }
+                        },
+                    );
+
+                    let target_ver = info.latest_version.clone();
+                    let dismiss_btn = button_l(
+                        "dismiss-update-version-btn",
+                        i.t("忽略此版本", "Dismiss Version"),
+                        ButtonVariant::Ghost,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            ws.settings.dismissed_update_version = Some(target_ver.clone());
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            ws.ui.update_info = None;
+                            ws.ui.toast(
+                                ws.i18n
+                                    .t(
+                                        &format!("已忽略 v{} 版本更新提醒", target_ver),
+                                        &format!("Update v{} dismissed", target_ver),
+                                    )
+                                    .to_string(),
+                                false,
+                            );
+                            cx.notify();
+                        },
+                    );
+
+                    if aitoolplus_core::updater::is_scoop_install() {
+                        release_card = release_card.child(
+                            div()
+                                .p(px(8.0))
+                                .rounded(px(6.0))
+                                .bg(t.warning_subtle)
+                                .border_1()
+                                .border_color(t.warning.opacity(0.4))
+                                .text_size(px(12.0))
+                                .text_color(t.warning)
+                                .child(i.t(
+                                    "提示：检测到当前应用通过 Scoop 安装，推荐在终端执行 'scoop update aitoolplus' 完成升级。",
+                                    "Note: Scoop-managed installation detected. Please upgrade via 'scoop update aitoolplus' in terminal.",
+                                )),
+                        );
+                    }
+
                     release_card = release_card.child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.0))
-                            .child(download_btn),
+                            .flex_wrap()
+                            .child(download_btn)
+                            .child(notes_btn)
+                            .child(dismiss_btn),
                     );
                 }
             }

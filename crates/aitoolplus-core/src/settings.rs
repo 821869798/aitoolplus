@@ -303,6 +303,8 @@ pub struct AppSettings {
     pub auto_update_check_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_update_check_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dismissed_update_version: Option<String>,
     #[serde(default = "default_update_mirror")]
     pub update_mirror: crate::updater::UpdateMirror,
     #[serde(default)]
@@ -371,6 +373,7 @@ impl Default for AppSettings {
             backup_file_filter_rules: vec![],
             auto_update_check_enabled: true,
             last_update_check_time: None,
+            dismissed_update_version: None,
             update_mirror: default_update_mirror(),
             custom_update_mirror_url: String::new(),
             custom_update_api_url: String::new(),

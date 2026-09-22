@@ -596,11 +596,15 @@ impl Workspace {
                 if let Ok(info) = result {
                     if info.update_available {
                         let _ = weak.update(cx, |ws, cx| {
-                            ws.ui.update_info = Some(info);
                             ws.settings.last_update_check_time =
                                 Some(chrono::Utc::now().to_rfc3339());
                             (ws.callbacks.save_settings)(&ws.settings);
-                            cx.notify();
+                            if ws.settings.dismissed_update_version.as_deref()
+                                != Some(&info.latest_version)
+                            {
+                                ws.ui.update_info = Some(info);
+                                cx.notify();
+                            }
                         });
                     }
                 }

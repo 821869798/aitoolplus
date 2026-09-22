@@ -552,6 +552,44 @@ pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String>
     }
 }
 
+/// Whether the currently running executable is managed by Scoop.
+pub fn is_scoop_install() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            let roots: Vec<String> = ["SCOOP", "SCOOP_GLOBAL"]
+                .into_iter()
+                .filter_map(|name| std::env::var_os(name))
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            return is_scoop_install_path(&exe_path.to_string_lossy(), &roots);
+        }
+    }
+    false
+}
+
+/// Pure path check for Scoop-managed executables (case-insensitive).
+pub fn is_scoop_install_path(exe_path: &str, roots: &[String]) -> bool {
+    let normalize = |path: &str| {
+        let normalized = path.replace('/', "\\").to_lowercase();
+        let normalized = if let Some(suffix) = normalized.strip_prefix(r"\\?\unc\") {
+            format!(r"\\{suffix}")
+        } else {
+            normalized
+                .strip_prefix(r"\\?\")
+                .unwrap_or(&normalized)
+                .to_string()
+        };
+        normalized.trim_end_matches('\\').to_string()
+    };
+    let normalized_exe = normalize(exe_path);
+    normalized_exe.contains("\\scoop\\apps\\")
+        || roots
+            .iter()
+            .filter(|root| !root.trim().is_empty())
+            .any(|root| normalized_exe.starts_with(&format!("{}\\apps\\", normalize(root))))
+}
+
 fn normalize_version(value: &str) -> String {
     value
         .trim()
@@ -941,6 +979,26 @@ mod tests {
         assert_eq!(last_event.downloaded, 8192);
         assert_eq!(last_event.total, 8192);
         assert_eq!(last_event.percentage, 100.0);
+    }
+
+    #[test]
+    fn detects_scoop_install_paths() {
+        assert!(is_scoop_install_path(
+            r"C:\Users\User\scoop\apps\aitoolplus\0.1.0\aitoolplus.exe",
+            &[],
+        ));
+        assert!(is_scoop_install_path(
+            r"D:\Scoop\Apps\aitoolplus\current\aitoolplus.exe",
+            &[],
+        ));
+        assert!(!is_scoop_install_path(
+            r"C:\Program Files\AIToolPlus\aitoolplus.exe",
+            &[],
+        ));
+        assert!(!is_scoop_install_path(
+            r"C:\Users\User\AppData\Local\Programs\AIToolPlus\aitoolplus.exe",
+            &[],
+        ));
     }
 }
 
