@@ -4,6 +4,7 @@
 //! from flyclip's guidelines).
 
 use gpui::{ClickEvent, Context, IntoElement, Rgba, SharedString, Window, div, prelude::*, px};
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 
 use crate::theme::Theme;
 
@@ -1309,12 +1310,14 @@ pub fn input_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
         .child(child)
 }
 
-pub fn textarea_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
+pub fn textarea_container(theme: &Theme, child: impl IntoElement) -> gpui::Stateful<gpui::Div> {
     let t = theme.clone();
     div()
+        .id("textarea-container")
         .w_full()
         .min_h(px(120.0))
         .max_h(px(320.0))
+        .overflow_y_scroll()
         .rounded(px(6.0))
         .bg(t.input_bg)
         .border_1()
@@ -1323,6 +1326,51 @@ pub fn textarea_container(theme: &Theme, child: impl IntoElement) -> gpui::Div {
         .cursor_text()
         .hover(move |h| h.border_color(t.card_border_hover))
         .child(child)
+}
+
+/// A scrollable container for multi-line text areas with a vertical progress/scrollbar indicator.
+/// When the text lines exceed the container height, the scrollbar automatically appears on the right edge.
+pub fn text_area_scroll_container(
+    wrap_id: impl Into<gpui::ElementId>,
+    bar_id: impl Into<gpui::ElementId>,
+    theme: &Theme,
+    height: gpui::Pixels,
+    scroll_handle: &gpui::ScrollHandle,
+    focus_handle: &gpui::FocusHandle,
+    child: impl IntoElement,
+) -> gpui::Div {
+    let t = theme.clone();
+    let scrollbar = Scrollbar::vertical(scroll_handle)
+        .id(bar_id)
+        .mode(ScrollbarMode::Always);
+
+    div()
+        .relative()
+        .w_full()
+        .h(height)
+        .rounded(px(6.0))
+        .bg(t.input_bg)
+        .border_1()
+        .border_color(t.input_border)
+        .shadow_xs()
+        .cursor_text()
+        .track_focus(focus_handle)
+        .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
+        .hover(move |h| h.border_color(t.card_border_hover))
+        .child(
+            div()
+                .id(wrap_id)
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(scroll_handle)
+                .child(child),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .child(scrollbar),
+        )
 }
 
 // ---------------------------------------------------------------------------

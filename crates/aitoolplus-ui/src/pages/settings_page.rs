@@ -6,6 +6,7 @@ use crate::components::{
     ButtonVariant, button_l, button_with_icon_l, card, input_container, section_title,
     segmented_pill_selector, settings_card, settings_row, toggle,
 };
+use crate::text_input::TextInput;
 use crate::workspace::Workspace;
 
 use super::SettingsTab;
@@ -16,7 +17,10 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
 
     let tabs = [
         (SettingsTab::General, i.t("通用", "General")),
+        (SettingsTab::DataImport, i.t("数据导入", "Data Import")),
+        (SettingsTab::Usage, i.t("使用统计", "Usage Statistics")),
         (SettingsTab::Backup, i.t("备份", "Backup")),
+        (SettingsTab::Advanced, i.t("高级选项", "Advanced")),
         (SettingsTab::About, i.t("关于", "About")),
     ];
 
@@ -35,15 +39,24 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
 
     let body = match ws.ui.settings_tab {
         SettingsTab::General => general_tab(ws, cx),
+        SettingsTab::DataImport => data_import_tab(ws, cx),
+        SettingsTab::Usage => super::usage_page::render_usage_page(ws, cx),
         SettingsTab::Backup => backup_tab(ws, cx),
+        SettingsTab::Advanced => advanced_tab(ws, cx),
         SettingsTab::About => about_tab(ws, cx),
+    };
+
+    let max_width = if ws.ui.settings_tab == SettingsTab::Usage {
+        px(1040.0)
+    } else {
+        px(880.0)
     };
 
     div()
         .flex()
         .flex_col()
         .w_full()
-        .max_w(px(880.0))
+        .max_w(max_width)
         .min_w(px(0.0))
         .gap(px(16.0))
         .child(tab_bar)
@@ -316,119 +329,7 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
         proxy_rows,
     );
 
-    // 4. CLI Launch & Auth Policies Card
-    let cli_policies_card = settings_card(
-        &t,
-        i.t("CLI 运行与认证策略", "CLI Launch & Auth Policies"),
-        Some(i.t(
-            "针对各命令行工具的环境变量与运行时配置写入安全策略",
-            "Security, auth preservation, and runtime policies for CLI tools",
-        )),
-        vec![
-            settings_row(
-                &t,
-                i.t("Claude 全权限启动 (--dangerously-skip-permissions)", "Claude Full-Access Launch"),
-                Some(i.t(
-                    "启动 Claude Code 时自动附加全权限参数，跳过频繁的危险确认提示",
-                    "Pass --dangerously-skip-permissions on Claude Code startup",
-                )),
-                toggle(
-                    "claude-full-access",
-                    ws.settings.claude_cli_launch_full_access,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.claude_cli_launch_full_access =
-                            !ws.settings.claude_cli_launch_full_access;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ),
-            ),
-            settings_row(
-                &t,
-                i.t("Codex 保留官方登录态", "Preserve Codex Official Auth"),
-                Some(i.t(
-                    "切换第三方供应商时保留 ~/.codex 的官方登录凭据与会话",
-                    "Keep official login session in ~/.codex on provider switch",
-                )),
-                toggle(
-                    "codex-preserve-auth",
-                    ws.settings.codex_preserve_official_auth_on_switch,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.codex_preserve_official_auth_on_switch =
-                            !ws.settings.codex_preserve_official_auth_on_switch;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ),
-            ),
-            settings_row(
-                &t,
-                i.t("OpenAgent 统一 ~/.omo 配置", "OpenAgent Unified ~/.omo Config"),
-                Some(i.t(
-                    "使用现代统一的 ~/.omo 目录而非旧版分散配置文件",
-                    "Write unified config to ~/.omo instead of legacy files",
-                )),
-                toggle(
-                    "omo-legacy-config",
-                    ws.settings.opencode_use_legacy_oh_my_config,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.opencode_use_legacy_oh_my_config =
-                            !ws.settings.opencode_use_legacy_oh_my_config;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ),
-            ),
-            settings_row(
-                &t,
-                i.t("允许清除 OMO/OMOS 运行配置", "Allow Clearing OMO/OMOS Config"),
-                Some(i.t(
-                    "在重置或切换供应商时允许清空已应用的运行时配置",
-                    "Allow wiping runtime config when resetting or switching",
-                )),
-                toggle(
-                    "omo-clear-policy",
-                    ws.settings.opencode_allow_clear_applied_oh_my_config,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.opencode_allow_clear_applied_oh_my_config =
-                            !ws.settings.opencode_allow_clear_applied_oh_my_config;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ),
-            ),
-            settings_row(
-                &t,
-                i.t("双写 reasoning/variant 兼容模式", "Dual Reasoning/Variant Write"),
-                Some(i.t(
-                    "同时写入推理模型参数以兼容旧版 OpenCode 插件",
-                    "Write dual parameters for compatibility with older OpenCode",
-                )),
-                toggle(
-                    "omo-dual-reasoning",
-                    ws.settings.opencode_dual_write_reasoning_variant,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.opencode_dual_write_reasoning_variant =
-                            !ws.settings.opencode_dual_write_reasoning_variant;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ),
-            ),
-        ],
-    );
-
-    // 5. Visible Tools Card (Sidebar Tool Chips)
+    // 4. Visible Tools Card (Sidebar Tool Chips)
     let mut visibility_chips = div().flex().flex_wrap().gap(px(8.0)).p(px(16.0));
     for tool in aitoolplus_core::ToolId::ALL {
         let visible = ws.settings.visible_tools.is_empty()
@@ -559,147 +460,6 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
         vec![visibility_chips.into_any_element()],
     );
 
-    // 6. Storage & CLI Roots Card
-    let data_dir = ws.paths.app_data.display().to_string();
-    let storage_row = settings_row(
-        &t,
-        i.t("应用数据存储目录", "Application Data Directory"),
-        Some(gpui::SharedString::from(data_dir.clone())),
-        button_with_icon_l(
-            "open-data-dir",
-            crate::icons::FOLDER_SVG,
-            i.t("打开数据目录", "Open Folder"),
-            ButtonVariant::Secondary,
-            &t,
-            cx,
-            move |ws, _, _, cx| {
-                let _ = open_dir_in_explorer(&ws.paths.app_data);
-                cx.notify();
-            },
-        ),
-    );
-
-    let mut roots_rows = div()
-        .flex()
-        .flex_col()
-        .gap(px(10.0))
-        .p(px(16.0));
-    for tool in aitoolplus_core::ToolId::ALL {
-        let override_value = ws
-            .settings
-            .tool_root_overrides
-            .get(tool.key())
-            .cloned()
-            .unwrap_or_default();
-        let input = ws.ui.tool_root_input(tool, &override_value, cx);
-        let save_input = input.clone();
-        let command = match tool {
-            aitoolplus_core::ToolId::ClaudeCode => "claude",
-            aitoolplus_core::ToolId::GeminiCli => "gemini",
-            aitoolplus_core::ToolId::OhMyPi => "omp",
-            other => other.key(),
-        };
-        let cli_value = ws
-            .settings
-            .cli_manual_paths
-            .get(command)
-            .cloned()
-            .unwrap_or_default();
-        let cli_input = ws.ui.cli_path_input(command, &cli_value, cx);
-        let save_cli_input = cli_input.clone();
-        let resolved = ws.paths.tool_root(tool).display().to_string();
-
-        roots_rows = roots_rows.child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .p(px(10.0))
-                .rounded(px(8.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(t.card_border)
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_primary)
-                        .child(format!("{} · {}", tool.name_en(), resolved)),
-                )
-                .child(input)
-                .child(button_l(
-                    gpui::SharedString::from(format!("save-root-{}", tool.key())),
-                    i.t("保存根目录覆盖", "Save Root Override"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    move |ws, _, _, cx| {
-                        let value =
-                            save_input.update(cx, |input, _| input.text().trim().to_string());
-                        if value.is_empty() {
-                            ws.settings.tool_root_overrides.remove(tool.key());
-                        } else {
-                            ws.settings
-                                .tool_root_overrides
-                                .insert(tool.key().to_string(), value);
-                        }
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        ws.ui.toast(
-                            ws.i18n
-                                .t("已保存；重启后生效", "saved; applies after restart")
-                                .to_string(),
-                            false,
-                        );
-                        cx.notify();
-                    },
-                ))
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(t.text_muted)
-                        .child(format!("CLI: {command}")),
-                )
-                .child(cli_input)
-                .child(button_l(
-                    gpui::SharedString::from(format!("save-cli-{command}")),
-                    i.t("保存 CLI 执行路径", "Save CLI Path"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    move |ws, _, _, cx| {
-                        let value =
-                            save_cli_input.update(cx, |input, _| input.text().trim().to_string());
-                        if value.is_empty() {
-                            ws.settings.cli_manual_paths.remove(command);
-                        } else {
-                            ws.settings.cli_manual_paths.insert(command.into(), value);
-                        }
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        ws.ui.toast(
-                            ws.i18n
-                                .t("已保存；重启后生效", "saved; applies after restart")
-                                .to_string(),
-                            false,
-                        );
-                        cx.notify();
-                    },
-                )),
-        );
-    }
-
-    let storage_card = settings_card(
-        &t,
-        i.t("数据存储与 CLI 路径覆盖", "Storage & CLI Paths"),
-        Some(i.t(
-            "查看核心配置存储路径，或自定义特定工具的配置文件与命令行程序位置",
-            "Inspect data directory or override config roots and CLI binary paths",
-        )),
-        vec![
-            storage_row,
-            roots_rows.into_any_element(),
-        ],
-    );
-
     // Combine all modular cards with ample vertical spacing
     div()
         .flex()
@@ -709,9 +469,7 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
         .child(appearance_card)
         .child(behavior_card)
         .child(network_card)
-        .child(cli_policies_card)
         .child(visibility_card)
-        .child(storage_card)
         .into_any_element()
 }
 
@@ -723,49 +481,110 @@ struct LocalBackupEntry {
 }
 
 fn list_local_backups(paths: &aitoolplus_core::paths::Paths) -> Vec<LocalBackupEntry> {
-    let mut entries = Vec::new();
-    let dirs = [
-        paths.app_data.join("backups").join("manual"),
-        paths.app_data.join("backups").join("auto"),
+    let snapshots_dir = paths.local_snapshots_dir();
+    let _ = std::fs::create_dir_all(&snapshots_dir);
+
+    // Auto-migrate any legacy backup files into the dedicated snapshots directory
+    let backup_dir = paths.app_data.join("backups");
+    let legacy_dirs = [
+        backup_dir.join("manual"),
+        backup_dir.join("auto"),
+        backup_dir.join("automatic"),
     ];
-    for dir in dirs {
-        if let Ok(read_dir) = std::fs::read_dir(dir) {
+    for dir in legacy_dirs {
+        if let Ok(read_dir) = std::fs::read_dir(&dir) {
             for entry in read_dir.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("zip") {
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("backup.zip")
-                        .to_string();
-                    let (size_bytes, date_str) = if let Ok(meta) = path.metadata() {
-                        let size = meta.len();
-                        let date = meta
-                            .modified()
-                            .ok()
-                            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| {
-                                let dt = chrono::DateTime::from_timestamp(d.as_secs() as i64, 0);
-                                dt.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-                                    .unwrap_or_default()
-                            })
-                            .unwrap_or_default();
-                        (size, date)
-                    } else {
-                        (0, String::new())
-                    };
-                    entries.push(LocalBackupEntry {
-                        path,
-                        name,
-                        size_bytes,
-                        date_str,
-                    });
+                if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("zip") {
+                    if let Some(name) = path.file_name() {
+                        let target = snapshots_dir.join(name);
+                        if !target.exists() {
+                            let _ = std::fs::rename(&path, &target);
+                        }
+                    }
                 }
             }
         }
     }
-    entries.sort_by(|a, b| b.name.cmp(&a.name));
+    // Also migrate loose snapshots directly in backups/
+    if let Ok(read_dir) = std::fs::read_dir(&backup_dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("zip") {
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if file_name.starts_with("aitoolplus-backup-") || file_name.starts_with("aitoolplus-auto-") {
+                    let target = snapshots_dir.join(file_name);
+                    if !target.exists() {
+                        let _ = std::fs::rename(&path, &target);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut entries = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(&snapshots_dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("zip") {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("backup.zip")
+                    .to_string();
+                let (size_bytes, date_str) = if let Ok(meta) = path.metadata() {
+                    let size = meta.len();
+                    let date = meta
+                        .modified()
+                        .ok()
+                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| {
+                            let dt = chrono::DateTime::from_timestamp(d.as_secs() as i64, 0);
+                            dt.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or_default();
+                    (size, date)
+                } else {
+                    (0, String::new())
+                };
+                entries.push(LocalBackupEntry {
+                    path,
+                    name,
+                    size_bytes,
+                    date_str,
+                });
+            }
+        }
+    }
+    entries.sort_by(|a, b| {
+        let meta_b = b.path.metadata().and_then(|m| m.modified()).ok();
+        let meta_a = a.path.metadata().and_then(|m| m.modified()).ok();
+        meta_b.cmp(&meta_a).then_with(|| b.name.cmp(&a.name))
+    });
     entries
+}
+
+fn get_backup_display_name(filename: &str) -> String {
+    if let Some(rest) = filename.strip_prefix("aitoolplus-backup-").and_then(|s| s.strip_suffix(".zip")) {
+        if rest.len() == 15 && rest.chars().nth(8) == Some('-') {
+            let (d, t) = rest.split_at(8);
+            let t = &t[1..];
+            if d.len() == 8 && t.len() == 6 {
+                return format!("{}-{}-{} {}:{}:{} (快照)", &d[0..4], &d[4..6], &d[6..8], &t[0..2], &t[2..4], &t[4..6]);
+            }
+        }
+    }
+    if let Some(rest) = filename.strip_prefix("aitoolplus-auto-").and_then(|s| s.strip_suffix(".zip")) {
+        if rest.len() == 15 && rest.chars().nth(8) == Some('-') {
+            let (d, t) = rest.split_at(8);
+            let t = &t[1..];
+            if d.len() == 8 && t.len() == 6 {
+                return format!("{}-{}-{} {}:{}:{} (自动)", &d[0..4], &d[4..6], &d[6..8], &t[0..2], &t[2..4], &t[4..6]);
+            }
+        }
+    }
+    filename.strip_suffix(".zip").unwrap_or(filename).to_string()
 }
 
 fn format_file_size(bytes: u64) -> String {
@@ -776,6 +595,21 @@ fn format_file_size(bytes: u64) -> String {
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
+}
+
+fn post_restore_reconcile(ws: &mut Workspace) {
+    let paths = ws.paths.clone();
+    if let Ok(mut store) = aitoolplus_core::store::StoreHandle::open(&paths) {
+        let mut skills_store = store.store().skills.clone();
+        // 1. Automatically discover and preserve any pre-existing skills on this computer
+        let _ = aitoolplus_core::skills::scan_and_import_existing(&paths, &mut skills_store);
+        // 2. Re-create all Junctions/Symlinks for all tools (including .agents/skills)
+        let _ = aitoolplus_core::skills::sync_all(&mut skills_store, &paths);
+        let _ = store.update(|db| db.skills = skills_store);
+        ws.store = store;
+    }
+    ws.settings = aitoolplus_core::settings::AppSettings::load(&paths.settings_file());
+    ws.ui.skills_discovered = true;
 }
 
 fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
@@ -796,9 +630,6 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
     let s3_access_key = s3_inputs.access_key_id.clone();
     let s3_secret_key = s3_inputs.secret_access_key.clone();
     let s3_prefix = s3_inputs.prefix.clone();
-    let custom_inputs = ws.ui.backup_custom_inputs(cx);
-    let custom_source = custom_inputs.source.clone();
-    let custom_restore = custom_inputs.restore.clone();
 
     let transport_row = segmented_pill_selector(
         "backup-type",
@@ -831,171 +662,205 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
 
     let local_panel = (backup_type == aitoolplus_core::settings::BackupType::Local).then(|| {
         let local_backups = list_local_backups(&ws.paths);
-        let panel = div()
+
+        // 1. Policy Settings (Auto-backup Interval & Retain Count)
+        let interval_val = ws.settings.backup_interval_hours;
+        let interval_selector = segmented_pill_selector(
+            "backup-interval",
+            vec![
+                (0u32, None, i.t("禁用", "Disabled")),
+                (1u32, None, i.t("1小时", "1h")),
+                (6u32, None, i.t("6小时", "6h")),
+                (12u32, None, i.t("12小时", "12h")),
+                (24u32, None, i.t("24小时", "24h")),
+                (168u32, None, i.t("7天", "7d")),
+            ],
+            interval_val,
+            &t,
+            cx,
+            |ws, val, _, cx| {
+                ws.settings.backup_interval_hours = val;
+                ws.settings.auto_backup_enabled = val > 0;
+                (ws.callbacks.save_settings)(&ws.settings);
+                cx.notify();
+            },
+        );
+
+        let retain_val = ws.settings.backup_retain_count;
+        let retain_selector = segmented_pill_selector(
+            "backup-retain",
+            vec![
+                (5usize, None, i.t("5个", "5")),
+                (10usize, None, i.t("10个", "10")),
+                (20usize, None, i.t("20个", "20")),
+                (50usize, None, i.t("50个", "50")),
+            ],
+            retain_val,
+            &t,
+            cx,
+            |ws, val, _, cx| {
+                ws.settings.backup_retain_count = val;
+                ws.settings.auto_backup_max_keep = val as u32;
+                (ws.callbacks.save_settings)(&ws.settings);
+                cx.notify();
+            },
+        );
+
+        let policy_section = div()
             .flex()
             .flex_col()
-            .gap(px(10.0))
-            .p(px(10.0))
-            .rounded(px(8.0))
-            .bg(t.input_bg)
-            .border_1()
-            .border_color(t.card_border)
-            .child(section_title(
+            .gap(px(8.0))
+            .child(settings_row(
                 &t,
-                i.t("本地备份与恢复", "Local Backup & Restore"),
+                i.t("自动备份间隔", "Auto-backup Interval"),
                 Some(i.t(
-                    "下载导出 ZIP 备份到本地，或选择已有备份文件上传恢复配置",
-                    "Download ZIP backup or upload an existing backup to restore",
+                    "定时自动在本地创建快照的时间间隔（设为禁用则关闭自动备份）",
+                    "Time interval for auto backup (Disabled to turn off)",
                 )),
+                interval_selector,
             ))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(8.0))
-                    .flex_wrap()
-                    .child(button_with_icon_l(
-                        "backup-download-zip",
-                        crate::icons::DOWNLOAD_SVG,
-                        i.t("下载备份 (导出 ZIP)", "Download Backup (Export ZIP)"),
-                        ButtonVariant::Primary,
-                        &t,
-                        cx,
-                        |_ws, _, _, cx| {
-                            let dialog = rfd::AsyncFileDialog::new()
-                                .set_file_name(&format!(
-                                    "aitoolplus-backup-{}.zip",
-                                    chrono::Local::now().format("%Y%m%d-%H%M%S")
-                                ))
-                                .add_filter("ZIP", &["zip"]);
-                            let weak = cx.entity().downgrade();
-                            cx.spawn(async move |_this, cx| {
-                                if let Some(file) = dialog.save_file().await {
-                                    let output = file.path().to_path_buf();
-                                    let _ = weak.update(cx, |ws: &mut Workspace, cx| {
-                                        match aitoolplus_core::backup::create_backup(
-                                            &ws.paths,
-                                            &ws.settings,
-                                            &output,
-                                        ) {
-                                            Ok(report) => {
-                                                ws.ui.toast(
-                                                    ws.i18n
-                                                        .t(
-                                                            &format!(
-                                                                "下载备份成功：已导出至 {}（{} 个文件）",
-                                                                report.output.display(),
-                                                                report.file_count
-                                                            ),
-                                                            &format!(
-                                                                "Backup downloaded: {} ({} files)",
-                                                                report.output.display(),
-                                                                report.file_count
-                                                            ),
-                                                        )
-                                                        .to_string(),
-                                                    false,
-                                                );
-                                            }
-                                            Err(e) => {
-                                                ws.ui.toast(format!("下载备份失败: {e}"), true);
-                                            }
-                                        }
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .detach();
-                        },
-                    ))
-                    .child(button_with_icon_l(
-                        "backup-upload-zip",
-                        crate::icons::UPLOAD_SVG,
-                        i.t("上传备份 (从 ZIP 恢复)", "Upload Backup (Restore ZIP)"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        |_ws, _, _, cx| {
-                            let dialog = rfd::AsyncFileDialog::new().add_filter("ZIP", &["zip"]);
-                            let weak = cx.entity().downgrade();
-                            cx.spawn(async move |_this, cx| {
-                                if let Some(file) = dialog.pick_file().await {
-                                    let archive = file.path().to_path_buf();
-                                    let _ = weak.update(cx, |ws: &mut Workspace, cx| {
-                                        let paths = ws.paths.clone();
-                                        match aitoolplus_core::backup::restore_backup_with_options(
-                                            &paths,
-                                            &archive,
-                                            &aitoolplus_core::backup::RestoreOptions {
-                                                allow_custom_absolute: ws
-                                                    .ui
-                                                    .restore_allow_custom_absolute,
-                                                conflict_strategy: ws
-                                                    .ui
-                                                    .restore_conflict_strategy,
-                                            },
-                                        ) {
-                                            Ok(report) => {
-                                                if let Ok(store) =
-                                                    aitoolplus_core::store::StoreHandle::open(&paths)
-                                                {
-                                                    ws.store = store;
-                                                }
-                                                ws.settings =
-                                                    aitoolplus_core::settings::AppSettings::load(
-                                                        &paths.settings_file(),
-                                                    );
-                                                ws.ui.toast(
-                                                    ws.i18n
-                                                        .t(
-                                                            &format!(
-                                                                "上传恢复完成：{} 个文件 (覆盖 {}, 副本 {})",
-                                                                report.restored,
-                                                                report.overwritten,
-                                                                report.copies.len()
-                                                            ),
-                                                            &format!(
-                                                                "restore complete: {} files (overwritten {}, copies {})",
-                                                                report.restored,
-                                                                report.overwritten,
-                                                                report.copies.len()
-                                                            ),
-                                                        )
-                                                        .to_string(),
-                                                    false,
-                                                );
-                                            }
-                                            Err(e) => {
-                                                ws.ui.toast(format!("上传恢复失败: {e}"), true)
-                                            }
-                                        }
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .detach();
-                        },
-                    ))
-                    .child(button_with_icon_l(
-                        "backup-open-folder",
-                        crate::icons::FOLDER_SVG,
-                        i.t("打开备份目录", "Open Backup Directory"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        |ws, _, _, _| {
-                            let dir = ws.paths.app_data.join("backups");
-                            let _ = std::fs::create_dir_all(&dir);
-                            let _ = std::process::Command::new("explorer").arg(&dir).spawn();
-                        },
-                    )),
-            );
+            .child(settings_row(
+                &t,
+                i.t("备份保留数量", "Backup Retention"),
+                Some(i.t(
+                    "本地自动与手动快照最多保留的数量，超出将自动清理最旧快照",
+                    "Maximum number of backup snapshots to keep before pruning oldest",
+                )),
+                retain_selector,
+            ));
 
+        // 2. Action buttons row: 立即备份、从zip恢复备份、打开备份目录
+        let buttons_row = div()
+            .flex()
+            .gap(px(8.0))
+            .flex_wrap()
+            .child(button_with_icon_l(
+                "backup-create-now",
+                crate::icons::DOWNLOAD_SVG,
+                i.t("立即备份", "Backup Now"),
+                ButtonVariant::Primary,
+                &t,
+                cx,
+                |ws, _, _, cx| {
+                    let dir = ws.paths.local_snapshots_dir();
+                    let _ = std::fs::create_dir_all(&dir);
+                    let file_name = format!(
+                        "aitoolplus-backup-{}.zip",
+                        chrono::Local::now().format("%Y%m%d-%H%M%S")
+                    );
+                    let output = dir.join(&file_name);
+                    match aitoolplus_core::backup::create_backup(&ws.paths, &ws.settings, &output) {
+                        Ok(report) => {
+                            let retain = ws.settings.backup_retain_count.max(1);
+                            let _ = aitoolplus_core::backup::prune_local_backups(&dir, retain);
+                            ws.ui.toast(
+                                ws.i18n.t(
+                                    &format!("备份创建成功：已保存至 {}（{} 个文件）", file_name, report.file_count),
+                                    &format!("Backup created: {} ({} files)", file_name, report.file_count),
+                                ).to_string(),
+                                false,
+                            );
+                        }
+                        Err(e) => {
+                            ws.ui.toast(format!("创建备份失败: {e}"), true);
+                        }
+                    }
+                    cx.notify();
+                },
+            ))
+            .child(button_with_icon_l(
+                "backup-restore-zip",
+                crate::icons::UPLOAD_SVG,
+                i.t("从zip恢复备份", "Restore from ZIP Backup"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                |_ws, _, _, cx| {
+                    let dialog = rfd::AsyncFileDialog::new().add_filter("ZIP", &["zip"]);
+                    let weak = cx.entity().downgrade();
+                    cx.spawn(async move |_this, cx| {
+                        if let Some(file) = dialog.pick_file().await {
+                            let archive = file.path().to_path_buf();
+                            let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                                let paths = ws.paths.clone();
+                                match aitoolplus_core::backup::restore_backup_with_options(
+                                    &paths,
+                                    &archive,
+                                    &aitoolplus_core::backup::RestoreOptions {
+                                        allow_custom_absolute: ws
+                                            .ui
+                                            .restore_allow_custom_absolute,
+                                        conflict_strategy: ws
+                                            .ui
+                                            .restore_conflict_strategy,
+                                    },
+                                ) {
+                                    Ok(report) => {
+                                        post_restore_reconcile(ws);
+                                        ws.ui.toast(
+                                            ws.i18n
+                                                .t(
+                                                    &format!(
+                                                        "从 ZIP 恢复完成：已恢复 {} 个文件 (覆盖 {}, 副本 {})",
+                                                        report.restored,
+                                                        report.overwritten,
+                                                        report.copies.len()
+                                                    ),
+                                                    &format!(
+                                                        "restore complete: {} files (overwritten {}, copies {})",
+                                                        report.restored,
+                                                        report.overwritten,
+                                                        report.copies.len()
+                                                    ),
+                                                )
+                                                .to_string(),
+                                            false,
+                                        );
+                                    }
+                                    Err(e) => {
+                                        ws.ui.toast(format!("从 ZIP 恢复失败: {e}"), true);
+                                    }
+                                }
+                                cx.notify();
+                            });
+                        }
+                    })
+                    .detach();
+                },
+            ))
+            .child(button_with_icon_l(
+                "backup-open-folder",
+                crate::icons::FOLDER_SVG,
+                i.t("打开备份目录", "Open Backup Directory"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                |ws, _, _, _| {
+                    let dir = ws.paths.local_snapshots_dir();
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = open_dir_in_explorer(&dir);
+                },
+            ));
+
+        // 3. Backup list section
         let mut list_section = div().flex().flex_col().gap(px(6.0)).child(
             div()
-                .text_size(px(12.5))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(t.text_primary)
-                .child(i.t("本地备份文件列表", "Local Backup Files")),
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.text_primary)
+                        .child(i.t("本地备份列表", "Local Backup List")),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(t.text_muted)
+                        .child(format!("{} {}", local_backups.len(), i.t("个快照", "snapshots"))),
+                ),
         );
 
         if local_backups.is_empty() {
@@ -1003,18 +868,22 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                 div()
                     .text_size(px(11.5))
                     .text_color(t.text_muted)
+                    .p(px(8.0))
                     .child(i.t(
-                        "暂无本地备份文件，点击上方【下载备份 (导出 ZIP)】即可创建首个备份",
-                        "No local backups found. Click 'Download Backup (Export ZIP)' to create one.",
+                        "暂无本地备份文件，点击上方【立即备份】即可创建首个快照",
+                        "No local backups found. Click 'Backup Now' to create one.",
                     )),
             );
         } else {
             for b in local_backups {
                 let file_path_for_restore = b.path.clone();
+                let file_path_for_rename = b.path.clone();
                 let file_path_for_save_as = b.path.clone();
                 let file_path_for_delete = b.path.clone();
                 let file_name = b.name.clone();
+                let display_title = get_backup_display_name(&file_name);
                 let file_name_for_restore_id = b.name.clone();
+                let file_name_for_rename_id = b.name.clone();
                 let file_name_for_save_as_id = b.name.clone();
                 let file_name_for_save_as_dialog = b.name.clone();
                 let file_name_for_delete_id = b.name.clone();
@@ -1042,13 +911,13 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                         .text_size(px(12.0))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(t.text_primary)
-                                        .child(file_name),
+                                        .child(display_title),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(11.0))
                                         .text_color(t.text_muted)
-                                        .child(format!("{file_size_str} · {date_str}")),
+                                        .child(format!("{file_size_str} · {date_str} · {file_name}")),
                                 ),
                         )
                         .child(
@@ -1078,15 +947,7 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                             },
                                         ) {
                                             Ok(report) => {
-                                                if let Ok(store) =
-                                                    aitoolplus_core::store::StoreHandle::open(&paths)
-                                                {
-                                                    ws.store = store;
-                                                }
-                                                ws.settings =
-                                                    aitoolplus_core::settings::AppSettings::load(
-                                                        &paths.settings_file(),
-                                                    );
+                                                post_restore_reconcile(ws);
                                                 ws.ui.toast(
                                                     ws.i18n
                                                         .t(
@@ -1107,6 +968,20 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                                 ws.ui.toast(format!("恢复失败: {e}"), true);
                                             }
                                         }
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(button_with_icon_l(
+                                    gpui::SharedString::from(format!("local-rename-{}", file_name_for_rename_id)),
+                                    crate::icons::PENCIL_SVG,
+                                    i.t("重命名", "Rename"),
+                                    ButtonVariant::Secondary,
+                                    &t,
+                                    cx,
+                                    move |ws, _, _, cx| {
+                                        let stem = file_name.strip_suffix(".zip").unwrap_or(&file_name).to_string();
+                                        let input = cx.new(|cx| TextInput::new(stem, cx));
+                                        ws.ui.backup_rename_dialog = Some((file_path_for_rename.clone(), input));
                                         cx.notify();
                                     },
                                 ))
@@ -1159,7 +1034,27 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
             }
         }
 
-        panel.child(list_section).into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .p(px(12.0))
+            .rounded(px(8.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(section_title(
+                &t,
+                i.t("本地快照", "Local Snapshots"),
+                Some(i.t(
+                    "配置自动备份策略，创建本地快照与从 ZIP 恢复数据",
+                    "Configure auto-backup policy, create snapshot and restore",
+                )),
+            ))
+            .child(policy_section)
+            .child(buttons_row)
+            .child(list_section)
+            .into_any_element()
     });
 
     let webdav_panel = (backup_type == aitoolplus_core::settings::BackupType::Webdav).then(|| {
@@ -1328,10 +1223,7 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                         })
                                     {
                                         Ok(report) => {
-                                            if let Ok(store) = aitoolplus_core::store::StoreHandle::open(&ws.paths) {
-                                                ws.store = store;
-                                            }
-                                            ws.settings = aitoolplus_core::settings::AppSettings::load(&ws.paths.settings_file());
+                                            post_restore_reconcile(ws);
                                             ws.ui.toast(
                                                 ws.i18n.t(
                                                     &format!("云端恢复完成：已恢复 {} 个文件", report.restored),
@@ -1580,10 +1472,7 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                                         })
                                     {
                                         Ok(report) => {
-                                            if let Ok(store) = aitoolplus_core::store::StoreHandle::open(&ws.paths) {
-                                                ws.store = store;
-                                            }
-                                            ws.settings = aitoolplus_core::settings::AppSettings::load(&ws.paths.settings_file());
+                                            post_restore_reconcile(ws);
                                             ws.ui.toast(
                                                 ws.i18n.t(
                                                     &format!("云端恢复完成：已恢复 {} 个文件", report.restored),
@@ -1608,170 +1497,7 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
             .into_any_element()
     });
 
-    let mut filter_panel = div().flex().flex_col().gap(px(6.0)).child(section_title(
-        &t,
-        i.t("CLI 备份文件过滤", "CLI Backup File Filters"),
-        Some(i.t(
-            "逐文件排除敏感或不需要的运行时配置",
-            "Exclude sensitive or unwanted runtime files individually",
-        )),
-    ));
-    for file in aitoolplus_core::backup::cli_config_files(&ws.paths) {
-        let display = file.display().to_string();
-        let rule_path = display.clone();
-        let excluded = ws
-            .settings
-            .backup_file_filter_rules
-            .iter()
-            .any(|rule| rule.file_path == display);
-        filter_panel = filter_panel.child(
-            div()
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap(px(6.0))
-                .p(px(8.0))
-                .rounded(px(8.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(t.card_border)
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(t.text_secondary)
-                        .child(display),
-                )
-                .child(button_l(
-                    gpui::SharedString::from(format!("backup-filter-{rule_path}")),
-                    if excluded {
-                        i.t("已排除", "Excluded")
-                    } else {
-                        i.t("已包含", "Included")
-                    },
-                    if excluded {
-                        ButtonVariant::Danger
-                    } else {
-                        ButtonVariant::Secondary
-                    },
-                    &t,
-                    cx,
-                    move |ws, _, _, cx| {
-                        if ws
-                            .settings
-                            .backup_file_filter_rules
-                            .iter()
-                            .any(|rule| rule.file_path == rule_path)
-                        {
-                            ws.settings
-                                .backup_file_filter_rules
-                                .retain(|rule| rule.file_path != rule_path);
-                        } else {
-                            ws.settings.backup_file_filter_rules.push(
-                                aitoolplus_core::settings::BackupFileFilterRule {
-                                    tool: String::new(),
-                                    file_path: rule_path.clone(),
-                                },
-                            );
-                        }
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                )),
-        );
-    }
-
-    let mut custom_panel = div().flex().flex_col().gap(px(8.0)).child(section_title(
-        &t,
-        i.t("自定义备份条目", "Custom Backup Entries"),
-        Some(i.t(
-            "额外文件或目录；空恢复路径会落到安全沙箱",
-            "Extra files or directories; blank restore paths use a safe sandbox",
-        )),
-    ));
-    for entry in ws.settings.backup_custom_entries.clone() {
-        let id = entry.id.clone();
-        custom_panel = custom_panel.child(
-            div()
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap(px(6.0))
-                .p(px(8.0))
-                .rounded(px(8.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(t.card_border)
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(t.text_primary)
-                        .child(entry.source_path),
-                )
-                .children(entry.restore_path.map(|path| {
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(t.text_muted)
-                        .child(format!("restore: {path}"))
-                        .into_any_element()
-                }))
-                .child(button_l(
-                    gpui::SharedString::from(format!("custom-backup-remove-{id}")),
-                    i.t("移除条目", "Remove Entry"),
-                    ButtonVariant::Danger,
-                    &t,
-                    cx,
-                    move |ws, _, _, cx| {
-                        ws.settings
-                            .backup_custom_entries
-                            .retain(|entry| entry.id != id);
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                )),
-        );
-    }
-    let add_source = custom_source.clone();
-    let add_restore = custom_restore.clone();
-    custom_panel = custom_panel.child(
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .child(custom_source)
-            .child(custom_restore)
-            .child(button_l(
-                "custom-backup-add",
-                i.t("添加条目", "Add Entry"),
-                ButtonVariant::Secondary,
-                &t,
-                cx,
-                move |ws, _, _, cx| {
-                    let source = add_source.update(cx, |input, _| input.text().trim().to_string());
-                    let restore =
-                        add_restore.update(cx, |input, _| input.text().trim().to_string());
-                    if source.is_empty() {
-                        ws.ui.toast(
-                            ws.i18n
-                                .t("请输入源路径", "source path required")
-                                .to_string(),
-                            true,
-                        );
-                    } else {
-                        ws.settings.backup_custom_entries.push(
-                            aitoolplus_core::settings::BackupCustomEntry {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                source_path: source,
-                                restore_path: (!restore.is_empty()).then_some(restore),
-                            },
-                        );
-                        (ws.callbacks.save_settings)(&ws.settings);
-                    }
-                    cx.notify();
-                },
-            )),
-    );
-
-    card(
+    let backup_card = card(
         &t,
         vec![
             section_title(
@@ -1786,118 +1512,783 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
             local_panel.unwrap_or_else(|| div().into_any_element()),
             webdav_panel.unwrap_or_else(|| div().into_any_element()),
             s3_panel.unwrap_or_else(|| div().into_any_element()),
+        ],
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap(px(16.0))
+        .child(backup_card)
+        .into_any_element()
+}
+
+fn data_import_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap(px(16.0))
+        .child(cc_switch_migration_card(ws, cx))
+        .child(json_config_transfer_card(ws, cx))
+        .into_any_element()
+}
+
+fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let custom_path = ws.ui.cc_switch_custom_db_path.clone();
+    let detected_path = aitoolplus_core::cc_switch_import::detect_cc_switch_db(&ws.paths);
+    let active_path = custom_path.clone().or_else(|| detected_path.clone());
+    let is_detected = active_path.as_ref().map(|p| p.is_file()).unwrap_or(false);
+    let display_path = active_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| aitoolplus_core::cc_switch_import::default_cc_switch_db_path(&ws.paths).display().to_string());
+
+    let status_badge = if is_detected {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .w(px(8.0))
+                    .h(px(8.0))
+                    .rounded_full()
+                    .bg(crate::rgba_const(0x22c55eff)),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(crate::rgba_const(0x22c55eff))
+                    .child(if custom_path.is_some() {
+                        i.t("已指定 CC-Switch 数据库文件", "CC-Switch database file selected")
+                    } else {
+                        i.t("已检测到 CC-Switch 数据库", "CC-Switch database detected")
+                    }),
+            )
+    } else {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .w(px(8.0))
+                    .h(px(8.0))
+                    .rounded_full()
+                    .bg(crate::rgba_const(0xef4444ff)),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(crate::rgba_const(0xef4444ff))
+                    .child(i.t("未检测到 CC-Switch 数据库", "CC-Switch database not detected")),
+            )
+    };
+
+    let import_target_path = active_path.clone();
+    let import_usage_target_path = active_path.clone();
+
+    let header_row = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(status_badge)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    button_with_icon_l(
+                        "select-cc-switch-db",
+                        crate::icons::FOLDER_SVG,
+                        i.t("选择数据库文件", "Select Database File"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |_ws, _, _, cx| {
+                            let dialog = rfd::AsyncFileDialog::new()
+                                .add_filter("SQLite Database", &["db", "sqlite", "sqlite3"])
+                                .set_title("选择 CC-Switch 数据库文件");
+                            let weak = cx.entity().downgrade();
+                            cx.spawn(async move |_this, cx| {
+                                if let Some(file) = dialog.pick_file().await {
+                                    let path = file.path().to_path_buf();
+                                    let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                                        ws.ui.cc_switch_custom_db_path = Some(path);
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .detach();
+                        },
+                    ),
+                )
+                .child(
+                    button_with_icon_l(
+                        "import-cc-switch-action",
+                        crate::icons::DOWNLOAD_SVG,
+                        i.t("导入供应商配置", "Import Providers"),
+                        ButtonVariant::Primary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            let target_path = ws
+                                .ui
+                                .cc_switch_custom_db_path
+                                .clone()
+                                .or_else(|| import_target_path.clone())
+                                .or_else(|| aitoolplus_core::cc_switch_import::detect_cc_switch_db(&ws.paths));
+                            match aitoolplus_core::cc_switch_import::import_from_cc_switch(
+                                &ws.paths,
+                                ws.store.store_mut(),
+                                target_path.as_deref(),
+                            ) {
+                                Ok(report) => {
+                                    ws.persist_store();
+                                    let msg = ws
+                                        .i18n
+                                        .t(
+                                            &format!(
+                                                "CC-Switch 供应商导入完成：发现 {} 个，新增 {} 个，更新 {} 个供应商",
+                                                report.total_found, report.imported_count, report.updated_count
+                                            ),
+                                            &format!(
+                                                "CC-Switch providers imported: {} found, {} added, {} updated",
+                                                report.total_found, report.imported_count, report.updated_count
+                                            ),
+                                        )
+                                        .to_string();
+                                    ws.ui.toast(msg, false);
+                                }
+                                Err(e) => {
+                                    let msg = format!("CC-Switch 导入失败: {e}");
+                                    ws.ui.toast(msg, true);
+                                }
+                            }
+                            cx.notify();
+                        },
+                    ),
+                )
+                .child(
+                    button_with_icon_l(
+                        "import-cc-switch-usage-action",
+                        crate::icons::DATABASE_SVG,
+                        i.t("导入使用统计与定价", "Import Usage & Pricing"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            let target_path = import_usage_target_path.clone()
+                                .or_else(|| aitoolplus_core::cc_switch_import::detect_cc_switch_db(&ws.paths));
+                            if let Some(path) = target_path.as_deref() {
+                                if let Some(db) = ws.ensure_usage_db() {
+                                    match db.import_from_cc_switch(path) {
+                                        Ok(rep) => {
+                                            ws.refresh_usage_data();
+                                            let msg = format!(
+                                                "使用统计迁移完成：导入 {} 条请求日志、{} 条模型定价、{} 条汇总数据",
+                                                rep.logs_imported, rep.pricing_imported, rep.rollups_imported
+                                            );
+                                            ws.ui.toast(msg, false);
+                                        }
+                                        Err(e) => {
+                                            ws.ui.toast(format!("导入使用统计失败: {e}"), true);
+                                        }
+                                    }
+                                } else {
+                                    ws.ui.toast("数据库初始化失败".to_string(), true);
+                                }
+                            } else {
+                                ws.ui.toast("未检测到 CC-Switch 数据库文件".to_string(), true);
+                            }
+                            cx.notify();
+                        },
+                    ),
+                ),
+        );
+
+    let path_info = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .p(px(10.0))
+        .rounded(px(6.0))
+        .bg(t.input_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(t.text_secondary)
+                .child(i.t("数据库文件：", "Database file: ")),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_size(px(12.0))
+                .text_color(t.text_primary)
+                .child(display_path),
+        );
+
+    let description_points = div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .text_size(px(11.5))
+        .text_color(t.text_muted)
+        .child(i.t(
+            "• 支持一键导入 Claude Code、Codex、Pi、OpenCode、Gemini CLI 等所有工具的供应商配置",
+            "• Supports importing provider configurations for Claude Code, Codex, Pi, OpenCode, Gemini CLI, etc.",
+        ))
+        .child(i.t(
+            "• 支持将 CC-Switch 历史请求日志（3万+条）、详细 Token 消耗及模型计费定价完整迁移至 AI ToolPlus",
+            "• Seamlessly migrates CC-Switch historical request logs, token analytics, and model pricing",
+        ))
+        .child(i.t(
+            "• 安全增量合并机制，不会覆盖或删除您在 AI ToolPlus 中现有的自定义改动",
+            "• Safe incremental merge: will not overwrite or delete your existing custom modifications in AI ToolPlus",
+        ));
+
+    settings_card(
+        &t,
+        i.t("CC-Switch 数据迁移与导入", "CC-Switch Data Migration & Import"),
+        Some(i.t(
+            "从本地 CC-Switch (cc-switch.db) 自动同步迁移模型供应商、使用统计与模型定价配置",
+            "Migrate model providers, usage analytics, and pricing from local CC-Switch (cc-switch.db)",
+        )),
+        vec![
             div()
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
-                .child(section_title(
-                    &t,
-                    i.t("恢复冲突策略与选项", "Restore Conflict Strategy & Options"),
-                    Some(i.t(
-                        "遇到同名文件时的处理方式，以及是否允许恢复自定义绝对路径",
-                        "How to handle existing files, and whether to allow custom absolute paths",
-                    )),
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(8.0))
-                        .child(button_l(
-                            "conflict-strategy-overwrite",
-                            i.t("覆盖原文件", "Overwrite"),
-                            if ws.ui.restore_conflict_strategy
-                                == aitoolplus_core::backup::ConflictStrategy::Overwrite
-                            {
-                                ButtonVariant::Primary
-                            } else {
-                                ButtonVariant::Secondary
-                            },
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                ws.ui.restore_conflict_strategy =
-                                    aitoolplus_core::backup::ConflictStrategy::Overwrite;
-                                cx.notify();
-                            },
-                        ))
-                        .child(button_l(
-                            "conflict-strategy-skip",
-                            i.t("跳过同名文件", "Skip Existing"),
-                            if ws.ui.restore_conflict_strategy
-                                == aitoolplus_core::backup::ConflictStrategy::Skip
-                            {
-                                ButtonVariant::Primary
-                            } else {
-                                ButtonVariant::Secondary
-                            },
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                ws.ui.restore_conflict_strategy =
-                                    aitoolplus_core::backup::ConflictStrategy::Skip;
-                                cx.notify();
-                            },
-                        ))
-                        .child(button_l(
-                            "conflict-strategy-savecopy",
-                            i.t("另存副本 (.restored)", "Save Copy (.restored)"),
-                            if ws.ui.restore_conflict_strategy
-                                == aitoolplus_core::backup::ConflictStrategy::SaveCopy
-                            {
-                                ButtonVariant::Primary
-                            } else {
-                                ButtonVariant::Secondary
-                            },
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                ws.ui.restore_conflict_strategy =
-                                    aitoolplus_core::backup::ConflictStrategy::SaveCopy;
-                                cx.notify();
-                            },
-                        ))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.0))
-                                .child(
-                                    div()
-                                        .text_size(px(12.5))
-                                        .text_color(t.text_secondary)
-                                        .child(i.t("允许原绝对路径", "Custom Absolute")),
-                                )
-                                .child(toggle(
-                                    "restore-custom-absolute-toggle",
-                                    ws.ui.restore_allow_custom_absolute,
-                                    &t,
-                                    cx,
-                                    |ws, _, _, cx| {
-                                        ws.ui.restore_allow_custom_absolute =
-                                            !ws.ui.restore_allow_custom_absolute;
-                                        cx.notify();
-                                    },
-                                )),
-                        ),
-                )
+                .gap(px(10.0))
+                .p(px(12.0))
+                .child(header_row)
+                .child(path_info)
+                .child(description_points)
                 .into_any_element(),
-            filter_panel.into_any_element(),
-            custom_panel.into_any_element(),
+        ],
+    )
+}
+
+fn json_config_transfer_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let export_btn = button_with_icon_l(
+        "export-json-config-btn",
+        crate::icons::UPLOAD_SVG,
+        i.t("导出配置 (JSON)", "Export Config (JSON)"),
+        ButtonVariant::Secondary,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            let dialog = rfd::AsyncFileDialog::new()
+                .add_filter("JSON Config", &["json"])
+                .set_file_name("aitoolplus-config.json")
+                .set_title("导出配置文件");
+            let store_file = ws.paths.store_file();
+            let weak = cx.entity().downgrade();
+            cx.spawn(async move |_this, cx| {
+                if let Some(file) = dialog.save_file().await {
+                    let path = file.path().to_path_buf();
+                    let res = if store_file.is_file() {
+                        std::fs::copy(&store_file, &path).map(|_| ()).map_err(|e| e.to_string())
+                    } else {
+                        Err("配置存储文件不存在".to_string())
+                    };
+                    let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                        match res {
+                            Ok(_) => ws.ui.toast("配置已成功导出".to_string(), false),
+                            Err(e) => ws.ui.toast(format!("导出失败: {e}"), true),
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        },
+    );
+
+    let import_btn = button_with_icon_l(
+        "import-json-config-btn",
+        crate::icons::DOWNLOAD_SVG,
+        i.t("导入配置 (JSON)", "Import Config (JSON)"),
+        ButtonVariant::Secondary,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            let dialog = rfd::AsyncFileDialog::new()
+                .add_filter("JSON Config", &["json"])
+                .set_title("导入配置文件");
+            let store_file = ws.paths.store_file();
+            let weak = cx.entity().downgrade();
+            cx.spawn(async move |_this, cx| {
+                if let Some(file) = dialog.pick_file().await {
+                    let path = file.path().to_path_buf();
+                    let res = if path.is_file() {
+                        std::fs::copy(&path, &store_file).map(|_| ()).map_err(|e| e.to_string())
+                    } else {
+                        Err("文件不存在".to_string())
+                    };
+                    let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                        match res {
+                            Ok(_) => {
+                                if let Ok(content) = std::fs::read_to_string(&store_file) {
+                                    if let Ok(new_store) = serde_json::from_str::<aitoolplus_core::store::Store>(&content) {
+                                        let _ = ws.store.update(|db| *db = new_store);
+                                    }
+                                }
+                                ws.ui.toast("配置已成功导入并刷新".to_string(), false);
+                            }
+                            Err(e) => ws.ui.toast(format!("导入失败: {e}"), true),
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        },
+    );
+
+    settings_card(
+        &t,
+        i.t("配置文件导入与导出", "Config Import & Export"),
+        Some(i.t(
+            "将 AI ToolPlus 的全量供应商配置、模型设置与环境参数导出为 JSON，或从现有 JSON 恢复",
+            "Export all AI ToolPlus providers and settings to JSON, or restore from a JSON file",
+        )),
+        vec![
             div()
                 .flex()
                 .items_center()
                 .justify_between()
-                .w_full()
-                .gap(px(16.0))
-                .child(section_title(
-                    &t,
-                    i.t("包含 CLI 配置", "Include CLI Configs"),
-                    Some(i.t(
-                        "包含各工具配置、Prompt、MCP 和插件状态",
-                        "Include tool configs, prompts, MCP and plugin state",
-                    )),
+                .p(px(12.0))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(t.text_primary)
+                                .child(i.t("单文件配置迁移", "Single File Config Transfer")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(t.text_muted)
+                                .child(i.t("适用于跨机器快速同步或备份配置", "Ideal for quick backup or migrating settings between devices")),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(export_btn)
+                        .child(import_btn),
+                )
+                .into_any_element(),
+        ],
+    )
+}
+
+fn cli_policies_card(
+    ws: &Workspace,
+    t: &crate::theme::Theme,
+    i: &crate::i18n::I18n,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    settings_card(
+        t,
+        i.t("CLI 运行与认证策略", "CLI Launch & Auth Policies"),
+        Some(i.t(
+            "针对各命令行工具的环境变量与运行时配置写入安全策略",
+            "Security, auth preservation, and runtime policies for CLI tools",
+        )),
+        vec![
+            settings_row(
+                t,
+                i.t("Claude 全权限启动 (--dangerously-skip-permissions)", "Claude Full-Access Launch"),
+                Some(i.t(
+                    "启动 Claude Code 时自动附加全权限参数，跳过频繁的危险确认提示",
+                    "Pass --dangerously-skip-permissions on Claude Code startup",
+                )),
+                toggle(
+                    "claude-full-access",
+                    ws.settings.claude_cli_launch_full_access,
+                    t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.claude_cli_launch_full_access =
+                            !ws.settings.claude_cli_launch_full_access;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                t,
+                i.t("Codex 保留官方登录态", "Preserve Codex Official Auth"),
+                Some(i.t(
+                    "切换第三方供应商时保留 ~/.codex 的官方登录凭据与会话",
+                    "Keep official login session in ~/.codex on provider switch",
+                )),
+                toggle(
+                    "codex-preserve-auth",
+                    ws.settings.codex_preserve_official_auth_on_switch,
+                    t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.codex_preserve_official_auth_on_switch =
+                            !ws.settings.codex_preserve_official_auth_on_switch;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                t,
+                i.t("OpenAgent 统一 ~/.omo 配置", "OpenAgent Unified ~/.omo Config"),
+                Some(i.t(
+                    "使用现代统一的 ~/.omo 目录而非旧版分散配置文件",
+                    "Write unified config to ~/.omo instead of legacy files",
+                )),
+                toggle(
+                    "omo-legacy-config",
+                    ws.settings.opencode_use_legacy_oh_my_config,
+                    t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.opencode_use_legacy_oh_my_config =
+                            !ws.settings.opencode_use_legacy_oh_my_config;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                t,
+                i.t("允许清除 OMO/OMOS 运行配置", "Allow Clearing OMO/OMOS Config"),
+                Some(i.t(
+                    "在重置或切换供应商时允许清空已应用的运行时配置",
+                    "Allow wiping runtime config when resetting or switching",
+                )),
+                toggle(
+                    "omo-clear-policy",
+                    ws.settings.opencode_allow_clear_applied_oh_my_config,
+                    t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.opencode_allow_clear_applied_oh_my_config =
+                            !ws.settings.opencode_allow_clear_applied_oh_my_config;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                t,
+                i.t("双写 reasoning/variant 兼容模式", "Dual Reasoning/Variant Write"),
+                Some(i.t(
+                    "同时写入推理模型参数以兼容旧版 OpenCode 插件",
+                    "Write dual parameters for compatibility with older OpenCode",
+                )),
+                toggle(
+                    "omo-dual-reasoning",
+                    ws.settings.opencode_dual_write_reasoning_variant,
+                    t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.opencode_dual_write_reasoning_variant =
+                            !ws.settings.opencode_dual_write_reasoning_variant;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+        ],
+    )
+}
+
+fn storage_card(
+    ws: &mut Workspace,
+    t: &crate::theme::Theme,
+    i: &crate::i18n::I18n,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let data_dir = ws.paths.app_data.display().to_string();
+    let storage_row = settings_row(
+        t,
+        i.t("应用数据存储目录", "Application Data Directory"),
+        Some(gpui::SharedString::from(data_dir)),
+        button_with_icon_l(
+            "open-data-dir",
+            crate::icons::FOLDER_SVG,
+            i.t("打开数据目录", "Open Folder"),
+            ButtonVariant::Secondary,
+            t,
+            cx,
+            move |ws, _, _, cx| {
+                let _ = open_dir_in_explorer(&ws.paths.app_data);
+                cx.notify();
+            },
+        ),
+    );
+
+    let mut roots_rows = div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .p(px(16.0));
+    for tool in aitoolplus_core::ToolId::ALL {
+        let override_value = ws
+            .settings
+            .tool_root_overrides
+            .get(tool.key())
+            .cloned()
+            .unwrap_or_default();
+        let input = ws.ui.tool_root_input(tool, &override_value, cx);
+        let save_input = input.clone();
+        let command = match tool {
+            aitoolplus_core::ToolId::ClaudeCode => "claude",
+            aitoolplus_core::ToolId::GeminiCli => "gemini",
+            aitoolplus_core::ToolId::OhMyPi => "omp",
+            other => other.key(),
+        };
+        let cli_value = ws
+            .settings
+            .cli_manual_paths
+            .get(command)
+            .cloned()
+            .unwrap_or_default();
+        let cli_input = ws.ui.cli_path_input(command, &cli_value, cx);
+        let save_cli_input = cli_input.clone();
+        let resolved = ws.paths.tool_root(tool).display().to_string();
+
+        roots_rows = roots_rows.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .p(px(10.0))
+                .rounded(px(8.0))
+                .bg(t.input_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.text_primary)
+                        .child(format!("{} · {}", tool.name_en(), resolved)),
+                )
+                .child(input)
+                .child(button_l(
+                    gpui::SharedString::from(format!("save-root-{}", tool.key())),
+                    i.t("保存根目录覆盖", "Save Root Override"),
+                    ButtonVariant::Secondary,
+                    t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let value =
+                            save_input.update(cx, |input, _| input.text().trim().to_string());
+                        if value.is_empty() {
+                            ws.settings.tool_root_overrides.remove(tool.key());
+                        } else {
+                            ws.settings
+                                .tool_root_overrides
+                                .insert(tool.key().to_string(), value);
+                        }
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        ws.ui.toast(
+                            ws.i18n
+                                .t("已保存；重启后生效", "saved; applies after restart")
+                                .to_string(),
+                            false,
+                        );
+                        cx.notify();
+                    },
                 ))
-                .child(toggle(
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(t.text_muted)
+                        .child(format!("CLI: {command}")),
+                )
+                .child(cli_input)
+                .child(button_l(
+                    gpui::SharedString::from(format!("save-cli-{command}")),
+                    i.t("保存 CLI 执行路径", "Save CLI Path"),
+                    ButtonVariant::Secondary,
+                    t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let value =
+                            save_cli_input.update(cx, |input, _| input.text().trim().to_string());
+                        if value.is_empty() {
+                            ws.settings.cli_manual_paths.remove(command);
+                        } else {
+                            ws.settings.cli_manual_paths.insert(command.into(), value);
+                        }
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        ws.ui.toast(
+                            ws.i18n
+                                .t("已保存；重启后生效", "saved; applies after restart")
+                                .to_string(),
+                            false,
+                        );
+                        cx.notify();
+                    },
+                )),
+        );
+    }
+
+    settings_card(
+        t,
+        i.t("数据存储与 CLI 路径覆盖", "Storage & CLI Paths"),
+        Some(i.t(
+            "查看核心配置存储路径，或自定义特定工具的配置文件与命令行程序位置",
+            "Inspect data directory or override config roots and CLI binary paths",
+        )),
+        vec![
+            storage_row,
+            roots_rows.into_any_element(),
+        ],
+    )
+}
+
+fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let cli_card = cli_policies_card(ws, &t, &i, cx);
+    let stor_card = storage_card(ws, &t, &i, cx);
+
+    // 1. Conflict strategy card
+    let conflict_card = settings_card(
+        &t,
+        i.t("恢复冲突处理策略", "Restore Conflict Policy"),
+        Some(i.t(
+            "遇到同名文件时的恢复处理策略，以及是否允许恢复自定义绝对路径",
+            "How to handle existing files on restore, and whether to allow custom absolute paths",
+        )),
+        vec![
+            settings_row(
+                &t,
+                i.t("恢复同名冲突策略", "Conflict Strategy"),
+                Some(i.t(
+                    "覆盖已有文件、跳过同名文件或保存为 .restored 副本",
+                    "Overwrite target, skip existing, or save copy as .restored",
+                )),
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(button_l(
+                        "conflict-strategy-overwrite",
+                        i.t("覆盖原文件", "Overwrite"),
+                        if ws.ui.restore_conflict_strategy
+                            == aitoolplus_core::backup::ConflictStrategy::Overwrite
+                        {
+                            ButtonVariant::Primary
+                        } else {
+                            ButtonVariant::Secondary
+                        },
+                        &t,
+                        cx,
+                        |ws, _, _, cx| {
+                            ws.ui.restore_conflict_strategy =
+                                aitoolplus_core::backup::ConflictStrategy::Overwrite;
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_l(
+                        "conflict-strategy-skip",
+                        i.t("跳过同名文件", "Skip Existing"),
+                        if ws.ui.restore_conflict_strategy
+                            == aitoolplus_core::backup::ConflictStrategy::Skip
+                        {
+                            ButtonVariant::Primary
+                        } else {
+                            ButtonVariant::Secondary
+                        },
+                        &t,
+                        cx,
+                        |ws, _, _, cx| {
+                            ws.ui.restore_conflict_strategy =
+                                aitoolplus_core::backup::ConflictStrategy::Skip;
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_l(
+                        "conflict-strategy-savecopy",
+                        i.t("另存副本 (.restored)", "Save Copy (.restored)"),
+                        if ws.ui.restore_conflict_strategy
+                            == aitoolplus_core::backup::ConflictStrategy::SaveCopy
+                        {
+                            ButtonVariant::Primary
+                        } else {
+                            ButtonVariant::Secondary
+                        },
+                        &t,
+                        cx,
+                        |ws, _, _, cx| {
+                            ws.ui.restore_conflict_strategy =
+                                aitoolplus_core::backup::ConflictStrategy::SaveCopy;
+                            cx.notify();
+                        },
+                    ))
+                    .into_any_element(),
+            ),
+            settings_row(
+                &t,
+                i.t("允许原绝对路径恢复", "Allow Custom Absolute Paths"),
+                Some(i.t(
+                    "恢复自定义备份条目时，允许写回原始绝对路径（关闭时落入安全沙箱）",
+                    "Allow restoring custom files back to original paths (otherwise sandboxed)",
+                )),
+                toggle(
+                    "restore-custom-absolute-toggle",
+                    ws.ui.restore_allow_custom_absolute,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.restore_allow_custom_absolute =
+                            !ws.ui.restore_allow_custom_absolute;
+                        cx.notify();
+                    },
+                ),
+            ),
+        ],
+    );
+
+    // 2. Backup scope card (Include CLI Configs)
+    let scope_card = settings_card(
+        &t,
+        i.t("备份范围与 CLI 配置", "Backup Scope & CLI Configs"),
+        Some(i.t(
+            "选择创建备份快照时包含的数据范围",
+            "Choose data scope when generating backup snapshots",
+        )),
+        vec![
+            settings_row(
+                &t,
+                i.t("包含各 CLI 运行时配置文件", "Include CLI Config Files"),
+                Some(i.t(
+                    "包含 Claude Code、Codex、Gemini CLI、Pi 等工具的配置文件与 MCP 设置",
+                    "Include runtime configs, prompts, and MCP settings for CLI tools",
+                )),
+                toggle(
                     "backup-cli-toggle",
                     ws.settings.backup_cli_config_files_enabled,
                     &t,
@@ -1908,41 +2299,239 @@ fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyEleme
                         (ws.callbacks.save_settings)(&ws.settings);
                         cx.notify();
                     },
-                ))
-                .into_any_element(),
+                ),
+            ),
+        ],
+    );
+
+    // 3. CLI backup file filter card
+    let mut filter_rows = Vec::new();
+    for file in aitoolplus_core::backup::cli_config_files(&ws.paths) {
+        let display = file.display().to_string();
+        let rule_path = display.clone();
+        let excluded = ws
+            .settings
+            .backup_file_filter_rules
+            .iter()
+            .any(|rule| rule.file_path == display);
+        let row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .p(px(8.0))
+            .rounded(px(6.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(px(11.5))
+                    .text_color(t.text_secondary)
+                    .child(display),
+            )
+            .child(button_l(
+                gpui::SharedString::from(format!("backup-filter-{rule_path}")),
+                if excluded {
+                    i.t("已排除", "Excluded")
+                } else {
+                    i.t("已包含", "Included")
+                },
+                if excluded {
+                    ButtonVariant::Danger
+                } else {
+                    ButtonVariant::Secondary
+                },
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    if ws
+                        .settings
+                        .backup_file_filter_rules
+                        .iter()
+                        .any(|rule| rule.file_path == rule_path)
+                    {
+                        ws.settings
+                            .backup_file_filter_rules
+                            .retain(|rule| rule.file_path != rule_path);
+                    } else {
+                        ws.settings.backup_file_filter_rules.push(
+                            aitoolplus_core::settings::BackupFileFilterRule {
+                                tool: String::new(),
+                                file_path: rule_path.clone(),
+                            },
+                        );
+                    }
+                    (ws.callbacks.save_settings)(&ws.settings);
+                    cx.notify();
+                },
+            ))
+            .into_any_element();
+        filter_rows.push(row);
+    }
+
+    let filter_card = settings_card(
+        &t,
+        i.t("CLI 备份文件过滤", "CLI Backup File Filters"),
+        Some(i.t(
+            "逐文件排除敏感或不需要打包到快照中的运行时配置文件",
+            "Exclude sensitive or unwanted runtime files individually from backup snapshots",
+        )),
+        vec![
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .w_full()
-                .gap(px(16.0))
-                .child(section_title(
-                    &t,
-                    i.t("自动备份", "Automatic Backup"),
-                    Some(gpui::SharedString::from(format!(
-                        "{} {} {} · {} {}",
-                        i.t("每", "Every"),
-                        ws.settings.auto_backup_interval_days,
-                        i.t("天", "days"),
-                        i.t("保留", "keep"),
-                        ws.settings.auto_backup_max_keep
-                    ))),
-                ))
-                .child(toggle(
-                    "auto-backup-toggle",
-                    ws.settings.auto_backup_enabled,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.settings.auto_backup_enabled = !ws.settings.auto_backup_enabled;
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        cx.notify();
-                    },
-                ))
+                .flex_col()
+                .gap(px(6.0))
+                .p(px(12.0))
+                .children(filter_rows)
                 .into_any_element(),
         ],
-    )
-    .into_any_element()
+    );
+
+    // 4. Custom backup paths card
+    let custom_inputs = ws.ui.backup_custom_inputs(cx);
+    let custom_source = custom_inputs.source.clone();
+    let custom_restore = custom_inputs.restore.clone();
+
+    let mut custom_items = Vec::new();
+    for entry in ws.settings.backup_custom_entries.clone() {
+        let id = entry.id.clone();
+        let item = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .p(px(8.0))
+            .rounded(px(6.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(t.text_primary)
+                            .child(entry.source_path),
+                    )
+                    .children(entry.restore_path.map(|path| {
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(t.text_muted)
+                            .child(format!("restore: {path}"))
+                            .into_any_element()
+                    })),
+            )
+            .child(button_l(
+                gpui::SharedString::from(format!("custom-backup-remove-{id}")),
+                i.t("移除条目", "Remove Entry"),
+                ButtonVariant::Danger,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    ws.settings
+                        .backup_custom_entries
+                        .retain(|entry| entry.id != id);
+                    (ws.callbacks.save_settings)(&ws.settings);
+                    cx.notify();
+                },
+            ))
+            .into_any_element();
+        custom_items.push(item);
+    }
+
+    let add_source = custom_source.clone();
+    let add_restore = custom_restore.clone();
+    let add_section = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .p(px(10.0))
+        .rounded(px(6.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .child(custom_source)
+        .child(custom_restore)
+        .child(button_l(
+            "custom-backup-add",
+            i.t("添加自定义条目", "Add Custom Entry"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            move |ws, _, _, cx| {
+                let source = add_source.update(cx, |input, _| input.text().trim().to_string());
+                let restore =
+                    add_restore.update(cx, |input, _| input.text().trim().to_string());
+                if source.is_empty() {
+                    ws.ui.toast(
+                        ws.i18n
+                            .t("请输入源路径", "source path required")
+                            .to_string(),
+                        true,
+                    );
+                } else {
+                    ws.settings.backup_custom_entries.push(
+                        aitoolplus_core::settings::BackupCustomEntry {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            source_path: source,
+                            restore_path: (!restore.is_empty()).then_some(restore),
+                        },
+                    );
+                    (ws.callbacks.save_settings)(&ws.settings);
+                }
+                cx.notify();
+            },
+        ));
+
+    let custom_card = settings_card(
+        &t,
+        i.t("自定义备份条目", "Custom Backup Entries"),
+        Some(i.t(
+            "额外指定包含在备份中的自定义文件或目录；未指定恢复路径时会安全落入沙箱",
+            "Extra files or directories to include; blank restore paths use a safe sandbox",
+        )),
+        vec![
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .p(px(12.0))
+                .children(custom_items)
+                .child(add_section)
+                .into_any_element(),
+        ],
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap(px(20.0))
+        .child(cli_card)
+        .child(stor_card)
+        .child(conflict_card)
+        .child(scope_card)
+        .child(filter_card)
+        .child(custom_card)
+        .into_any_element()
+}
+
+fn format_iso_time(iso: &str) -> String {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) {
+        dt.with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string()
+    } else {
+        iso.chars().take(19).collect::<String>().replace('T', " ")
+    }
 }
 
 fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
@@ -1951,105 +2540,142 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
     let version = env!("CARGO_PKG_VERSION");
     let info = ws.ui.update_info.clone();
 
-    let mut children = vec![
-        section_title(&t, i.t("关于", "About"), None),
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .text_color(t.text_primary)
-                    .child(format!("AI ToolPlus v{version}")),
-            )
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(t.text_secondary)
-                    .child(i.t(
-                        "Rust + GPUI 原生桌面应用，全面对标 cc-switch 与 ai-toolbox",
-                        "Native Rust + GPUI desktop app, matching cc-switch and ai-toolbox",
-                    )),
-            )
-            .into_any_element(),
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .p(px(10.0))
-            .rounded(px(8.0))
-            .bg(t.input_bg)
-            .border_1()
-            .border_color(t.card_border)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(px(12.5))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(t.text_primary)
-                            .child(i.t("数据存储模式：", "Data Storage Mode:")),
-                    )
-                    .child(if ws.paths.is_portable() {
-                        crate::components::badge(
-                            &t,
-                            i.t("便携模式：已激活（保存在应用同级 data/ 目录）", "Portable: Active (app data/ folder)"),
-                            crate::components::BadgeKind::Success,
+    // 1. App Info & Data Storage Card
+    let about_card = card(
+        &t,
+        vec![
+            section_title(&t, i.t("关于 AI ToolPlus", "About AI ToolPlus"), None),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(t.text_primary)
+                                .child("AI ToolPlus"),
                         )
-                    } else {
-                        crate::components::badge(
-                            &t,
-                            i.t("系统模式（保存在用户 AppData）", "Standard Mode (%APPDATA%)"),
-                            crate::components::BadgeKind::Neutral,
+                        .child(
+                            crate::components::badge(
+                                &t,
+                                format!("v{version}"),
+                                crate::components::BadgeKind::Neutral,
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(i.t(
+                            "Rust + GPUI 原生多端 AI 辅助开发工具箱，全面对标 cc-switch 与 ai-toolbox",
+                            "Native Rust + GPUI developer toolkit, matching cc-switch and ai-toolbox",
+                        )),
+                )
+                .into_any_element(),
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .p(px(10.0))
+                .rounded(px(8.0))
+                .bg(t.input_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(t.text_primary)
+                                .child(i.t("数据存储模式：", "Data Storage Mode:")),
                         )
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .flex_wrap()
-                    .child(button_l(
-                        "open-app-data-dir",
-                        i.t("打开应用数据目录", "Open AppData Dir"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        |ws, _, _, _| {
-                            let dir = &ws.paths.app_data;
-                            let _ = std::fs::create_dir_all(dir);
-                            let _ = std::process::Command::new("explorer").arg(dir).spawn();
-                        },
-                    ))
-                    .child(button_l(
-                        "open-backups-dir",
-                        i.t("打开备份存储目录", "Open Backups Dir"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        |ws, _, _, _| {
-                            let dir = ws.paths.app_data.join("backups");
-                            let _ = std::fs::create_dir_all(&dir);
-                            let _ = std::process::Command::new("explorer").arg(&dir).spawn();
-                        },
-                    ))
-                    .child(button_l(
-                        "open-user-home-dir",
-                        i.t("打开配置根目录", "Open Config Root"),
-                        ButtonVariant::Secondary,
-                        &t,
-                        cx,
-                        |ws, _, _, _| {
-                            let _ = std::process::Command::new("explorer").arg(&ws.paths.home).spawn();
-                        },
-                    )),
-            )
-            .into_any_element(),
+                        .child(if ws.paths.is_portable() {
+                            crate::components::badge(
+                                &t,
+                                i.t(
+                                    "便携模式：已激活（保存在应用同级 data/ 目录）",
+                                    "Portable: Active (app data/ folder)",
+                                ),
+                                crate::components::BadgeKind::Success,
+                            )
+                        } else {
+                            crate::components::badge(
+                                &t,
+                                i.t(
+                                    "系统模式（保存在用户 AppData）",
+                                    "Standard Mode (%APPDATA%)",
+                                ),
+                                crate::components::BadgeKind::Neutral,
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .flex_wrap()
+                        .child(button_l(
+                            "open-app-data-dir",
+                            i.t("打开应用数据目录", "Open AppData Dir"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, _| {
+                                let dir = &ws.paths.app_data;
+                                let _ = std::fs::create_dir_all(dir);
+                                let _ = open_dir_in_explorer(dir);
+                            },
+                        ))
+                        .child(button_l(
+                            "open-backups-dir",
+                            i.t("打开备份存储目录", "Open Backups Dir"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, _| {
+                                let dir = ws.paths.app_data.join("backups");
+                                let _ = std::fs::create_dir_all(&dir);
+                                let _ = open_dir_in_explorer(&dir);
+                            },
+                        ))
+                        .child(button_l(
+                            "open-user-home-dir",
+                            i.t("打开配置根目录", "Open Config Root"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, _| {
+                                let _ = open_dir_in_explorer(&ws.paths.home);
+                            },
+                        )),
+                )
+                .into_any_element(),
+        ],
+    );
+
+    // 2. Updates & CDN Mirrors Card
+    let mut update_items = vec![
+        section_title(
+            &t,
+            i.t("软件更新与 CDN 镜像加速", "Software Updates & CDN Mirrors"),
+            Some(i.t(
+                "全面对标 cc-switch / ai-toolbox 更新机制，支持 GitHub 官方直连、国内高速镜像代理与自定义 CDN",
+                "Update engine matching cc-switch and ai-toolbox, supporting GitHub official, China mirrors, and custom CDNs",
+            )),
+        ),
+        // Row 1: Auto check toggle
         div()
             .flex()
             .items_center()
@@ -2058,10 +2684,10 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
             .gap(px(16.0))
             .child(section_title(
                 &t,
-                i.t("自动检查更新", "Automatic Update Check"),
+                i.t("启动时自动检查更新", "Check for Updates on Startup"),
                 Some(i.t(
-                    "启动后可检查 GitHub Releases；不会静默安装",
-                    "Check GitHub Releases at startup; never installs silently",
+                    "应用启动 2.5 秒后在后台静默检查；绝不静默强制安装",
+                    "Checks releases quietly 2.5s after launch; never forces silent installation",
                 )),
             ))
             .child(toggle(
@@ -2076,164 +2702,945 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                 },
             ))
             .into_any_element(),
-        button_l(
-            "check-for-updates",
-            i.t("检查更新", "Check for Updates"),
-            ButtonVariant::Primary,
-            &t,
-            cx,
-            |_ws, _, _, cx| {
-                let weak = cx.entity().downgrade();
-                cx.spawn(async move |_this, cx| {
-                    let result = cx
-                        .background_spawn(async move {
-                            aitoolplus_core::updater::check_latest(env!("CARGO_PKG_VERSION"))
-                        })
-                        .await;
-                    let _ = weak.update(cx, |ws, cx| {
-                        ws.settings.last_update_check_time = Some(chrono::Utc::now().to_rfc3339());
-                        (ws.callbacks.save_settings)(&ws.settings);
-                        match result {
-                            Ok(info) => {
-                                let message = if info.update_available {
-                                    ws.i18n
-                                        .t(
-                                            &format!("发现新版本 {}", info.latest_version),
-                                            &format!(
-                                                "new version {} available",
-                                                info.latest_version
+        // Row 2: Mirror selector
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .w_full()
+            .child({
+                let current_mirror = ws.settings.update_mirror;
+                let current_mirror_name = match current_mirror {
+                    aitoolplus_core::updater::UpdateMirror::GhProxyNet => i.t("ghproxy.net (推荐加速)", "ghproxy.net (Fast)"),
+                    aitoolplus_core::updater::UpdateMirror::Official => i.t("GitHub 官方 (直连)", "GitHub Official"),
+                    aitoolplus_core::updater::UpdateMirror::MirrorGhProxy => i.t("mirror.ghproxy", "mirror.ghproxy"),
+                    aitoolplus_core::updater::UpdateMirror::GhProxyCom => i.t("gh-proxy.com", "gh-proxy.com"),
+                    aitoolplus_core::updater::UpdateMirror::Custom => i.t("自定义 CDN / 代理", "Custom CDN"),
+                };
+                let is_open = ws.ui.update_mirror_dropdown_open;
+                let mirror_options = vec![
+                    (aitoolplus_core::updater::UpdateMirror::GhProxyNet, i.t("ghproxy.net (国内推荐加速)", "ghproxy.net (Fast)")),
+                    (aitoolplus_core::updater::UpdateMirror::Official, i.t("GitHub 官方 (直连)", "GitHub Official")),
+                    (aitoolplus_core::updater::UpdateMirror::MirrorGhProxy, i.t("mirror.ghproxy", "mirror.ghproxy")),
+                    (aitoolplus_core::updater::UpdateMirror::GhProxyCom, i.t("gh-proxy.com", "gh-proxy.com")),
+                    (aitoolplus_core::updater::UpdateMirror::Custom, i.t("自定义 CDN / 代理前缀", "Custom CDN / Proxy")),
+                ];
+
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(t.text_primary)
+                                    .child(i.t("下载加速镜像源：", "Download Mirror Source:")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(t.text_secondary)
+                                    .child(i.t(
+                                        "国内网络推荐使用 ghproxy.net 高速镜像，秒速完成下载",
+                                        "China mirror recommended for high-speed downloads",
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(240.0))
+                            .child(
+                                div()
+                                    .id("update-mirror-dropdown-trigger")
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .w_full()
+                                    .px(px(10.0))
+                                    .py(px(5.5))
+                                    .rounded(px(6.0))
+                                    .bg(t.input_bg)
+                                    .border_1()
+                                    .border_color(if is_open { t.accent } else { t.card_border })
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|ws, _, _, cx| {
+                                        ws.ui.update_mirror_dropdown_open = !ws.ui.update_mirror_dropdown_open;
+                                        cx.notify();
+                                    }))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(
+                                                gpui::svg()
+                                                    .data(crate::icons::CLOUD_DOWNLOAD_SVG)
+                                                    .size(px(13.0))
+                                                    .text_color(t.accent),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.0))
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .text_color(t.text_primary)
+                                                    .child(current_mirror_name.to_string()),
                                             ),
-                                        )
-                                        .to_string()
-                                } else {
-                                    ws.i18n
-                                        .t("当前已是最新版", "already up to date")
-                                        .to_string()
-                                };
-                                ws.ui.update_info = Some(info);
-                                ws.ui.toast(message, false);
-                            }
-                            Err(error) => {
-                                ws.ui.toast(format!("update check failed: {error}"), true)
-                            }
-                        }
-                        cx.notify();
-                    });
-                })
-                .detach();
-            },
-        ),
+                                    )
+                                    .child(
+                                        gpui::svg()
+                                            .data(crate::icons::CHEVRON_DOWN_SVG)
+                                            .size(px(11.0))
+                                            .text_color(t.text_muted),
+                                    ),
+                            )
+                            .when(is_open, |el| {
+                                el.child(
+                                    div()
+                                        .id("update-mirror-dropdown-popover")
+                                        .absolute()
+                                        .top(px(34.0))
+                                        .right_0()
+                                        .w(px(240.0))
+                                        .bg(t.card_bg)
+                                        .border_1()
+                                        .border_color(t.card_border)
+                                        .rounded(px(6.0))
+                                        .shadow_lg()
+                                        .p(px(4.0))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .children(mirror_options.into_iter().map(|(m, label)| {
+                                            let is_selected = m == current_mirror;
+                                            div()
+                                                .id(gpui::SharedString::from(format!("mirror-opt-{:?}", m)))
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .px(px(8.0))
+                                                .py(px(5.5))
+                                                .rounded(px(4.0))
+                                                .bg(if is_selected { t.accent_subtle } else { t.card_bg })
+                                                .hover(|s| s.bg(t.card_hover))
+                                                .cursor_pointer()
+                                                .on_click(cx.listener(move |ws, _, _, cx| {
+                                                    ws.settings.update_mirror = m;
+                                                    ws.ui.update_mirror_dropdown_open = false;
+                                                    (ws.callbacks.save_settings)(&ws.settings);
+                                                    cx.notify();
+                                                }))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.5))
+                                                        .text_color(if is_selected { t.accent } else { t.text_primary })
+                                                        .font_weight(if is_selected { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
+                                                        .child(label.to_string()),
+                                                )
+                                                .when(is_selected, |s| {
+                                                    s.child(
+                                                        gpui::svg()
+                                                            .data(crate::icons::CHECK_SVG)
+                                                            .size(px(11.0))
+                                                            .text_color(t.accent),
+                                                    )
+                                                })
+                                        })),
+                                )
+                            }),
+                    )
+            })
+            .into_any_element(),
     ];
 
-    if let Some(info) = info {
-        let notes: String = info.release_notes.chars().take(800).collect();
-        let asset = aitoolplus_core::updater::best_asset(&info).cloned();
-        children.push(
+    // If Custom mirror is selected, show input fields
+    if ws.settings.update_mirror == aitoolplus_core::updater::UpdateMirror::Custom {
+        update_items.push(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
+                .gap(px(8.0))
                 .p(px(10.0))
                 .rounded(px(8.0))
                 .bg(t.input_bg)
                 .border_1()
-                .border_color(if info.update_available {
-                    t.warning
-                } else {
-                    t.success
-                })
+                .border_color(t.card_border)
                 .child(
                     div()
-                        .text_size(px(13.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_primary)
-                        .child(format!(
-                            "{} → {}",
-                            info.current_version, info.latest_version
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(i.t(
+                            "自定义 CDN / 代理前缀（如：https://ghproxy.net/ 或自建 Cloudflare Worker URL，支持 {} 占位符）：",
+                            "Custom CDN / proxy prefix (e.g. https://ghproxy.net/ or your Cloudflare Worker URL, supports {}):",
                         )),
                 )
-                .children((!notes.is_empty()).then(|| {
+                .child(
                     div()
-                        .text_size(px(11.5))
-                        .text_color(t.text_secondary)
-                        .child(notes)
-                        .into_any_element()
-                }))
-                .children(asset.map(|asset| {
-                    button_l(
-                        "download-update-asset",
-                        i.t("下载更新", "Download Update"),
-                        ButtonVariant::Primary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            let output = ws.paths.app_data.join("updates").join(&asset.name);
-                            match aitoolplus_core::updater::download(&asset, &output) {
-                                Ok(path) => {
-                                    ws.ui.downloaded_update_asset_path = Some(path.clone());
-                                    ws.ui.toast(
-                                        ws.i18n
-                                            .t(
-                                                &format!("已下载到 {}", path.display()),
-                                                &format!("downloaded to {}", path.display()),
-                                            )
-                                            .to_string(),
-                                        false,
-                                    );
-                                }
-                                Err(error) => {
-                                    ws.ui.toast(format!("download failed: {error}"), true)
-                                }
-                            }
-                            cx.notify();
-                        },
-                    )
-                }))
-                .children(ws.ui.downloaded_update_asset_path.as_ref().map(|path| {
-                    let asset_path = path.clone();
-                    button_l(
-                        "install-update-now",
-                        i.t("立即安装并重启", "Install & Restart Now"),
-                        ButtonVariant::Primary,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            match aitoolplus_core::updater::install_update_and_restart(&asset_path)
-                            {
-                                Ok(()) => {}
-                                Err(error) => {
-                                    ws.ui.toast(format!("install update failed: {error}"), true);
-                                    cx.notify();
-                                }
-                            }
-                        },
-                    )
-                }))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().flex_1().child(ws.ui.custom_mirror_input.clone()))
+                        .child(button_l(
+                            "save-custom-mirror-btn",
+                            i.t("保存 CDN 前缀", "Save Prefix"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                let val = ws
+                                    .ui
+                                    .custom_mirror_input
+                                    .read(cx)
+                                    .text()
+                                    .trim()
+                                    .to_string();
+                                ws.settings.custom_update_mirror_url = val;
+                                (ws.callbacks.save_settings)(&ws.settings);
+                                ws.ui.toast(
+                                    ws.i18n
+                                        .t(
+                                            "自定义 CDN 前缀已保存",
+                                            "Custom CDN prefix saved",
+                                        )
+                                        .to_string(),
+                                    false,
+                                );
+                                cx.notify();
+                            },
+                        )),
+                )
                 .into_any_element(),
         );
     }
 
-    card(&t, children).into_any_element()
+    // Check for updates action bar
+    let is_checking = ws.ui.update_checking;
+    let last_check_text = ws
+        .settings
+        .last_update_check_time
+        .as_deref()
+        .map(format_iso_time);
+
+    update_items.push(
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .w_full()
+            .p(px(10.0))
+            .rounded(px(8.0))
+            .bg(t.input_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(t.text_primary)
+                                    .child(format!(
+                                        "{} v{}",
+                                        i.t("当前版本：", "Current:"),
+                                        version
+                                    )),
+                            )
+                            .child(if let Some(ref inf) = info {
+                                if inf.update_available {
+                                    crate::components::badge(
+                                        &t,
+                                        i.t("发现新版本", "Update Available"),
+                                        crate::components::BadgeKind::Warning,
+                                    )
+                                } else {
+                                    crate::components::badge(
+                                        &t,
+                                        i.t("最新版本", "Latest"),
+                                        crate::components::BadgeKind::Success,
+                                    )
+                                }
+                            } else {
+                                crate::components::badge(
+                                    &t,
+                                    i.t("已就绪", "Ready"),
+                                    crate::components::BadgeKind::Neutral,
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(t.text_muted)
+                            .child(if let Some(t_str) = last_check_text {
+                                format!(
+                                    "{} {}",
+                                    i.t("上次检查时间：", "Last checked:"),
+                                    t_str
+                                )
+                            } else {
+                                i.t("尚未检查过更新", "Never checked").to_string()
+                            }),
+                    ),
+            )
+            .child(button_l(
+                "check-for-updates",
+                if is_checking {
+                    i.t("正在检查中…", "Checking…")
+                } else {
+                    i.t("检查更新", "Check for Updates")
+                },
+                if is_checking {
+                    ButtonVariant::Secondary
+                } else {
+                    ButtonVariant::Primary
+                },
+                &t,
+                cx,
+                |ws, _, _, cx| {
+                    if ws.ui.update_checking {
+                        return;
+                    }
+                    ws.ui.update_checking = true;
+                    ws.ui.update_error = None;
+                    let custom_api = ws.settings.custom_update_api_url.clone();
+                    let weak = cx.entity().downgrade();
+                    cx.spawn(async move |_this, cx| {
+                        let result = cx
+                            .background_spawn(async move {
+                                if !custom_api.trim().is_empty() {
+                                    aitoolplus_core::updater::check_latest_at(
+                                        &custom_api,
+                                        env!("CARGO_PKG_VERSION"),
+                                    )
+                                } else {
+                                    aitoolplus_core::updater::check_latest(
+                                        env!("CARGO_PKG_VERSION"),
+                                    )
+                                }
+                            })
+                            .await;
+                        let _ = weak.update(cx, |ws, cx| {
+                            ws.ui.update_checking = false;
+                            ws.settings.last_update_check_time =
+                                Some(chrono::Utc::now().to_rfc3339());
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            match result {
+                                Ok(inf) => {
+                                    let message = if inf.update_available {
+                                        ws.i18n
+                                            .t(
+                                                &format!(
+                                                    "发现新版本 v{}",
+                                                    inf.latest_version
+                                                ),
+                                                &format!(
+                                                    "New version v{} available",
+                                                    inf.latest_version
+                                                ),
+                                            )
+                                            .to_string()
+                                    } else {
+                                        ws.i18n
+                                            .t("当前已是最新版", "Already up to date")
+                                            .to_string()
+                                    };
+                                    ws.ui.update_info = Some(inf);
+                                    ws.ui.toast(message, false);
+                                }
+                                Err(error) => {
+                                    ws.ui.update_error = Some(error.clone());
+                                    ws.ui.toast(
+                                        format!("检查更新失败: {error}"),
+                                        true,
+                                    );
+                                }
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                },
+            ))
+            .into_any_element(),
+    );
+
+    // Update error banner
+    if let Some(err) = &ws.ui.update_error {
+        update_items.push(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .p(px(10.0))
+                .rounded(px(8.0))
+                .bg(t.danger_subtle)
+                .border_1()
+                .border_color(t.danger.opacity(0.3))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(format!(
+                            "{} {}",
+                            i.t("更新提示：", "Notice:"),
+                            err
+                        )),
+                )
+                .into_any_element(),
+        );
+    }
+
+    // Update available vs Up-to-date card
+    if let Some(info) = info {
+        if info.update_available {
+            let asset = aitoolplus_core::updater::best_asset(&info).cloned();
+            let notes = info.release_notes.chars().take(1500).collect::<String>();
+            let pub_date = info.published_at.as_deref().map(format_iso_time);
+
+            let mut release_card = div()
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .bg(t.input_bg)
+                .border_1()
+                .border_color(t.accent)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .text_size(px(13.5))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(t.text_primary)
+                                        .child(format!(
+                                            "{} v{} → v{}",
+                                            i.t(
+                                                "发现新版本：",
+                                                "Update Available:",
+                                            ),
+                                            info.current_version,
+                                            info.latest_version
+                                        )),
+                                )
+                                .child(crate::components::badge(
+                                    &t,
+                                    i.t("可升级", "Available"),
+                                    crate::components::BadgeKind::Success,
+                                )),
+                        )
+                        .children(pub_date.map(|pd| {
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(t.text_muted)
+                                .child(format!(
+                                    "{} {}",
+                                    i.t("发布时间：", "Released:"),
+                                    pd
+                                ))
+                                .into_any_element()
+                        })),
+                );
+
+            if !notes.is_empty() {
+                release_card = release_card.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(t.text_secondary)
+                                .child(i.t(
+                                    "更新日志 (Release Notes)：",
+                                    "Release Notes:",
+                                )),
+                        )
+                        .child(
+                            div()
+                                .id("update-release-notes")
+                                .max_h(px(120.0))
+                                .overflow_y_scroll()
+                                .p(px(8.0))
+                                .rounded(px(6.0))
+                                .bg(t.card_bg)
+                                .border_1()
+                                .border_color(t.card_border)
+                                .text_size(px(11.5))
+                                .text_color(t.text_secondary)
+                                .child(notes),
+                        ),
+                );
+            }
+
+            if let Some(asset) = asset {
+                let current_mirror = ws.settings.update_mirror;
+                let mirror_label = current_mirror
+                    .display_name(ws.settings.language == aitoolplus_core::settings::Language::Zh);
+
+                let asset_info_row = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_size(px(11.5))
+                    .text_color(t.text_secondary)
+                    .child(format!(
+                        "{} {} ({})",
+                        i.t("安装包：", "Package:"),
+                        asset.name,
+                        if asset.size > 0 {
+                            format_file_size(asset.size)
+                        } else {
+                            i.t("官方完整包", "Full installer").to_string()
+                        }
+                    ))
+                    .child(format!(
+                        "{} {}",
+                        i.t("加速源：", "Mirror:"),
+                        mirror_label
+                    ));
+
+                release_card = release_card.child(asset_info_row);
+
+                // Action area: Downloaded vs Downloading vs Ready to Download
+                if let Some(downloaded_path) =
+                    ws.ui.downloaded_update_asset_path.clone()
+                {
+                    let path_for_install = downloaded_path.clone();
+                    let path_for_reveal = downloaded_path.clone();
+
+                    let ready_row = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .flex_wrap()
+                        .child(crate::components::badge(
+                            &t,
+                            i.t("安装包已就绪", "Installer Ready"),
+                            crate::components::BadgeKind::Success,
+                        ))
+                        .child(button_l(
+                            "install-update-now",
+                            i.t("立即安装并重启", "Install & Restart Now"),
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                match aitoolplus_core::updater::install_update_and_restart(
+                                    &path_for_install,
+                                ) {
+                                    Ok(()) => {}
+                                    Err(error) => {
+                                        ws.ui.toast(
+                                            format!("安装失败: {error}"),
+                                            true,
+                                        );
+                                        cx.notify();
+                                    }
+                                }
+                            },
+                        ))
+                        .child(button_l(
+                            "reveal-update-folder",
+                            i.t("打开所在文件夹", "Open Folder"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            move |_, _, _, _| {
+                                let _ = open_dir_in_explorer(
+                                    path_for_reveal
+                                        .parent()
+                                        .unwrap_or(&path_for_reveal),
+                                );
+                            },
+                        ))
+                        .child(button_l(
+                            "re-download-update-btn",
+                            i.t("重新下载", "Re-download"),
+                            ButtonVariant::Ghost,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.downloaded_update_asset_path = None;
+                                cx.notify();
+                            },
+                        ));
+
+                    release_card = release_card.child(ready_row);
+                } else if ws.ui.update_downloading {
+                    let progress = ws.ui.update_download_progress;
+                    let downloaded = ws.ui.update_downloaded_bytes;
+                    let total = ws.ui.update_total_bytes;
+                    let speed = ws.ui.update_download_speed;
+
+                    let progress_card = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.0))
+                        .w_full()
+                        .p(px(8.0))
+                        .rounded(px(6.0))
+                        .bg(t.card_bg)
+                        .border_1()
+                        .border_color(t.card_border)
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(11.5))
+                                .child(
+                                    div()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(t.text_primary)
+                                        .child(format!(
+                                            "{} {:.1}%",
+                                            i.t(
+                                                "正在下载更新包…",
+                                                "Downloading…",
+                                            ),
+                                            progress
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(t.accent)
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .child(format!(
+                                            "{}/s",
+                                            format_file_size(speed)
+                                        )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .h(px(8.0))
+                                .bg(t.card_border)
+                                .rounded(px(4.0))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(gpui::relative(
+                                            (progress / 100.0).clamp(0.0, 1.0),
+                                        ))
+                                        .bg(t.accent)
+                                        .rounded(px(4.0)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(11.0))
+                                .text_color(t.text_muted)
+                                .child(format!(
+                                    "{} / {}",
+                                    format_file_size(downloaded),
+                                    if total > 0 {
+                                        format_file_size(total)
+                                    } else {
+                                        "--".into()
+                                    }
+                                ))
+                                .child(i.t(
+                                    "支持断点续连与自动校验",
+                                    "Checksum verification enabled",
+                                )),
+                        );
+
+                    release_card = release_card.child(progress_card);
+                } else {
+                    let asset_to_download = asset.clone();
+                    let mirror = ws.settings.update_mirror;
+                    let custom_prefix = ws.settings.custom_update_mirror_url.clone();
+
+                    let download_btn = button_l(
+                        "start-download-update",
+                        i.t(
+                            "立即下载更新包 (高速)",
+                            "Download Update (High Speed)",
+                        ),
+                        ButtonVariant::Primary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            let output = ws
+                                .paths
+                                .app_data
+                                .join("updates")
+                                .join(&asset_to_download.name);
+                            let download_url = mirror.apply_url(
+                                &asset_to_download.download_url,
+                                &custom_prefix,
+                            );
+                            let expected_size = asset_to_download.size;
+
+                            ws.ui.update_downloading = true;
+                            ws.ui.update_download_progress = 0.0;
+                            ws.ui.update_downloaded_bytes = 0;
+                            ws.ui.update_total_bytes = expected_size;
+                            ws.ui.update_download_speed = 0;
+                            ws.ui.update_error = None;
+
+                            let (tx, rx) = async_channel::unbounded::<
+                                aitoolplus_core::updater::DownloadProgress,
+                            >();
+                            let weak_prog = cx.entity().downgrade();
+
+                            // Progress listener
+                            cx.spawn(async move |_this, cx| {
+                                while let Ok(prog) = rx.recv().await {
+                                    let _ = weak_prog.update(cx, |ws, cx| {
+                                        ws.ui.update_download_progress =
+                                            prog.percentage;
+                                        ws.ui.update_downloaded_bytes =
+                                            prog.downloaded;
+                                        ws.ui.update_total_bytes = prog.total;
+                                        ws.ui.update_download_speed =
+                                            prog.speed_bps;
+                                        cx.notify();
+                                    });
+                                }
+                            })
+                            .detach();
+
+                            // Background download worker
+                            let weak_finish = cx.entity().downgrade();
+                            let output_clone = output.clone();
+                            cx.spawn(async move |_this, cx| {
+                                let result = cx
+                                    .background_spawn(async move {
+                                        aitoolplus_core::updater::download_with_progress(
+                                            &download_url,
+                                            expected_size,
+                                            &output_clone,
+                                            move |p| {
+                                                let _ = tx.try_send(p);
+                                                true
+                                            },
+                                        )
+                                    })
+                                    .await;
+
+                                let _ = weak_finish.update(cx, |ws, cx| {
+                                    ws.ui.update_downloading = false;
+                                    match result {
+                                        Ok(path) => {
+                                            ws.ui.downloaded_update_asset_path =
+                                                Some(path.clone());
+                                            ws.ui.toast(
+                                                ws.i18n
+                                                    .t(
+                                                        &format!(
+                                                            "更新安装包已下载完成: {}",
+                                                            path.display()
+                                                        ),
+                                                        &format!(
+                                                            "Update installer downloaded: {}",
+                                                            path.display()
+                                                        ),
+                                                    )
+                                                    .to_string(),
+                                                false,
+                                            );
+                                        }
+                                        Err(err) => {
+                                            ws.ui.update_error =
+                                                Some(err.clone());
+                                            ws.ui.toast(
+                                                format!("下载失败: {err}"),
+                                                true,
+                                            );
+                                        }
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
+
+                            cx.notify();
+                        },
+                    );
+
+                    release_card = release_card.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(download_btn),
+                    );
+                }
+            }
+
+            update_items.push(release_card.into_any_element());
+        } else {
+            // Already up to date
+            update_items.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .p(px(10.0))
+                    .rounded(px(8.0))
+                    .bg(t.input_bg)
+                    .border_1()
+                    .border_color(t.success.opacity(0.3))
+                    .child(crate::components::badge(
+                        &t,
+                        i.t("已是最新版本", "Up to Date"),
+                        crate::components::BadgeKind::Success,
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.text_secondary)
+                            .child(format!(
+                                "{} v{} {}",
+                                i.t(
+                                    "当前安装的 AI ToolPlus",
+                                    "Currently installed AI ToolPlus"
+                                ),
+                                info.current_version,
+                                i.t(
+                                    "已是最新发布版本，暂无可用更新。",
+                                    "is the latest version, no update needed."
+                                )
+                            )),
+                    )
+                    .into_any_element(),
+            );
+        }
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(16.0))
+        .w_full()
+        .child(about_card)
+        .child(card(&t, update_items))
+        .into_any_element()
 }
 
 fn open_dir_in_explorer(path: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn()
-            .map(|_| ())
-    }
+    super::open_path_in_default_manager(path);
+    Ok(())
 }
 
 /// Local copy of the dark detection (keeps this module self-contained).
 fn system_prefers_dark() -> bool {
     crate::workspace::system_prefers_dark_pub()
+}
+
+/// Backup snapshot rename dialog (rendered by pages::render_modals).
+pub fn render_backup_rename_dialog(
+    path: std::path::PathBuf,
+    input: gpui::Entity<TextInput>,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(crate::components::input_container(&t, input.clone()))
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .gap(px(8.0))
+                .child(button_l(
+                    "backup-rename-cancel",
+                    i.t("取消", "Cancel"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.backup_rename_dialog = None;
+                        cx.notify();
+                    },
+                ))
+                .child(button_l(
+                    "backup-rename-save",
+                    i.t("保存", "Save"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let new_name: String = input.update(cx, |inp, _| inp.text().trim().to_string());
+                        if !new_name.is_empty() {
+                            let filename = if new_name.ends_with(".zip") {
+                                new_name
+                            } else {
+                                format!("{new_name}.zip")
+                            };
+                            if let Some(parent) = path.parent() {
+                                let new_path = parent.join(&filename);
+                                if new_path.exists() && new_path != path {
+                                    ws.ui.toast(
+                                        ws.i18n.t("同名备份文件已存在", "Backup with this name already exists").to_string(),
+                                        true,
+                                    );
+                                } else {
+                                    match std::fs::rename(&path, &new_path) {
+                                        Ok(()) => {
+                                            ws.ui.toast(
+                                                ws.i18n.t("备份已重命名", "Backup renamed").to_string(),
+                                                false,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            ws.ui.toast(format!("重命名失败: {e}"), true);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ws.ui.backup_rename_dialog = None;
+                        cx.notify();
+                    },
+                )),
+        );
+
+    super::modal_scaffold(
+        &t,
+        i.t("重命名备份快照", "Rename Backup Snapshot").as_ref(),
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.backup_rename_dialog = None;
+            cx.notify();
+        },
+    )
 }

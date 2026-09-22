@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ToolId {
     ClaudeCode,
+    Agents,
     Codex,
     GeminiCli,
     Grok,
@@ -25,6 +26,7 @@ impl ToolId {
     pub const fn key(self) -> &'static str {
         match self {
             ToolId::ClaudeCode => "claude_code",
+            ToolId::Agents => "agents",
             ToolId::Codex => "codex",
             ToolId::GeminiCli => "gemini_cli",
             ToolId::Grok => "grok",
@@ -43,6 +45,7 @@ impl ToolId {
     pub const fn name_en(self) -> &'static str {
         match self {
             ToolId::ClaudeCode => "Claude Code",
+            ToolId::Agents => "Universal Agent",
             ToolId::Codex => "Codex",
             ToolId::GeminiCli => "Gemini CLI",
             ToolId::Grok => "Grok",
@@ -61,6 +64,7 @@ impl ToolId {
     pub const fn name_zh(self) -> &'static str {
         match self {
             ToolId::ClaudeCode => "Claude Code",
+            ToolId::Agents => "通用Agent",
             ToolId::Codex => "Codex",
             ToolId::GeminiCli => "Gemini CLI",
             ToolId::Grok => "Grok",
@@ -78,6 +82,7 @@ impl ToolId {
     pub fn from_key(key: &str) -> Option<Self> {
         Some(match key {
             "claude_code" | "claudecode" | "claude" => ToolId::ClaudeCode,
+            "agents" | "agent" | "universal_agent" => ToolId::Agents,
             "codex" => ToolId::Codex,
             "gemini_cli" | "gemini" | "geminicli" => ToolId::GeminiCli,
             "grok" => ToolId::Grok,

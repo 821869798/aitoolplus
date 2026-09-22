@@ -19,14 +19,16 @@ pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 pub const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
-pub const NATIVE_USER_AGENT: &str = "antigravity";
+pub const NATIVE_USER_AGENT: &str = "vscode/1.96.2 (Antigravity/4.3.0)";
 
+// Quota API endpoints (fallback order: Sandbox → Daily → Prod, matching Antigravity-Manager)
 pub const QUOTA_MODELS_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
 ];
 
+// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Sandbox → Daily → Prod)
 pub const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
@@ -38,6 +40,12 @@ pub const LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
     "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 ];
+
+static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .build()
+});
 
 /// A single model quota item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -60,6 +68,8 @@ pub struct QuotaGroupInfo {
     pub window: String, // "5h" or "weekly"
     pub remaining_fraction: f64, // 0.0 - 1.0
     pub reset_time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bucket_id: Option<String>,
 }
 
 /// Overall quota data for an Antigravity account.
@@ -296,6 +306,8 @@ struct QuotaSummaryGroupJson {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct QuotaSummaryBucketJson {
+    #[serde(rename = "bucketId")]
+    bucket_id: Option<String>,
     window: Option<String>,
     #[serde(rename = "remainingFraction")]
     remaining_fraction: Option<f64>,
@@ -326,7 +338,7 @@ struct TierJson {
 /// Refresh an access token using a refresh token.
 pub fn refresh_access_token(refresh_token: &str) -> Result<(String, i64), String> {
     info!("Refreshing Antigravity access token...");
-    let resp = ureq::post(TOKEN_URL)
+    let resp = AGENT.post(TOKEN_URL)
         .set("User-Agent", NATIVE_USER_AGENT)
         .timeout(Duration::from_secs(15))
         .send_form(&[
@@ -347,7 +359,7 @@ pub fn refresh_access_token(refresh_token: &str) -> Result<(String, i64), String
 /// Exchange an authorization code for an access token and refresh token.
 pub fn exchange_auth_code(code: &str, redirect_uri: &str) -> Result<(String, String, i64), String> {
     info!("Exchanging authorization code for Antigravity tokens...");
-    let resp = ureq::post(TOKEN_URL)
+    let resp = AGENT.post(TOKEN_URL)
         .set("User-Agent", NATIVE_USER_AGENT)
         .timeout(Duration::from_secs(15))
         .send_form(&[
@@ -372,7 +384,7 @@ pub fn exchange_auth_code(code: &str, redirect_uri: &str) -> Result<(String, Str
 
 /// Fetch Google user profile info.
 pub fn fetch_user_info(access_token: &str) -> Result<GoogleUserInfo, String> {
-    let resp = ureq::get(USERINFO_URL)
+    let resp = AGENT.get(USERINFO_URL)
         .set("Authorization", &format!("Bearer {}", access_token))
         .set("User-Agent", NATIVE_USER_AGENT)
         .timeout(Duration::from_secs(10))
@@ -411,7 +423,7 @@ pub fn fetch_project_and_tier(access_token: &str) -> (Option<String>, Option<Str
     });
 
     for endpoint in LOAD_PROJECT_ENDPOINTS {
-        let resp = ureq::post(endpoint)
+        let resp = AGENT.post(endpoint)
             .set("Authorization", &format!("Bearer {}", access_token))
             .set("Content-Type", "application/json")
             .set("User-Agent", NATIVE_USER_AGENT)
@@ -476,7 +488,7 @@ pub fn fetch_quota(
         let mut endpoint_succeeded = false;
 
         for body in &bodies {
-            let resp = ureq::post(endpoint)
+            let resp = AGENT.post(endpoint)
                 .set("Authorization", &format!("Bearer {}", access_token))
                 .set("Content-Type", "application/json")
                 .set("User-Agent", NATIVE_USER_AGENT)
@@ -568,7 +580,7 @@ pub fn fetch_quota(
     let mut summary_fetched = false;
     for endpoint in QUOTA_SUMMARY_ENDPOINTS {
         for body in &summary_bodies {
-            let resp = ureq::post(endpoint)
+            let resp = AGENT.post(endpoint)
                 .set("Authorization", &format!("Bearer {}", access_token))
                 .set("Content-Type", "application/json")
                 .set("User-Agent", NATIVE_USER_AGENT)
@@ -577,18 +589,31 @@ pub fn fetch_quota(
 
             if let Ok(res) = resp {
                 if let Ok(data) = res.into_json::<QuotaSummaryResponse>() {
-                    for group in data.groups {
-                        let group_name = group.display_name.unwrap_or_else(|| "General".to_string());
-                        for bucket in group.buckets {
-                            let window = bucket.window.unwrap_or_default();
+                    for group in &data.groups {
+                        let group_name = group.display_name.clone().unwrap_or_else(|| "General".to_string());
+                        let is_gemini_group = group_name.to_lowercase().contains("gemini")
+                            || (!group_name.to_lowercase().contains("claude")
+                                && !group_name.to_lowercase().contains("gpt")
+                                && !group_name.to_lowercase().contains("3p"));
+
+                        for bucket in &group.buckets {
+                            let window = bucket.window.clone().unwrap_or_default();
                             let fraction = bucket.remaining_fraction.unwrap_or(1.0);
-                            let reset_time = bucket.reset_time.unwrap_or_default();
+                            let reset_time = bucket.reset_time.clone().unwrap_or_default();
+                            let bucket_id = bucket.bucket_id.clone();
                             let display_name = group_name.clone();
 
-                            if window == "5h" && quota.window_5h.is_none() {
-                                quota.window_5h = Some(fraction);
-                            } else if window == "weekly" && quota.window_weekly.is_none() {
-                                quota.window_weekly = Some(fraction);
+                            let win_lower = window.to_lowercase();
+                            let bid_lower = bucket_id.as_deref().unwrap_or("").to_lowercase();
+                            let is_5h = win_lower.contains("5h") || bid_lower.contains("5h") || win_lower.contains("hour");
+                            let is_weekly = win_lower.contains("week") || bid_lower.contains("week") || win_lower.contains("7d") || bid_lower.contains("7d");
+
+                            if is_gemini_group {
+                                if is_5h && quota.window_5h.is_none() {
+                                    quota.window_5h = Some(fraction);
+                                } else if is_weekly && quota.window_weekly.is_none() {
+                                    quota.window_weekly = Some(fraction);
+                                }
                             }
 
                             quota.quota_groups.push(QuotaGroupInfo {
@@ -596,9 +621,71 @@ pub fn fetch_quota(
                                 window,
                                 remaining_fraction: fraction,
                                 reset_time,
+                                bucket_id,
                             });
                         }
                     }
+
+                    // [FIX #3426 / Antigravity-Manager Parity] Fuse real bucket quotas into models so UI doesn't show fake 100%
+                    for model in quota.models.iter_mut() {
+                        let name_lower = model.name.to_lowercase();
+                        let is_claude_or_gpt = name_lower.starts_with("claude") || name_lower.starts_with("gpt");
+                        let is_gemini = name_lower.starts_with("gemini");
+
+                        for group in &data.groups {
+                            let gname = group.display_name.as_deref().unwrap_or("").to_lowercase();
+                            let matches_group = if is_claude_or_gpt {
+                                gname.contains("claude") || gname.contains("gpt") || gname.contains("3p")
+                            } else if is_gemini {
+                                gname.contains("gemini")
+                                    || (!gname.contains("claude") && !gname.contains("gpt") && !gname.contains("3p"))
+                            } else {
+                                false
+                            };
+
+                            if matches_group {
+                                let bucket_5h = group.buckets.iter().find(|b| {
+                                    let win = b.window.as_deref().unwrap_or("").to_lowercase();
+                                    let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
+                                    win.contains("5h") || bid.contains("5h") || win.contains("hour") || bid.contains("hour")
+                                });
+                                let bucket_weekly = group.buckets.iter().find(|b| {
+                                    let win = b.window.as_deref().unwrap_or("").to_lowercase();
+                                    let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
+                                    win.contains("week") || bid.contains("week") || win.contains("7d") || bid.contains("7d")
+                                });
+
+                                let chosen_bucket = match (bucket_5h, bucket_weekly) {
+                                    (Some(h), Some(w)) => {
+                                        let w_frac = w.remaining_fraction.unwrap_or(1.0);
+                                        let h_frac = h.remaining_fraction.unwrap_or(1.0);
+                                        if w_frac <= 0.001 {
+                                            Some(w)
+                                        } else if h_frac <= w_frac {
+                                            Some(h)
+                                        } else {
+                                            Some(w)
+                                        }
+                                    }
+                                    (Some(h), None) => Some(h),
+                                    (None, Some(w)) => Some(w),
+                                    _ => group.buckets.first(),
+                                };
+
+                                if let Some(b) = chosen_bucket {
+                                    let fraction = b.remaining_fraction.unwrap_or(1.0);
+                                    model.percentage = (fraction * 100.0).round() as i32;
+                                    if let Some(ref rt) = b.reset_time {
+                                        if !rt.is_empty() {
+                                            model.reset_time = rt.clone();
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     summary_fetched = true;
                     break;
                 }
@@ -1057,17 +1144,710 @@ pub fn build_account_from_refresh_token(
     Ok(account)
 }
 
-/// Import active account from local machine (Windows Credential Manager or ~/.gemini/oauth_creds.json).
+#[derive(Debug, Clone)]
+pub struct ImportedOAuthState {
+    pub refresh_token: String,
+    pub is_gcp_tos: bool,
+    pub project_id: Option<String>,
+}
+
+/// Protobuf Varint reader
+pub fn read_varint(data: &[u8], offset: usize) -> Result<(u64, usize), String> {
+    let mut result = 0u64;
+    let mut shift = 0;
+    let mut pos = offset;
+
+    loop {
+        if pos >= data.len() {
+            return Err("incomplete_data".to_string());
+        }
+        let byte = data[pos];
+        result |= ((byte & 0x7F) as u64) << shift;
+        pos += 1;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+    }
+
+    Ok((result, pos))
+}
+
+/// Skip Protobuf Field
+pub fn skip_field(data: &[u8], offset: usize, wire_type: u8) -> Result<usize, String> {
+    match wire_type {
+        0 => {
+            let (_, new_offset) = read_varint(data, offset)?;
+            Ok(new_offset)
+        }
+        1 => Ok(offset + 8),
+        2 => {
+            let (length, content_offset) = read_varint(data, offset)?;
+            Ok(content_offset + length as usize)
+        }
+        5 => Ok(offset + 4),
+        _ => Err(format!("unknown_wire_type: {}", wire_type)),
+    }
+}
+
+/// Find first instance of specified Protobuf field content (Length-Delimited only)
+pub fn find_field(data: &[u8], target_field: u32) -> Result<Option<Vec<u8>>, String> {
+    let mut offset = 0;
+    while offset < data.len() {
+        let (tag, new_offset) = match read_varint(data, offset) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        let wire_type = (tag & 7) as u8;
+        let field_num = (tag >> 3) as u32;
+
+        if field_num == target_field && wire_type == 2 {
+            let (length, content_offset) = read_varint(data, new_offset)?;
+            let length = length as usize;
+            if content_offset + length <= data.len() {
+                return Ok(Some(data[content_offset..content_offset + length].to_vec()));
+            }
+        }
+        offset = skip_field(data, new_offset, wire_type)?;
+    }
+    Ok(None)
+}
+
+/// Find all instances of specified Protobuf field content (Length-Delimited only)
+pub fn find_all_fields(data: &[u8], target_field: u32) -> Vec<Vec<u8>> {
+    let mut results = Vec::new();
+    let mut offset = 0;
+    while offset < data.len() {
+        let (tag, new_offset) = match read_varint(data, offset) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+        let wire_type = (tag & 7) as u8;
+        let field_num = (tag >> 3) as u32;
+
+        if field_num == target_field && wire_type == 2 {
+            if let Ok((length, content_offset)) = read_varint(data, new_offset) {
+                let length = length as usize;
+                if content_offset + length <= data.len() {
+                    results.push(data[content_offset..content_offset + length].to_vec());
+                }
+            }
+        }
+        if let Ok(next) = skip_field(data, new_offset, wire_type) {
+            offset = next;
+        } else {
+            break;
+        }
+    }
+    results
+}
+
+/// Find varint field
+pub fn find_varint_field(data: &[u8], target_field: u32) -> Result<Option<u64>, String> {
+    let mut offset = 0;
+    while offset < data.len() {
+        let (tag, new_offset) = read_varint(data, offset)?;
+        let wire_type = (tag & 7) as u8;
+        let field_num = (tag >> 3) as u32;
+
+        if field_num == target_field && wire_type == 0 {
+            let (value, _) = read_varint(data, new_offset)?;
+            return Ok(Some(value));
+        }
+        offset = skip_field(data, new_offset, wire_type)?;
+    }
+    Ok(None)
+}
+
+/// Decode a unified state entry payload matching target sentinel key
+pub fn decode_unified_state_payload(outer_b64: &str, target_sentinel_key: &str) -> Result<Vec<u8>, String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let outer_blob = general_purpose::STANDARD
+        .decode(outer_b64.trim())
+        .map_err(|e| format!("Outer Base64 decoding failed: {}", e))?;
+
+    // Check all data entries in Topic (Field 1)
+    let data_entries = find_all_fields(&outer_blob, 1);
+    for entry in data_entries {
+        if let Ok(Some(key_bytes)) = find_field(&entry, 1) {
+            if let Ok(key_str) = std::str::from_utf8(&key_bytes) {
+                if key_str == target_sentinel_key {
+                    if let Ok(Some(row_blob)) = find_field(&entry, 2) {
+                        if let Ok(Some(encoded_payload)) = find_field(&row_blob, 1) {
+                            if let Ok(encoded_str) = std::str::from_utf8(&encoded_payload) {
+                                if let Ok(decoded) = general_purpose::STANDARD.decode(encoded_str.trim()) {
+                                    return Ok(decoded);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: Legacy nested format (Outer F1 -> Inner F1 sentinel key, Inner F2 payload)
+    if let Ok(Some(inner_blob)) = find_field(&outer_blob, 1) {
+        if let Ok(Some(key_bytes)) = find_field(&inner_blob, 1) {
+            if let Ok(key_str) = std::str::from_utf8(&key_bytes) {
+                if key_str == target_sentinel_key {
+                    if let Ok(Some(payload)) = find_field(&inner_blob, 2) {
+                        if let Ok(decoded) = general_purpose::STANDARD.decode(&payload) {
+                            return Ok(decoded);
+                        }
+                        return Ok(payload);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!("Sentinel key '{}' not found in unified state entry", target_sentinel_key))
+}
+
+/// Extract enterprise GCP project ID from SQLite database connection if configured
+pub fn extract_enterprise_project_id_from_conn(conn: &rusqlite::Connection) -> Result<Option<String>, String> {
+    let entry_b64: Option<String> = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ["antigravityUnifiedStateSync.enterprisePreferences"],
+            |row| row.get(0),
+        )
+        .ok();
+
+    let Some(entry_b64) = entry_b64 else {
+        return Ok(None);
+    };
+
+    let payload = match decode_unified_state_payload(&entry_b64, "enterpriseGcpProjectId") {
+        Ok(p) => p,
+        Err(_) => return Ok(None),
+    };
+
+    let Some(project_bytes) = find_field(&payload, 3).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+
+    let project_id = String::from_utf8(project_bytes)
+        .map_err(|_| "enterpriseGcpProjectId is not UTF-8 encoded".to_string())?;
+    let trimmed = project_id.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+/// Extract OAuth credentials and tokens from a SQLite state database (state.vscdb)
+pub fn extract_oauth_state_from_file(db_path: &Path) -> Result<ImportedOAuthState, String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    if !db_path.exists() {
+        return Err(format!("Database file not found: {:?}", db_path));
+    }
+
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|e| format!("Failed to open SQLite database {:?}: {}", db_path, e))?;
+
+    // 1. Try new format (antigravityUnifiedStateSync.oauthToken)
+    let new_format_data: Option<String> = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ["antigravityUnifiedStateSync.oauthToken"],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(outer_b64) = new_format_data {
+        if let Ok(oauth_info_blob) = decode_unified_state_payload(&outer_b64, "oauthTokenInfoSentinelKey") {
+            let refresh_bytes = find_field(&oauth_info_blob, 3)?
+                .ok_or_else(|| "Refresh Token not found in OAuthInfo (Field 3)".to_string())?;
+            let refresh_token = String::from_utf8(refresh_bytes)
+                .map_err(|_| "Refresh Token is not valid UTF-8".to_string())?;
+            let is_gcp_tos = find_varint_field(&oauth_info_blob, 6)?.unwrap_or(1) != 0;
+            let project_id = extract_enterprise_project_id_from_conn(&conn)?;
+
+            return Ok(ImportedOAuthState {
+                refresh_token,
+                is_gcp_tos,
+                project_id,
+            });
+        }
+    }
+
+    // 2. Try old format (jetskiStateSync.agentManagerInitState)
+    let old_data: Option<String> = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ["jetskiStateSync.agentManagerInitState"],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(current_data) = old_data {
+        let blob = general_purpose::STANDARD
+            .decode(&current_data)
+            .map_err(|e| format!("Base64 decoding failed: {}", e))?;
+
+        let oauth_data = find_field(&blob, 6)?
+            .ok_or_else(|| "OAuth data not found in Field 6".to_string())?;
+
+        let refresh_bytes = find_field(&oauth_data, 3)?
+            .ok_or_else(|| "Refresh Token not found in Field 3".to_string())?;
+
+        let refresh_token = String::from_utf8(refresh_bytes)
+            .map_err(|_| "Refresh Token is not valid UTF-8".to_string())?;
+
+        return Ok(ImportedOAuthState {
+            refresh_token,
+            is_gcp_tos: true,
+            project_id: extract_enterprise_project_id_from_conn(&conn)?,
+        });
+    }
+
+    Err("Login credentials not found in database".to_string())
+}
+
+/// Get all candidate state database paths for Antigravity IDE and Antigravity
+pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let folder_names: &[&str] = if target_ide == Some("ide") {
+        &["Antigravity IDE", "Antigravity"]
+    } else if target_ide == Some("code") {
+        &["Antigravity", "Antigravity IDE"]
+    } else {
+        &["Antigravity IDE", "Antigravity"]
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            for folder_name in folder_names {
+                paths.push(
+                    PathBuf::from(&appdata)
+                        .join(folder_name)
+                        .join("User")
+                        .join("globalStorage")
+                        .join("state.vscdb"),
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            for folder_name in folder_names {
+                paths.push(home.join(format!(
+                    "Library/Application Support/{}/User/globalStorage/state.vscdb",
+                    folder_name
+                )));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            for folder_name in folder_names {
+                paths.push(home.join(format!(
+                    ".config/{}/User/globalStorage/state.vscdb",
+                    folder_name
+                )));
+            }
+        }
+    }
+
+    paths
+}
+
+/// Extract refresh token from database file
+pub fn extract_refresh_token_from_file(db_path: &Path) -> Result<String, String> {
+    extract_oauth_state_from_file(db_path).map(|s| s.refresh_token)
+}
+
+/// Get active refresh token from local system (Keyring or candidate DBs)
+pub fn get_refresh_token_from_db(target_ide: Option<&str>) -> Result<String, String> {
+    for db_path in get_all_candidate_db_paths(target_ide) {
+        if db_path.exists() {
+            if let Ok(token) = extract_refresh_token_from_file(&db_path) {
+                if !token.is_empty() {
+                    return Ok(token);
+                }
+            }
+        }
+    }
+    Err("Login state data not found in any database path".to_string())
+}
+
+/// Parse and extract refresh tokens from arbitrary text (supports JSON arrays, objects, or raw token streams)
+pub fn extract_tokens_from_text(input: &str) -> Vec<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    // 1. Try parsing JSON
+    if (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('{') && trimmed.ends_with('}'))
+    {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            let mut tokens = Vec::new();
+            if let Some(arr) = val.as_array() {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        if s.starts_with("1//") {
+                            tokens.push(s.to_string());
+                        }
+                    } else if let Some(obj) = item.as_object() {
+                        if let Some(rt) = obj.get("refresh_token").and_then(|v| v.as_str()) {
+                            if rt.starts_with("1//") {
+                                tokens.push(rt.to_string());
+                            }
+                        }
+                    }
+                }
+            } else if let Some(obj) = val.as_object() {
+                if let Some(rt) = obj.get("refresh_token").and_then(|v| v.as_str()) {
+                    if rt.starts_with("1//") {
+                        tokens.push(rt.to_string());
+                    }
+                }
+            }
+            if !tokens.is_empty() {
+                let mut unique = Vec::new();
+                let mut set = std::collections::HashSet::new();
+                for t in tokens {
+                    if set.insert(t.clone()) {
+                        unique.push(t);
+                    }
+                }
+                return unique;
+            }
+        }
+    }
+
+    // 2. Regex / pattern scan for 1//[a-zA-Z0-9_\-]+
+    let mut tokens = Vec::new();
+    let mut set = std::collections::HashSet::new();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] == b"1//" {
+            let start = i;
+            let mut end = i + 3;
+            while end < bytes.len() {
+                let b = bytes[end];
+                if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            if end - start >= 20 {
+                if let Ok(token_str) = std::str::from_utf8(&bytes[start..end]) {
+                    let s = token_str.to_string();
+                    if set.insert(s.clone()) {
+                        tokens.push(s);
+                    }
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+
+    tokens
+}
+
+/// Import account from custom database path
+pub fn import_from_custom_db_path(path: &Path) -> Result<AntigravityAccount, String> {
+    let oauth_state = extract_oauth_state_from_file(path)?;
+    let mut account = build_account_from_refresh_token(
+        &oauth_state.refresh_token,
+        None,
+        Some("自定义 DB 导入".to_string()),
+    )?;
+    if oauth_state.project_id.is_some() && account.project_id.is_none() {
+        account.project_id = oauth_state.project_id;
+    }
+    Ok(account)
+}
+
+/// Import accounts from V1 / legacy backup directory (~/.antigravity-agent or ~/.antigravity)
+pub fn import_from_v1_backup(home_dir: &Path) -> Result<Vec<AntigravityAccount>, String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let mut imported = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let dirs_to_check = [
+        home_dir.join(".antigravity-agent"),
+        home_dir.join(".antigravity"),
+    ];
+
+    for base_dir in dirs_to_check {
+        if !base_dir.exists() {
+            continue;
+        }
+
+        for index_name in &["antigravity_accounts.json", "accounts.json"] {
+            let index_path = base_dir.join(index_name);
+            if !index_path.exists() {
+                continue;
+            }
+
+            let Ok(content) = std::fs::read_to_string(&index_path) else { continue };
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) else { continue };
+
+            let accounts_map = if let Some(map) = val.as_object() {
+                if let Some(accs) = map.get("accounts").and_then(|v| v.as_object()) {
+                    accs
+                } else {
+                    map
+                }
+            } else {
+                continue;
+            };
+
+            for (_id, acc_info) in accounts_map {
+                if !acc_info.is_object() {
+                    continue;
+                }
+                let target_file = acc_info.get("backup_file").or_else(|| acc_info.get("data_file")).and_then(|v| v.as_str());
+                let Some(file_str) = target_file else { continue };
+                let mut target_path = PathBuf::from(file_str);
+                if !target_path.exists() {
+                    target_path = base_dir.join(target_path.file_name().unwrap_or_default());
+                }
+                if !target_path.exists() {
+                    target_path = base_dir.join("backups").join(target_path.file_name().unwrap_or_default());
+                }
+                if !target_path.exists() {
+                    target_path = base_dir.join("accounts").join(target_path.file_name().unwrap_or_default());
+                }
+                if !target_path.exists() {
+                    continue;
+                }
+
+                let Ok(file_content) = std::fs::read_to_string(&target_path) else { continue };
+                let Ok(data_val) = serde_json::from_str::<serde_json::Value>(&file_content) else { continue };
+
+                let mut rt_opt = None;
+                if let Some(token_data) = data_val.get("token") {
+                    if let Some(rt) = token_data.get("refresh_token").and_then(|v| v.as_str()) {
+                        rt_opt = Some(rt.to_string());
+                    }
+                }
+                if rt_opt.is_none() {
+                    if let Some(state_b64) = data_val.get("jetskiStateSync.agentManagerInitState").and_then(|v| v.as_str()) {
+                        if let Ok(blob) = general_purpose::STANDARD.decode(state_b64) {
+                            if let Ok(Some(oauth_data)) = find_field(&blob, 6) {
+                                if let Ok(Some(refresh_bytes)) = find_field(&oauth_data, 3) {
+                                    if let Ok(rt) = String::from_utf8(refresh_bytes) {
+                                        rt_opt = Some(rt);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if let Some(rt) = rt_opt {
+                    if !rt.is_empty() && seen.insert(rt.clone()) {
+                        if let Ok(acc) = build_account_from_refresh_token(&rt, None, Some("旧版数据导入".to_string())) {
+                            imported.push(acc);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if imported.is_empty() {
+        return Err("未找到旧版数据备份文件".to_string());
+    }
+
+    Ok(imported)
+}
+
+/// Scan all local sources (candidate IDE state databases, System Keyring, CLI directories, and legacy backups)
+pub fn import_all_local_accounts(home_dir: &Path) -> Result<Vec<AntigravityAccount>, String> {
+    let mut imported = Vec::new();
+    let mut seen_tokens = std::collections::HashSet::new();
+
+    // 1. Candidate DB paths (Antigravity IDE & Antigravity state.vscdb)
+    for db_path in get_all_candidate_db_paths(None) {
+        if db_path.exists() {
+            if let Ok(oauth_state) = extract_oauth_state_from_file(&db_path) {
+                let rt = oauth_state.refresh_token;
+                if !rt.is_empty() && seen_tokens.insert(rt.clone()) {
+                    let label = if db_path.to_string_lossy().contains("Antigravity IDE") {
+                        "Antigravity IDE"
+                    } else {
+                        "Antigravity DB"
+                    };
+                    if let Ok(mut acc) = build_account_from_refresh_token(&rt, None, Some(label.to_string())) {
+                        if oauth_state.project_id.is_some() && acc.project_id.is_none() {
+                            acc.project_id = oauth_state.project_id;
+                        }
+                        imported.push(acc);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Keyring
+    if let Ok(rt) = read_from_system_keyring() {
+        if !rt.is_empty() && seen_tokens.insert(rt.clone()) {
+            if let Ok(acc) = build_account_from_refresh_token(&rt, None, Some("系统凭据导入".to_string())) {
+                imported.push(acc);
+            }
+        }
+    }
+
+    // 3. ~/.gemini/oauth_creds.json
+    if let Ok(rt) = read_file_credentials(home_dir) {
+        if !rt.is_empty() && seen_tokens.insert(rt.clone()) {
+            if let Ok(acc) = build_account_from_refresh_token(&rt, None, Some("文件凭据导入".to_string())) {
+                imported.push(acc);
+            }
+        }
+    }
+
+    // 4. Antigravity Manager directory (~/.antigravity_tools)
+    if let Ok(mgr_accs) = import_from_antigravity_manager(home_dir) {
+        for acc in mgr_accs {
+            if seen_tokens.insert(acc.refresh_token.clone()) {
+                imported.push(acc);
+            }
+        }
+    }
+
+    // 5. V1 backup (~/.antigravity-agent)
+    if let Ok(v1_accs) = import_from_v1_backup(home_dir) {
+        for acc in v1_accs {
+            if seen_tokens.insert(acc.refresh_token.clone()) {
+                imported.push(acc);
+            }
+        }
+    }
+
+    if imported.is_empty() {
+        return Err("未在本地系统 Keyring、IDE 数据库或历史文件中找到已登录账号".to_string());
+    }
+
+    Ok(imported)
+}
+
+/// Import active account from local machine (Antigravity IDE state.vscdb, Windows Credential Manager, or ~/.gemini/oauth_creds.json).
 pub fn import_from_local_system(home_dir: &Path) -> Result<AntigravityAccount, String> {
-    // 1. Try keyring
-    let refresh_token = read_from_system_keyring().or_else(|_| {
-        // 2. Try ~/.gemini/oauth_creds.json
-        read_file_credentials(home_dir)
-    })?;
+    // 1. Try local candidate databases (Antigravity IDE & Antigravity state.vscdb)
+    let refresh_token = get_refresh_token_from_db(None)
+        // 2. Try keyring
+        .or_else(|_| read_from_system_keyring())
+        // 3. Try ~/.gemini/oauth_creds.json
+        .or_else(|_| read_file_credentials(home_dir))?;
 
     let mut account = build_account_from_refresh_token(&refresh_token, None, Some("本机导入".to_string()))?;
     account.is_active = true;
     Ok(account)
+}
+
+/// Check if auto refresh is due based on last refresh time and configured interval (minutes).
+pub fn is_auto_refresh_due(last_refresh_time: Option<&str>, interval_minutes: u32) -> bool {
+    if interval_minutes == 0 {
+        return false;
+    }
+    let Some(last_str) = last_refresh_time else {
+        return true;
+    };
+    let Ok(last_dt) = chrono::DateTime::parse_from_rfc3339(last_str) else {
+        return true;
+    };
+    let now = chrono::Utc::now();
+    let elapsed = now.signed_duration_since(last_dt);
+    elapsed.num_minutes() >= interval_minutes as i64
+}
+
+/// Refresh all account quotas concurrently, matching Antigravity-Manager's refresh_all_quotas_logic.
+/// Returns the count of successfully refreshed accounts.
+pub fn refresh_all_quotas(store: &mut AntigravityStore) -> usize {
+    if store.accounts.is_empty() {
+        return 0;
+    }
+    let mut success_count = 0;
+    std::thread::scope(|s| {
+        let mut handles = Vec::new();
+        for acc in &mut store.accounts {
+            handles.push(s.spawn(move || {
+                // Skip accounts that are already known to be forbidden due to TOS violation (Antigravity-Manager parity)
+                if let Some(quota) = &acc.quota {
+                    if quota.is_forbidden {
+                        if let Some(reason) = &quota.forbidden_reason {
+                            if reason.contains("TOS_VIOLATION") || reason.contains("violation of Terms of Service") {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                if let Ok(()) = ensure_fresh_token(acc) {
+                    if acc.project_id.is_none() || acc.tier.is_none() {
+                        let (pid, tier) = fetch_project_and_tier(&acc.access_token);
+                        if pid.is_some() { acc.project_id = pid; }
+                        if tier.is_some() { acc.tier = tier; }
+                    }
+                    if let Ok(q) = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref()) {
+                        acc.quota = Some(q);
+                        return true;
+                    }
+                }
+                false
+            }));
+        }
+        for handle in handles {
+            if let Ok(true) = handle.join() {
+                success_count += 1;
+            }
+        }
+    });
+    success_count
+}
+
+/// Auto-sync current active account from local machine (Antigravity-Manager parity).
+/// If local machine has an active account, marks it as active in the store (and imports it if not present).
+/// Returns true if the active account or store changed.
+pub fn auto_sync_active_account(home_dir: &Path, store: &mut AntigravityStore) -> bool {
+    let local_acc = match import_from_local_system(home_dir) {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+
+    if let Some(pos) = store.accounts.iter().position(|a| a.email.eq_ignore_ascii_case(&local_acc.email)) {
+        let was_active = store.accounts[pos].is_active;
+        if !was_active {
+            for a in &mut store.accounts {
+                a.is_active = false;
+            }
+            store.accounts[pos].is_active = true;
+            store.active_account_id = Some(store.accounts[pos].id.clone());
+            return true;
+        }
+        false
+    } else {
+        // New account discovered from system, add it as active
+        for a in &mut store.accounts {
+            a.is_active = false;
+        }
+        let mut new_acc = local_acc;
+        new_acc.is_active = true;
+        let id = new_acc.id.clone();
+        store.accounts.push(new_acc);
+        store.active_account_id = Some(id);
+        true
+    }
 }
 
 /// Import all accounts from Antigravity Manager (~/.antigravity_tools).
@@ -1172,12 +1952,14 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
                             let window = b.get("window").and_then(|v| v.as_str()).unwrap_or("").to_string();
                             let fraction = b.get("remaining_fraction").and_then(|v| v.as_f64()).unwrap_or(1.0);
                             let reset_time = b.get("reset_time").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let bucket_id = b.get("bucket_id").or_else(|| b.get("bucketId")).and_then(|v| v.as_str()).map(|s| s.to_string());
                             let display_name = g_name.clone();
                             quota.quota_groups.push(QuotaGroupInfo {
                                 display_name,
                                 window,
                                 remaining_fraction: fraction,
                                 reset_time,
+                                bucket_id,
                             });
                         }
                     }
@@ -1325,22 +2107,60 @@ pub fn write_device_profile_to_storage(target: Option<&str>, profile: &DevicePro
 // Ephemeral OAuth Loopback Server
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Ephemeral OAuth Loopback Server
+// ---------------------------------------------------------------------------
+
 pub struct OAuthServerSession {
     pub auth_url: String,
     pub state: String,
     pub port: u16,
-    listener: std::net::TcpListener,
+    pub redirect_uri: String,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    listener_v4: Option<std::net::TcpListener>,
+    listener_v6: Option<std::net::TcpListener>,
 }
 
 impl OAuthServerSession {
     pub fn start() -> Result<Self, String> {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .map_err(|e| format!("Failed to bind local loopback server: {}", e))?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        listener.set_nonblocking(false).map_err(|e| e.to_string())?;
+        let mut ipv4_listener = None;
+        let mut ipv6_listener = None;
+        let port: u16;
+
+        // Try dual-stack binding on the same port, matching Antigravity-Manager
+        match std::net::TcpListener::bind("[::1]:0") {
+            Ok(l6) => {
+                let p = l6.local_addr().map_err(|e| e.to_string())?.port();
+                port = p;
+                ipv6_listener = Some(l6);
+                if let Ok(l4) = std::net::TcpListener::bind(format!("127.0.0.1:{}", p)) {
+                    ipv4_listener = Some(l4);
+                }
+            }
+            Err(_) => {
+                let l4 = std::net::TcpListener::bind("127.0.0.1:0")
+                    .map_err(|e| format!("Failed to bind local loopback server: {}", e))?;
+                let p = l4.local_addr().map_err(|e| e.to_string())?.port();
+                port = p;
+                ipv4_listener = Some(l4);
+                if let Ok(l6) = std::net::TcpListener::bind(format!("[::1]:{}", p)) {
+                    ipv6_listener = Some(l6);
+                }
+            }
+        }
+
+        let has_ipv4 = ipv4_listener.is_some();
+        let has_ipv6 = ipv6_listener.is_some();
+
+        let redirect_uri = if has_ipv4 && has_ipv6 {
+            format!("http://localhost:{}/oauth-callback", port)
+        } else if has_ipv4 {
+            format!("http://127.0.0.1:{}/oauth-callback", port)
+        } else {
+            format!("http://[::1]:{}/oauth-callback", port)
+        };
 
         let state = uuid::Uuid::new_v4().to_string();
-        let redirect_uri = format!("http://127.0.0.1:{}/oauth-callback", port);
 
         let scopes = [
             "openid",
@@ -1370,117 +2190,188 @@ impl OAuthServerSession {
             auth_url,
             state,
             port,
-            listener,
+            redirect_uri,
+            cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            listener_v4: ipv4_listener,
+            listener_v6: ipv6_listener,
         })
     }
 
+    /// Signal cancellation to stop waiting and release listeners
+    pub fn cancel(&self) {
+        self.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Check if cancelled
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Wait synchronously for the browser callback (with a timeout).
-    pub fn wait_for_code(self, timeout: Duration) -> Result<String, String> {
+    /// Robust against empty browser preconnects, favicon requests, and query errors.
+    pub fn wait_for_code(&self, timeout: Duration) -> Result<String, String> {
         use std::io::{Read, Write};
 
-        let listener = self.listener;
-        // In Windows, set_read_timeout on accepted stream or timeout loop
         let start = std::time::Instant::now();
-        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        if let Some(ref l) = self.listener_v4 {
+            let _ = l.set_nonblocking(true);
+        }
+        if let Some(ref l) = self.listener_v6 {
+            let _ = l.set_nonblocking(true);
+        }
+
+        let success_html = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
+            <html>\
+            <body style='font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; text-align: center; padding: 60px; background: #0f172a; color: #f8fafc;'>\
+            <h1 style='color: #10b981;'>授权成功！</h1>\
+            <p style='font-size: 16px; color: #94a3b8;'>Google 账号已成功授权，你可以关闭本页面返回 AI ToolPlus。</p>\
+            <script>setTimeout(function() { window.close(); }, 3000);</script>\
+            </body>\
+            </html>";
+
+        let fail_html = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
+            <html>\
+            <body style='font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; text-align: center; padding: 60px; background: #0f172a; color: #f8fafc;'>\
+            <h1 style='color: #ef4444;'>授权失败</h1>\
+            <p style='font-size: 16px; color: #94a3b8;'>状态校验不匹配或未获取到授权码，请返回重试。</p>\
+            </body>\
+            </html>";
 
         loop {
+            if self.is_cancelled() {
+                return Err("OAuth authorization cancelled.".to_string());
+            }
             if start.elapsed() > timeout {
                 return Err("OAuth authorization timed out. Please try again.".to_string());
             }
 
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let mut buffer = [0u8; 4096];
-                    let bytes_read = stream.read(&mut buffer).unwrap_or(0);
-                    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+            let mut accepted_stream = None;
 
-                    let query_params = request
-                        .lines()
-                        .next()
-                        .and_then(|line| {
-                            let parts: Vec<&str> = line.split_whitespace().collect();
-                            if parts.len() >= 2 { Some(parts[1]) } else { None }
-                        })
-                        .and_then(|path| {
-                            url::Url::parse(&format!("http://127.0.0.1{}", path)).ok()
-                        })
-                        .map(|url| {
-                            let mut code = None;
-                            let mut state = None;
-                            for (k, v) in url.query_pairs() {
-                                if k == "code" {
-                                    code = Some(v.to_string());
-                                } else if k == "state" {
-                                    state = Some(v.to_string());
-                                }
-                            }
-                            (code, state)
-                        });
-
-                    let (code, rec_state) = match query_params {
-                        Some((c, s)) => (c, s),
-                        None => (None, None),
-                    };
-
-                    let success_html = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
-                        <html>\
-                        <body style='font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; text-align: center; padding: 60px; background: #0f172a; color: #f8fafc;'>\
-                        <h1 style='color: #10b981;'>授权成功！</h1>\
-                        <p style='font-size: 16px; color: #94a3b8;'>Google 账号已成功授权，你可以关闭本页面返回 AI ToolPlus。</p>\
-                        <script>setTimeout(function() { window.close(); }, 3000);</script>\
-                        </body>\
-                        </html>";
-
-                    let fail_html = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n\
-                        <html>\
-                        <body style='font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; text-align: center; padding: 60px; background: #0f172a; color: #f8fafc;'>\
-                        <h1 style='color: #ef4444;'>授权失败</h1>\
-                        <p style='font-size: 16px; color: #94a3b8;'>状态校验不匹配或未获取到授权码，请返回重试。</p>\
-                        </body>\
-                        </html>";
-
-                    if let Some(code) = code {
-                        if rec_state.as_deref() == Some(&self.state) {
-                            let _ = stream.write_all(success_html.as_bytes());
-                            let _ = stream.flush();
-                            return Ok(code);
-                        } else {
-                            let _ = stream.write_all(fail_html.as_bytes());
-                            let _ = stream.flush();
-                            return Err("State mismatch (CSRF protection)".to_string());
-                        }
-                    } else {
-                        let _ = stream.write_all(fail_html.as_bytes());
-                        let _ = stream.flush();
-                        return Err("No authorization code in callback query".to_string());
-                    }
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => {
-                    return Err(format!("Listener accept error: {}", e));
+            if let Some(ref l4) = self.listener_v4 {
+                match l4.accept() {
+                    Ok((stream, _)) => accepted_stream = Some(stream),
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => warn!("IPv4 accept error: {}", e),
                 }
             }
+
+            if accepted_stream.is_none() {
+                if let Some(ref l6) = self.listener_v6 {
+                    match l6.accept() {
+                        Ok((stream, _)) => accepted_stream = Some(stream),
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(e) => warn!("IPv6 accept error: {}", e),
+                    }
+                }
+            }
+
+            let mut stream = match accepted_stream {
+                Some(s) => s,
+                None => {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            };
+
+            // Set a short read timeout so reading from connected socket does not block forever
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+            let mut buffer = [0u8; 4096];
+            let bytes_read = stream.read(&mut buffer).unwrap_or(0);
+
+            // Ignore TCP handshake / preconnect with 0 bytes
+            if bytes_read == 0 {
+                continue;
+            }
+
+            let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+
+            // Handle favicon requests or other static probes
+            if request.contains("/favicon.ico") {
+                let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                let _ = stream.flush();
+                continue;
+            }
+
+            let query_params = request
+                .lines()
+                .next()
+                .and_then(|line| {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 { Some(parts[1]) } else { None }
+                })
+                .and_then(|path| {
+                    url::Url::parse(&format!("http://localhost{}", path)).ok()
+                })
+                .map(|url| {
+                    let mut code = None;
+                    let mut state = None;
+                    let mut error = None;
+                    let mut error_desc = None;
+                    for (k, v) in url.query_pairs() {
+                        if k == "code" {
+                            code = Some(v.to_string());
+                        } else if k == "state" {
+                            state = Some(v.to_string());
+                        } else if k == "error" {
+                            error = Some(v.to_string());
+                        } else if k == "error_description" {
+                            error_desc = Some(v.to_string());
+                        }
+                    }
+                    (code, state, error, error_desc)
+                });
+
+            let (code, rec_state, error, error_desc) = match query_params {
+                Some((c, s, e, ed)) => (c, s, e, ed),
+                None => (None, None, None, None),
+            };
+
+            // If Google returned an OAuth error directly (e.g. user cancelled)
+            if let Some(err) = error {
+                let _ = stream.write_all(fail_html.as_bytes());
+                let _ = stream.flush();
+                let desc = error_desc.unwrap_or(err);
+                return Err(format!("Google 授权错误: {}", desc));
+            }
+
+            if let Some(code) = code {
+                if rec_state.as_deref() == Some(&self.state) {
+                    let _ = stream.write_all(success_html.as_bytes());
+                    let _ = stream.flush();
+                    return Ok(code);
+                } else {
+                    let _ = stream.write_all(fail_html.as_bytes());
+                    let _ = stream.flush();
+                    return Err("State mismatch (CSRF protection)".to_string());
+                }
+            }
+
+            // Connection without code or error (e.g. OPTIONS / preflight): respond and continue listening
+            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+            let _ = stream.flush();
         }
     }
 }
 
+/// Extract OAuth authorization code from manual input (can be raw code or full callback URL)
+pub fn extract_oauth_code(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        if let Ok(parsed) = url::Url::parse(trimmed) {
+            for (k, v) in parsed.query_pairs() {
+                if k == "code" {
+                    return v.to_string();
+                }
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
 /// Open an URL in the default web browser.
 pub fn open_browser(url: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open").arg(url).spawn();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    if let Err(e) = opener::open(url) {
+        tracing::error!("Failed to open browser with opener: {}", e);
     }
 }
 
@@ -2044,5 +2935,83 @@ mod tests {
         let ide_sess = sessions.iter().find(|s| s.source == "app").unwrap();
         assert_eq!(ide_sess.session_id, "ide-sess-1");
         assert!(ide_sess.title.contains("ide-sess"));
+    }
+
+    #[test]
+    fn test_is_auto_refresh_due() {
+        assert!(is_auto_refresh_due(None, 15));
+        assert!(!is_auto_refresh_due(None, 0));
+
+        let now = chrono::Utc::now();
+        let recent = (now - chrono::Duration::minutes(5)).to_rfc3339();
+        assert!(!is_auto_refresh_due(Some(&recent), 15));
+        assert!(is_auto_refresh_due(Some(&recent), 5));
+
+        let old = (now - chrono::Duration::minutes(20)).to_rfc3339();
+        assert!(is_auto_refresh_due(Some(&old), 15));
+    }
+
+    #[test]
+    fn test_extract_tokens_from_text() {
+        // Single token
+        let t1 = "1//04abcdefghijklmnopqrstuvwxyz_1234567890";
+        assert_eq!(extract_tokens_from_text(t1), vec![t1]);
+
+        // JSON array of strings
+        let json_arr = r#"["1//04abcdefghijklmnopqrstuvwxyz_1234567890", "1//04secondtoken1234567890abcdefghijklm"]"#;
+        assert_eq!(
+            extract_tokens_from_text(json_arr),
+            vec!["1//04abcdefghijklmnopqrstuvwxyz_1234567890", "1//04secondtoken1234567890abcdefghijklm"]
+        );
+
+        // JSON array of objects with refresh_token
+        let json_objs = r#"[{"refresh_token": "1//04abcdefghijklmnopqrstuvwxyz_1234567890"}, {"refresh_token": "1//04secondtoken1234567890abcdefghijklm"}]"#;
+        assert_eq!(
+            extract_tokens_from_text(json_objs),
+            vec!["1//04abcdefghijklmnopqrstuvwxyz_1234567890", "1//04secondtoken1234567890abcdefghijklm"]
+        );
+
+        // Mixed text with duplicates
+        let mixed = "Here is token: 1//04abcdefghijklmnopqrstuvwxyz_1234567890 and again 1//04abcdefghijklmnopqrstuvwxyz_1234567890 and another 1//04secondtoken1234567890abcdefghijklm end";
+        assert_eq!(
+            extract_tokens_from_text(mixed),
+            vec!["1//04abcdefghijklmnopqrstuvwxyz_1234567890", "1//04secondtoken1234567890abcdefghijklm"]
+        );
+    }
+
+    #[test]
+    fn test_extract_oauth_state_from_real_db_if_present() {
+        for db_path in get_all_candidate_db_paths(None) {
+            if db_path.exists() {
+                if let Ok(_state) = extract_oauth_state_from_file(&db_path) {
+                    return;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_print_auth_url() {
+        let session = OAuthServerSession::start().unwrap();
+        println!("AUTH_URL: {}", session.auth_url);
+    }
+
+    #[test]
+    fn test_import_from_antigravity_manager_live() {
+        if let Ok(home_str) = std::env::var("USERPROFILE") {
+            let home = PathBuf::from(home_str);
+            if let Ok(accs) = import_from_antigravity_manager(&home) {
+                println!("Successfully imported {} accounts from Antigravity Manager!", accs.len());
+                for a in &accs {
+                    println!("  Account: {} (tier: {:?}, active: {})", a.email, a.tier, a.is_active);
+                }
+                assert!(!accs.is_empty());
+            }
+
+            if let Ok(all_accs) = import_all_local_accounts(&home) {
+                println!("Successfully imported {} total local accounts!", all_accs.len());
+                assert!(!all_accs.is_empty());
+            }
+        }
     }
 }

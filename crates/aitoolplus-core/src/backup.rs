@@ -192,7 +192,10 @@ pub fn create_backup(
 
     for custom in &settings.backup_custom_entries {
         let source = PathBuf::from(&custom.source_path);
-        if !source.exists() {
+        if !source.exists()
+            || source == paths.sync_file()
+            || source.file_name() == Some(std::ffi::OsStr::new("sync.json"))
+        {
             report.skipped.push(custom.source_path.clone());
             continue;
         }
@@ -457,6 +460,10 @@ fn resolve_restore_target(
     if unsafe_relative(normalized) {
         return None;
     }
+    // Never restore sync.json (remote sync credentials and transport configuration)
+    if target == "appdata/sync.json" || target.ends_with("/sync.json") {
+        return None;
+    }
     if let Some(rest) = target.strip_prefix("home/") {
         return Some(paths.home.join(rest));
     }
@@ -504,48 +511,71 @@ pub fn run_auto_backup_if_due(
     paths: &Paths,
     settings: &mut AppSettings,
 ) -> Result<Option<BackupReport>, String> {
-    if !settings.auto_backup_enabled {
+    if !settings.auto_backup_enabled
+        || (settings.backup_interval_hours == 0 && settings.auto_backup_interval_days == 0)
+    {
         return Ok(None);
     }
-    let now = chrono::Utc::now();
-    let due = settings
-        .last_auto_backup_time
-        .as_deref()
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|last| {
-            now.signed_duration_since(last.with_timezone(&chrono::Utc))
-                .num_days()
-                >= settings.auto_backup_interval_days.max(1) as i64
-        })
-        .unwrap_or(true);
-    if !due {
-        return Ok(None);
-    }
+    let interval_hours = if settings.backup_interval_hours > 0 {
+        settings.backup_interval_hours
+    } else {
+        settings.auto_backup_interval_days.max(1) * 24
+    };
 
     let directory = settings
         .local_backup_path
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| paths.app_data.join("backups").join("automatic"));
+        .unwrap_or_else(|| paths.local_snapshots_dir());
     fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+
+    // CC-Switch Parity: stable filesystem-based timing check
+    // Directly inspect the snapshot directory for the latest backup file's modification time.
+    let latest_mtime = fs::read_dir(&directory).ok().and_then(|entries| {
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().extension().map(|ext| ext == "zip").unwrap_or(false)
+            })
+            .filter_map(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
+            .max()
+    });
+
+    let interval_secs = u64::from(interval_hours) * 3600;
+    let due = match latest_mtime {
+        None => true,
+        Some(mtime) => {
+            mtime.elapsed().unwrap_or_default() >= std::time::Duration::from_secs(interval_secs)
+        }
+    };
+    if !due {
+        return Ok(None);
+    }
+
+    let now = chrono::Utc::now();
     let output = directory.join(format!(
         "aitoolplus-auto-{}.zip",
         now.format("%Y%m%d-%H%M%S")
     ));
     let report = create_backup(paths, settings, &output)?;
+    let keep_count = if settings.backup_retain_count > 0 {
+        settings.backup_retain_count
+    } else {
+        settings.auto_backup_max_keep as usize
+    };
     if settings.backup_type == BackupType::Webdav && !settings.webdav.url.trim().is_empty() {
         crate::webdav::upload(&settings.webdav, &output)?;
-        prune_remote_backups(&settings.webdav, settings.auto_backup_max_keep)?;
+        prune_remote_backups(&settings.webdav, keep_count as u32)?;
     } else if settings.backup_type == BackupType::S3
         && !settings.s3.endpoint.trim().is_empty()
         && !settings.s3.bucket.trim().is_empty()
     {
         crate::s3::upload(&settings.s3, &output)?;
-        crate::s3::prune_remote_backups(&settings.s3, settings.auto_backup_max_keep)?;
+        crate::s3::prune_remote_backups(&settings.s3, keep_count as u32)?;
     }
     settings.last_auto_backup_time = Some(now.to_rfc3339());
-    prune_auto_backups(&directory, settings.auto_backup_max_keep)?;
+    prune_local_backups(&directory, keep_count)?;
     Ok(Some(report))
 }
 
@@ -560,24 +590,29 @@ fn prune_remote_backups(config: &crate::settings::WebDavConfig, keep: u32) -> Re
     Ok(())
 }
 
-fn prune_auto_backups(directory: &Path, keep: u32) -> Result<(), String> {
+/// Prune older ZIP backups in `directory` keeping the `keep` newest files.
+pub fn prune_local_backups(directory: &Path, keep: usize) -> Result<(), String> {
     if keep == 0 {
         return Ok(());
     }
-    let mut files: Vec<PathBuf> = fs::read_dir(directory)
-        .map_err(|e| e.to_string())?
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Ok(());
+    };
+    let mut files: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("aitoolplus-auto-") && name.ends_with(".zip"))
+            path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("zip")
         })
         .collect();
-    files.sort();
-    let remove_count = files.len().saturating_sub(keep as usize);
-    for file in files.into_iter().take(remove_count) {
-        fs::remove_file(file).map_err(|e| e.to_string())?;
+    // Sort newest first by modified time
+    files.sort_by(|a, b| {
+        let meta_b = b.metadata().and_then(|m| m.modified()).ok();
+        let meta_a = a.metadata().and_then(|m| m.modified()).ok();
+        meta_b.cmp(&meta_a).then_with(|| b.cmp(a))
+    });
+    for file in files.into_iter().skip(keep) {
+        let _ = fs::remove_file(file);
     }
     Ok(())
 }
@@ -803,5 +838,65 @@ mod tests {
         let content = fs::read_to_string(&accounts_file).unwrap();
         assert!(content.contains("user@gmail.com"));
         assert!(content.contains("rt_123"));
+    }
+
+    #[test]
+    fn backup_excludes_sync_settings_and_never_overwrites_local_sync() {
+        let (directory, paths_a, mut settings_a) = setup();
+
+        // Machine A: configured with WebDAV
+        settings_a.backup_type = BackupType::Webdav;
+        settings_a.webdav.url = "https://dav.machine-a.com".into();
+        settings_a.webdav.username = "user_a".into();
+        settings_a.webdav.password = "machine_a_super_secret".into();
+        settings_a.save(&paths_a.settings_file()).unwrap();
+
+        assert!(paths_a.sync_file().is_file());
+        assert!(paths_a.settings_file().is_file());
+
+        // Create backup on Machine A
+        let backup = directory.path().join("backup_a.zip");
+        let report = create_backup(&paths_a, &settings_a, &backup).unwrap();
+        assert!(report.file_count >= 3);
+
+        // Verify ZIP contents
+        let manifest = inspect_backup(&backup).unwrap();
+        for entry in &manifest.entries {
+            assert!(!entry.archive_path.contains("sync.json"), "sync.json must not be in archive");
+            assert!(!entry.restore_target.contains("sync.json"), "sync.json must not be in restore target");
+        }
+
+        // Check raw zip file for settings.json content
+        let file = File::open(&backup).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let mut settings_entry = zip.by_name("appdata/settings.json").unwrap();
+        let mut settings_json = String::new();
+        settings_entry.read_to_string(&mut settings_json).unwrap();
+        assert!(!settings_json.contains("machine_a_super_secret"));
+        assert!(!settings_json.contains("machine-a.com"));
+        assert!(!settings_json.contains("webdav"));
+
+        // Machine B: has its own WebDAV config
+        let machine_b_dir = directory.path().join("machine_b");
+        let paths_b = Paths::new(machine_b_dir.join("home"), machine_b_dir.join("appdata"));
+        fs::create_dir_all(&paths_b.app_data).unwrap();
+
+        let mut settings_b = AppSettings::default();
+        settings_b.backup_type = BackupType::Webdav;
+        settings_b.webdav.url = "https://dav.machine-b.com".into();
+        settings_b.webdav.username = "user_b".into();
+        settings_b.webdav.password = "machine_b_local_password".into();
+        settings_b.save(&paths_b.settings_file()).unwrap();
+
+        // Restore Machine A's backup on Machine B
+        let restore_report = restore_backup(&paths_b, &backup, false).unwrap();
+        assert!(restore_report.restored >= 2);
+
+        // Machine B's sync credentials must NOT be overwritten!
+        let reloaded_b = AppSettings::load(&paths_b.settings_file());
+        assert_eq!(reloaded_b.backup_type, BackupType::Webdav);
+        assert_eq!(reloaded_b.webdav.url, "https://dav.machine-b.com");
+        assert_eq!(reloaded_b.webdav.username, "user_b");
+        assert_eq!(reloaded_b.webdav.password, "machine_b_local_password");
     }
 }

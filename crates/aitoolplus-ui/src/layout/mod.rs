@@ -70,7 +70,6 @@ impl Workspace {
         }
 
         nav_list = nav_list.child(self.sidebar_group(i.t("共享资源", "Shared Resources")));
-        nav_list = nav_list.child(self.sidebar_item(cx, Page::Sessions));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Mcp));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Skills));
 
@@ -169,6 +168,29 @@ impl Workspace {
                     ),
             )
             .child(div().text_size(px(13.0)).child(label).into_any_element())
+            .when(
+                page == Page::Settings
+                    && self
+                        .ui
+                        .update_info
+                        .as_ref()
+                        .map(|u| u.update_available)
+                        .unwrap_or(false),
+                |s| {
+                    s.child(
+                        div()
+                            .ml_auto()
+                            .px(px(6.0))
+                            .py(px(1.5))
+                            .rounded(px(10.0))
+                            .bg(t.accent)
+                            .text_color(crate::rgba_const(0xffffffff))
+                            .text_size(px(10.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child("NEW"),
+                    )
+                },
+            )
             .into_any_element()
     }
 

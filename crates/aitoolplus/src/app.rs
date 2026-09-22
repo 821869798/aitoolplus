@@ -306,6 +306,99 @@ pub fn open_main_window(
             }
         });
         window.focus(&workspace.read(cx).focus_handle(cx), cx);
+
+        // CC-Switch & Antigravity-Manager Parity: Background maintenance timer running while the app is alive
+        let periodic_workspace = workspace.downgrade();
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(60))
+                    .await;
+                let check = cx.update(|cx| {
+                    periodic_workspace.update(cx, |ws, cx| {
+                        // 1. Auto Backup if due
+                        let mut settings = ws.settings.clone();
+                        match aitoolplus_core::backup::run_auto_backup_if_due(&ws.paths, &mut settings) {
+                            Ok(Some(report)) => {
+                                tracing::info!(
+                                    path = %report.output.display(),
+                                    files = report.file_count,
+                                    "periodic auto backup completed"
+                                );
+                                ws.settings = settings.clone();
+                                (ws.callbacks.save_settings)(&ws.settings);
+                                cx.notify();
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                tracing::warn!("periodic auto backup failed: {err}");
+                            }
+                        }
+
+                        // 2. Check Antigravity background tasks
+                        let ag_auto_refresh = ws.settings.antigravity_auto_refresh;
+                        let ag_interval = ws.settings.antigravity_refresh_interval_minutes;
+                        let ag_auto_sync = ws.settings.antigravity_auto_sync;
+                        let app_data: std::path::PathBuf = ws.paths.app_data.clone();
+                        let home_dir: std::path::PathBuf = ws.paths.home.clone();
+                        let last_refresh = ws.settings.last_antigravity_refresh_time.clone();
+
+                        let is_due = ag_auto_refresh && aitoolplus_core::antigravity::is_auto_refresh_due(last_refresh.as_deref(), ag_interval);
+
+                        (ag_auto_sync, is_due, app_data, home_dir)
+                    })
+                });
+
+                let Ok((ag_auto_sync, is_due, app_data, home_dir)) = check else {
+                    break;
+                };
+
+                if ag_auto_sync || is_due {
+                    let weak_ws = periodic_workspace.clone();
+                    let updated = cx.background_spawn(async move {
+                        let mut store = aitoolplus_core::antigravity::load_store(&app_data);
+                        let mut changed = false;
+
+                        // Auto-sync active account from system
+                        if ag_auto_sync && aitoolplus_core::antigravity::auto_sync_active_account(&home_dir, &mut store) {
+                            changed = true;
+                        }
+
+                        // Auto-refresh quotas if due
+                        if is_due && !store.accounts.is_empty() {
+                            let count = aitoolplus_core::antigravity::refresh_all_quotas(&mut store);
+                            if count > 0 {
+                                changed = true;
+                            }
+                        }
+
+                        if changed {
+                            let _ = aitoolplus_core::antigravity::save_store(&app_data, &store);
+                            Some((store, is_due))
+                        } else if is_due {
+                            Some((store, true))
+                        } else {
+                            None
+                        }
+                    }).await;
+
+                    if let Some((store, refreshed)) = updated {
+                        let _ = cx.update(|cx| {
+                            weak_ws.update(cx, |ws, cx| {
+                                ws.ui.antigravity_store = Some(store);
+                                if refreshed {
+                                    ws.settings.last_antigravity_refresh_time = Some(chrono::Utc::now().to_rfc3339());
+                                    (ws.callbacks.save_settings)(&ws.settings);
+                                }
+                                cx.notify();
+                            })
+                        });
+                    }
+                }
+            }
+        })
+        .detach();
+
         cx.new(|cx| gpui_kit::component::Root::new(workspace, window, cx))
     })?;
 

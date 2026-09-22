@@ -445,6 +445,7 @@ pub fn default_settings_for(tool: ToolId) -> Value {
                 "ANTHROPIC_AUTH_TOKEN": "sk-..."
             }
         }),
+        ToolId::Agents => serde_json::json!({}),
         ToolId::Codex => serde_json::json!({
             "base_url": "https://api.example.com/v1",
             "api_key": "sk-...",

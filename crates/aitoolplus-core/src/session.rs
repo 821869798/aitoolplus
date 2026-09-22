@@ -110,7 +110,7 @@ pub fn session_root(paths: &Paths, tool: ToolId) -> Option<PathBuf> {
         ToolId::OhMyPi => home.join(".config").join("oh-my-pi").join("sessions"),
         ToolId::Hermes => home.join(".hermes").join("sessions"),
         ToolId::Dsh => home.join(".dsh").join("sessions"),
-        ToolId::ClaudeDesktop => return None,
+        ToolId::ClaudeDesktop | ToolId::Agents => return None,
     })
 }
 
@@ -785,7 +785,7 @@ fn resume_command(tool: ToolId, session_id: &str, source_path: Option<&str>) -> 
         }
         ToolId::Hermes => return None,
         ToolId::Dsh => return None,
-        ToolId::ClaudeDesktop => return None,
+        ToolId::ClaudeDesktop | ToolId::Agents => return None,
     })
 }
 
@@ -1637,6 +1637,7 @@ mod tests {
 
     #[test]
     fn claude_jsonl_sessions_with_timestamps() {
+        invalidate_cache();
         let dir = tempfile::tempdir().unwrap();
         let paths = paths_with(dir.path());
         let proj = paths
@@ -1655,7 +1656,7 @@ mod tests {
         )
         .unwrap();
 
-        let sessions = cached_scan(&paths, ToolId::ClaudeCode, 50);
+        let sessions = scan_sessions(&paths, ToolId::ClaudeCode, 50);
         assert_eq!(sessions.len(), 1);
         let s = &sessions[0];
         assert_eq!(s.session_id, "abc");

@@ -24,6 +24,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tracing.workspace = true
 sha2.workspace = true
 hmac.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+opener.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [

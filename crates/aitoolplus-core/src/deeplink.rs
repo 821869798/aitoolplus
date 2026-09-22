@@ -241,6 +241,9 @@ pub fn into_provider(request: DeepLinkImport) -> Result<ProviderRecord, String> 
                 "defaultModel": request.model.unwrap_or_else(|| "model-1".into()),
             })
         }
+        ToolId::Agents => {
+            serde_json::json!({})
+        }
     };
     record.settings_config = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     Ok(record)

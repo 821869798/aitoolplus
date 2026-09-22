@@ -2,6 +2,8 @@
 //! CLI configurations (providers, prompts, MCP, skills, sessions), mirroring
 //! the feature set of coulsontl/ai-toolbox.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 extern crate gpui_kit as gpui;
 
 mod app;

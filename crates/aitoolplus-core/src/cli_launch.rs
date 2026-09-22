@@ -19,7 +19,7 @@ pub fn command_name(tool: ToolId) -> Option<&'static str> {
         ToolId::OhMyPi => "omp",
         ToolId::Hermes => "hermes",
         ToolId::Dsh => "dsh",
-        ToolId::ClaudeDesktop => return None,
+        ToolId::ClaudeDesktop | ToolId::Agents => return None,
     })
 }
 

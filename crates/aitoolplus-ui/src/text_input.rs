@@ -515,8 +515,10 @@ impl EntityInputHandler for TextInput {
         _cx: &mut Context<Self>,
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
-        actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_string())
+        let start = self.content.floor_char_boundary(range.start.min(self.content.len()));
+        let end = self.content.floor_char_boundary(range.end.min(self.content.len())).max(start);
+        actual_range.replace(self.range_to_utf16(&(start..end)));
+        Some(self.content[start..end].to_string())
     }
 
     fn selected_text_range(
@@ -561,8 +563,8 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        let start = range.start.min(self.content.len());
-        let end = range.end.min(self.content.len());
+        let start = self.content.floor_char_boundary(range.start.min(self.content.len()));
+        let end = self.content.floor_char_boundary(range.end.min(self.content.len())).max(start);
         self.content = format!(
             "{}{}{}",
             &self.content[..start],
@@ -594,8 +596,8 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        let start = range.start.min(self.content.len());
-        let end = range.end.min(self.content.len());
+        let start = self.content.floor_char_boundary(range.start.min(self.content.len()));
+        let end = self.content.floor_char_boundary(range.end.min(self.content.len())).max(start);
         self.content = format!(
             "{}{}{}",
             &self.content[..start],
@@ -642,6 +644,8 @@ impl EntityInputHandler for TextInput {
         let range = self.range_from_utf16(&range_utf16);
         let shaped_start = self.content_offset_to_shaped_offset(range.start);
         let shaped_end = self.content_offset_to_shaped_offset(range.end);
+        let shaped_start = last_layout.text.floor_char_boundary(shaped_start.min(last_layout.text.len()));
+        let shaped_end = last_layout.text.floor_char_boundary(shaped_end.min(last_layout.text.len())).max(shaped_start);
         let start_x = last_layout.x_for_index(shaped_start);
         let end_x = last_layout.x_for_index(shaped_end);
         Some(Bounds::from_corners(
@@ -796,36 +800,49 @@ impl Element for TextInputElement {
             strikethrough: None,
         };
 
-        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
-            vec![
-                TextRun {
-                    len: marked_range.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: marked_range.end.saturating_sub(marked_range.start),
-                    underline: Some(UnderlineStyle {
-                        color: Some(run.color),
-                        thickness: px(1.0),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: display_text.len().saturating_sub(marked_range.end),
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|r| r.len > 0)
-            .collect()
+        let runs = if !input.is_secret && !content.is_empty() {
+            if let Some(marked_range) = input.marked_range.as_ref() {
+                let start = display_text.floor_char_boundary(marked_range.start.min(display_text.len()));
+                let end = display_text.floor_char_boundary(marked_range.end.min(display_text.len())).max(start);
+                let mut list = Vec::with_capacity(3);
+                if start > 0 {
+                    list.push(TextRun {
+                        len: start,
+                        ..run.clone()
+                    });
+                }
+                if end > start {
+                    list.push(TextRun {
+                        len: end - start,
+                        underline: Some(UnderlineStyle {
+                            color: Some(run.color),
+                            thickness: px(1.0),
+                            wavy: false,
+                        }),
+                        ..run.clone()
+                    });
+                }
+                if display_text.len() > end {
+                    list.push(TextRun {
+                        len: display_text.len() - end,
+                        ..run.clone()
+                    });
+                }
+                if list.is_empty() {
+                    vec![run]
+                } else {
+                    list
+                }
+            } else {
+                vec![run]
+            }
         } else {
             vec![run]
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window.text_system().shape_line(
-            SharedString::from(display_text),
+            SharedString::from(display_text.clone()),
             font_size,
             &runs,
             None,
@@ -834,6 +851,10 @@ impl Element for TextInputElement {
         let shaped_cursor = input.content_offset_to_shaped_offset(cursor);
         let shaped_sel_start = input.content_offset_to_shaped_offset(selected_range.start);
         let shaped_sel_end = input.content_offset_to_shaped_offset(selected_range.end);
+
+        let shaped_cursor = display_text.floor_char_boundary(shaped_cursor.min(display_text.len()));
+        let shaped_sel_start = display_text.floor_char_boundary(shaped_sel_start.min(display_text.len()));
+        let shaped_sel_end = display_text.floor_char_boundary(shaped_sel_end.min(display_text.len())).max(shaped_sel_start);
 
         let cursor_pos = line.x_for_index(shaped_cursor);
         let (selection, cursor) = if !content.is_empty() && !selected_range.is_empty() {
@@ -929,7 +950,7 @@ pub fn content_offset_to_shaped(content: &str, content_offset: usize, is_secret:
 
 pub fn shaped_offset_to_content(content: &str, shaped_offset: usize, is_secret: bool) -> usize {
     if !is_secret || content.is_empty() {
-        return shaped_offset.min(content.len());
+        return content.floor_char_boundary(shaped_offset.min(content.len()));
     }
     let char_idx = shaped_offset / "•".len();
     content
@@ -994,5 +1015,15 @@ mod tests {
         assert_eq!(word_bounds_at(text, 2), 0..5);
         assert_eq!(word_bounds_at(text, 7), 6..11);
         assert_eq!(word_bounds_at(text, 14), 12..16);
+    }
+
+    #[test]
+    fn test_secret_ime_composition_bounds() {
+        let content = "ni";
+        let display = "••";
+        let shaped = content_offset_to_shaped(content, 1, true);
+        assert_eq!(shaped, 3);
+        assert_eq!(display.floor_char_boundary(shaped), 3);
+        assert_eq!(shaped_offset_to_content(content, shaped, true), 1);
     }
 }

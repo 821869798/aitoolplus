@@ -111,6 +111,33 @@ impl Workspace {
                 &mut db.tool_mut(ToolId::Dsh).providers,
                 &paths,
             );
+
+            // Sanitize single-provider tools: if non-live applied providers exist,
+            // remove stale live:* records and ensure strictly at most one applied provider.
+            for tool in [
+                ToolId::ClaudeCode,
+                ToolId::Codex,
+                ToolId::GeminiCli,
+                ToolId::Grok,
+                ToolId::OpenCode,
+                ToolId::ClaudeDesktop,
+            ] {
+                let section = db.tool_mut(tool);
+                let has_real_applied = section.providers.iter().any(|p| !p.id.starts_with("live:") && p.is_applied);
+                if has_real_applied {
+                    section.providers.retain(|p| !p.id.starts_with("live:"));
+                }
+                let mut seen = false;
+                for p in section.providers.iter_mut() {
+                    if p.is_applied {
+                        if seen {
+                            p.is_applied = false;
+                        } else {
+                            seen = true;
+                        }
+                    }
+                }
+            }
         });
         let _ = store.save();
         let requested_theme = std::env::var("AITOOLPLUS_THEME_MODE")
@@ -135,9 +162,20 @@ impl Workspace {
                 input.set_text_silent(settings.proxy_url.clone(), cx)
             });
         }
+        if !settings.custom_update_mirror_url.is_empty() {
+            ui.custom_mirror_input.update(cx, |input, cx| {
+                input.set_text_silent(settings.custom_update_mirror_url.clone(), cx)
+            });
+        }
+        if !settings.custom_update_api_url.is_empty() {
+            ui.custom_api_input.update(cx, |input, cx| {
+                input.set_text_silent(settings.custom_update_api_url.clone(), cx)
+            });
+        }
 
         // Restore the last page; test automation may override it explicitly.
         let requested_page = std::env::var("AITOOLPLUS_START_PAGE")
+            .or_else(|_| std::env::var("AITOOLPLUS_PAGE"))
             .ok()
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| settings.last_page.clone());
@@ -156,7 +194,10 @@ impl Workspace {
                 .map(Page::Tool)
                 .unwrap_or(Page::Tool(ToolId::ClaudeCode)),
         };
-        if let Ok(tab) = std::env::var("AITOOLPLUS_START_TAB") {
+        let requested_tab = std::env::var("AITOOLPLUS_START_TAB")
+            .or_else(|_| std::env::var("AITOOLPLUS_TAB"))
+            .ok();
+        if let Some(tab) = requested_tab {
             ui.tool_tab = match tab.as_str() {
                 "common" => pages::ToolTab::Common,
                 "prompts" => pages::ToolTab::Prompts,
@@ -170,7 +211,10 @@ impl Workspace {
             };
             if page == Page::Settings {
                 ui.settings_tab = match tab.as_str() {
+                    "data_import" | "import" => pages::SettingsTab::DataImport,
+                    "usage" | "stats" => pages::SettingsTab::Usage,
                     "backup" => pages::SettingsTab::Backup,
+                    "advanced" => pages::SettingsTab::Advanced,
                     "about" => pages::SettingsTab::About,
                     _ => pages::SettingsTab::General,
                 };
@@ -203,6 +247,15 @@ impl Workspace {
             }
         }
 
+        if let Ok(subtab) = std::env::var("AITOOLPLUS_USAGE_SUBTAB") {
+            ui.usage_subtab = match subtab.as_str() {
+                "pricing" | "price" => pages::UsageSubTab::Pricing,
+                "providers" | "provider" => pages::UsageSubTab::Providers,
+                "models" | "model" => pages::UsageSubTab::Models,
+                _ => pages::UsageSubTab::Logs,
+            };
+        }
+
         let root_focus = cx.focus_handle();
         let mut ws = Self {
             paths,
@@ -226,6 +279,10 @@ impl Workspace {
             }
         }
 
+        if std::env::var("AITOOLPLUS_SKILLS_MORE_ACTIONS").ok().as_deref() == Some("1") {
+            ws.ui.skills_more_actions_open = true;
+        }
+
         if let Ok(mcp_name_or_id) = std::env::var("AITOOLPLUS_OPEN_MCP") {
             if mcp_name_or_id == "first" {
                 if let Some(s) = ws.store.store().mcp.servers.first() {
@@ -237,14 +294,53 @@ impl Workspace {
         }
 
         if std::env::var("AITOOLPLUS_OPEN_MCP_IMPORT_JSON").ok().as_deref() == Some("1") {
-            let default_json = "{\n  \"mcpServers\": {\n    \n  }\n}";
-            let editor = cx.new(|cx| crate::text_area::TextArea::new(default_json, cx));
+            let default_json = if std::env::var("AITOOLPLUS_TEST_INVALID_JSON").ok().as_deref() == Some("1") {
+                "{\n  \"mcpServers\": {\n    \"server1\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"server\"]\n    },\n  }\n}"
+            } else if std::env::var("AITOOLPLUS_TEST_LONG_JSON").ok().as_deref() == Some("1") {
+                "{\n  \"mcpServers\": {\n    \"server1\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path/to/dir\"]\n    },\n    \"server2\": {\n      \"command\": \"docker\",\n      \"args\": [\"run\", \"-i\", \"--rm\", \"mcp/fetch\"]\n    },\n    \"server3\": {\n      \"command\": \"python\",\n      \"args\": [\"-m\", \"mcp_server_git\"]\n    },\n    \"server4\": {\n      \"command\": \"node\",\n      \"args\": [\"dist/index.js\"]\n    },\n    \"server5\": {\n      \"command\": \"uvx\",\n      \"args\": [\"mcp-server-sqlite\", \"--db-path\", \"test.db\"]\n    },\n    \"server6\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-postgres\", \"postgresql://localhost/db\"]\n    },\n    \"server7\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-memory\"]\n    },\n    \"server8\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-brave-search\"]\n    }\n  }\n}"
+            } else {
+                "{\n  \"mcpServers\": {\n    \n  }\n}"
+            };
+            let editor = cx.new(|cx| {
+                let mut ta = crate::text_area::TextArea::new("{}", cx);
+                ta.set_syntax_mode(crate::text_area::SyntaxMode::Json, cx);
+                ta.set_text_silent(default_json, cx);
+                ta
+            });
             ws.ui.mcp_import_json_modal = Some(editor);
         }
 
         if std::env::var("AITOOLPLUS_OPEN_SKILL_GIT_MODAL").ok().as_deref() == Some("1") {
             let git_input = cx.new(|cx| TextInput::new("https://github.com/owner/repo.git", cx));
             ws.ui.skill_git_modal = Some(git_input);
+        }
+
+        if std::env::var("AITOOLPLUS_OPEN_SKILL_REPO_MANAGER").ok().as_deref() == Some("1") {
+            ws.ui.skill_store_repo_manager_open = true;
+        }
+
+        if let Ok(src) = std::env::var("AITOOLPLUS_SKILL_STORE_SOURCE") {
+            ws.ui.skill_store_source = match src.as_str() {
+                "skillssh" => pages::SkillStoreSource::SkillsSh,
+                _ => pages::SkillStoreSource::Repos,
+            };
+        }
+
+        if let Ok(q) = std::env::var("AITOOLPLUS_SKILL_STORE_SEARCH") {
+            if ws.ui.skill_store_source == pages::SkillStoreSource::SkillsSh {
+                ws.ui.skill_store_search.update(cx, |inp, cx| inp.set_text_silent(q.clone(), cx));
+                crate::pages::skills_page::trigger_store_search(&mut ws, q, cx);
+            } else {
+                ws.ui.skill_store_repos_search.update(cx, |inp, cx| inp.set_text_silent(q, cx));
+            }
+        }
+
+        if let Ok(rf) = std::env::var("AITOOLPLUS_SKILL_REPO_FILTER") {
+            ws.ui.skill_store_repo_filter = rf;
+        }
+
+        if std::env::var("AITOOLPLUS_OPEN_SKILL_REPO_DROPDOWN").ok().as_deref() == Some("1") {
+            ws.ui.skill_store_repo_dropdown_open = true;
         }
 
         if std::env::var("AITOOLPLUS_OPEN_SESSION_ACTIONS").ok().as_deref() == Some("1") {
@@ -257,21 +353,41 @@ impl Workspace {
         }
 
         if std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_DIALOG").ok().as_deref() == Some("1") {
-            let refresh_token = cx.new(|cx| TextInput::new("输入 Google OAuth Refresh Token…", cx));
-            let custom_label = cx.new(|cx| TextInput::new("自定义备注（例如：工作主账号、备用账号）…", cx));
-            let active_tab = if std::env::var("AITOOLPLUS_ANTIGRAVITY_TAB").ok().as_deref() == Some("token") {
-                pages::antigravity_page::AntigravityDialogTab::RefreshToken
-            } else {
-                pages::antigravity_page::AntigravityDialogTab::GoogleAuth
+            let refresh_token = cx.new(|cx| {
+                TextInput::new(
+                    "在此处粘贴您的 Refresh Token (支持批量)\n\n支持格式:\n1. 单个 Token (1//...)\n2. JSON 数组 (含 refresh_token 字段)\n3. 任意包含 Token 的文本 (自动提取)",
+                    cx,
+                )
+            });
+            let custom_label = cx.new(|cx| TextInput::new("自定义备注（可选）…", cx));
+            let active_tab = match std::env::var("AITOOLPLUS_ANTIGRAVITY_TAB").ok().as_deref() {
+                Some("token") => pages::antigravity_page::AntigravityDialogTab::Token,
+                Some("import") => pages::antigravity_page::AntigravityDialogTab::Import,
+                _ => pages::antigravity_page::AntigravityDialogTab::OAuth,
             };
-            ws.ui.antigravity_dialog = Some(pages::antigravity_page::AntigravityDialogState {
+            let manual_code = cx.new(|cx| TextInput::new("粘贴回调链接或 Code…", cx));
+            let mut state = pages::antigravity_page::AntigravityDialogState {
                 active_tab,
+                oauth_url: None,
+                redirect_uri: None,
+                oauth_url_copied: false,
+                manual_code,
                 refresh_token,
                 custom_label,
                 auth_status: None,
                 is_authorizing: false,
                 error_message: None,
-            });
+                session: None,
+            };
+            if active_tab == pages::antigravity_page::AntigravityDialogTab::OAuth {
+                if let Ok(s) = aitoolplus_core::antigravity::OAuthServerSession::start() {
+                    state.oauth_url = Some(s.auth_url.clone());
+                    state.redirect_uri = Some(s.redirect_uri.clone());
+                    let session_arc = std::sync::Arc::new(s);
+                    state.session = Some(session_arc.clone());
+                }
+            }
+            ws.ui.antigravity_dialog = Some(state);
         }
 
         if let Ok(email) = std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_DETAILS") {
@@ -437,6 +553,12 @@ impl Workspace {
                     .ok()
                     .filter(|s| !s.trim().is_empty());
                 pages::tool_page::open_prompt_dialog(editing_id, tool, &mut ws, cx);
+                if let Ok(long_p) = std::env::var("AITOOLPLUS_TEST_LONG_PROMPT") {
+                    if let Some(ref dlg) = ws.ui.prompt_dialog {
+                        let text = long_p.replace("\\n", "\n");
+                        dlg.content.update(cx, |ta, cx| ta.set_text_silent(text, cx));
+                    }
+                }
             }
         }
         if let Ok(pid) = std::env::var("AITOOLPLUS_EXPAND_PROMPT") {
@@ -450,6 +572,40 @@ impl Workspace {
                 "think" => Some(pages::PiDropdownField::Thinking),
                 _ => None,
             };
+        }
+
+        if ws.settings.auto_update_check_enabled {
+            let weak = cx.entity().downgrade();
+            let custom_api = ws.settings.custom_update_api_url.clone();
+            cx.spawn(async move |_this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(2500))
+                    .await;
+                let result = cx
+                    .background_spawn(async move {
+                        if !custom_api.trim().is_empty() {
+                            aitoolplus_core::updater::check_latest_at(
+                                &custom_api,
+                                env!("CARGO_PKG_VERSION"),
+                            )
+                        } else {
+                            aitoolplus_core::updater::check_latest(env!("CARGO_PKG_VERSION"))
+                        }
+                    })
+                    .await;
+                if let Ok(info) = result {
+                    if info.update_available {
+                        let _ = weak.update(cx, |ws, cx| {
+                            ws.ui.update_info = Some(info);
+                            ws.settings.last_update_check_time =
+                                Some(chrono::Utc::now().to_rfc3339());
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            cx.notify();
+                        });
+                    }
+                }
+            })
+            .detach();
         }
 
         ws
@@ -532,7 +688,7 @@ impl Workspace {
             || (matches!(self.page, Page::Antigravity)
                 && matches!(self.ui.antigravity_tab, pages::AntigravityPageTab::Sessions));
 
-        let mut pane = if is_session_open {
+        let pane = if is_session_open {
             div()
                 .id("page-scroll")
                 .flex()
@@ -598,9 +754,6 @@ impl Workspace {
                 )
         };
 
-        if let Some(toast) = pages::render_toast(self, cx) {
-            pane = pane.child(toast);
-        }
         pane.into_any_element()
     }
 
@@ -803,12 +956,14 @@ impl Render for Workspace {
             let mcps = self.ui.mcp_dialog.clone();
             let confirms = self.ui.confirm.clone();
             let renames = self.ui.rename_dialog.clone();
+            let backup_renames = self.ui.backup_rename_dialog.clone();
             let runtime_edits = self.ui.runtime_edit_dialog.clone();
             let skill_details = self.ui.skill_detail_dialog.clone();
             let selected_skill_id = self.ui.selected_skill_id.clone();
             let skill_editing_metadata = self.ui.skill_editing_metadata.clone();
             let skill_adding_tag = self.ui.skill_adding_tag.clone();
             let skill_git_modal = self.ui.skill_git_modal.clone();
+            let skill_store_repo_manager_open = self.ui.skill_store_repo_manager_open;
             let selected_mcp_id = self.ui.selected_mcp_id.clone();
             let mcp_import_json = self.ui.mcp_import_json_modal.clone();
             let mcp_import_existing = self.ui.mcp_import_existing_modal;
@@ -834,6 +989,11 @@ impl Render for Workspace {
             if let Some((meta, input)) = renames {
                 out.push(pages::sessions_page::render_rename_dialog(
                     meta, input, self, cx,
+                ));
+            }
+            if let Some((path, input)) = backup_renames {
+                out.push(pages::settings_page::render_backup_rename_dialog(
+                    path, input, self, cx,
                 ));
             }
             if let Some((path, editor)) = runtime_edits {
@@ -864,6 +1024,11 @@ impl Render for Workspace {
             if let Some(input) = skill_git_modal {
                 out.push(pages::skills_page::render_skill_git_modal(
                     input, self, cx,
+                ));
+            }
+            if skill_store_repo_manager_open {
+                out.push(pages::skills_page::render_skill_repo_manager_modal(
+                    self, cx,
                 ));
             }
             if let Some(mcp_id) = selected_mcp_id {
@@ -907,15 +1072,80 @@ impl Render for Workspace {
         } else {
             vec![]
         };
+        let toast_el = pages::render_toast(self, cx);
+        let mut root = div().relative().size_full().child(base);
         if modal_open {
-            div()
-                .relative()
-                .size_full()
-                .child(base)
-                .children(modals)
-                .child(overlays)
-        } else {
-            div().relative().size_full().child(base).child(overlays)
+            root = root.children(modals);
+        }
+        root = root.child(overlays);
+        if let Some(toast) = toast_el {
+            root = root.child(toast);
+        }
+        root
+    }
+}
+
+impl Workspace {
+    pub fn ensure_usage_db(&mut self) -> Option<aitoolplus_core::usage::UsageDb> {
+        if self.ui.usage_db.is_none() {
+            match aitoolplus_core::usage::UsageDb::open(&self.paths) {
+                Ok(db) => {
+                    self.ui.usage_db = Some(db);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to open usage database: {e}");
+                    return None;
+                }
+            }
+        }
+        self.ui.usage_db.clone()
+    }
+
+    pub fn refresh_usage_data(&mut self) {
+        let db = match self.ensure_usage_db() {
+            Some(d) => d,
+            None => return,
+        };
+        let cc_switch_db = self.paths.home.join(".cc-switch").join("cc-switch.db");
+        if cc_switch_db.is_file() {
+            let _ = db.import_from_cc_switch(&cc_switch_db);
+        }
+        let (start_ts, end_ts) = self.ui.usage_range.timestamps();
+        let app_type = self.ui.usage_app_filter.as_deref();
+        let provider_name = self.ui.usage_provider_filter.as_deref();
+        let model = self.ui.usage_model_filter.as_deref();
+
+        if let Ok(sum) = db.get_usage_summary(start_ts, end_ts, app_type, provider_name, model) {
+            self.ui.usage_summary = Some(sum);
+        }
+        if let Ok(apps) = db.get_usage_summary_by_app(start_ts, end_ts, provider_name, model) {
+            self.ui.usage_apps_summary = apps;
+        }
+        if let Ok(trends) = db.get_daily_trends(start_ts, end_ts, app_type, provider_name, model) {
+            self.ui.usage_trends = trends;
+        }
+        if let Ok(provs) = db.get_provider_stats(start_ts, end_ts, app_type, provider_name, model) {
+            self.ui.usage_provider_stats = provs;
+        }
+        if let Ok(models) = db.get_model_stats(start_ts, end_ts, app_type, provider_name, model) {
+            self.ui.usage_model_stats = models;
+        }
+        let filters = aitoolplus_core::usage::LogFilters {
+            app_type: self.ui.usage_app_filter.clone(),
+            provider_name: self.ui.usage_provider_filter.clone(),
+            model: self.ui.usage_model_filter.clone(),
+            status_code: self.ui.usage_status_filter,
+            start_date: start_ts,
+            end_date: end_ts,
+        };
+        if let Ok(logs) = db.get_request_logs(&filters, self.ui.usage_page, 20) {
+            self.ui.usage_logs = logs;
+        }
+        if let Ok(pricing) = db.get_model_pricing() {
+            self.ui.usage_pricing = pricing;
+        }
+        if let Ok(configs) = db.get_app_pricing_configs() {
+            self.ui.usage_app_pricing_configs = configs;
         }
     }
 }

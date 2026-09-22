@@ -7,13 +7,13 @@ use aitoolplus_core::pi_pages::PiModelSettings;
 use aitoolplus_core::providers::{CATEGORIES, ProviderRecord};
 use aitoolplus_core::session::{self, SessionMeta};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, MouseButton, MouseDownEvent, deferred, div, prelude::*, px, uniform_list};
+use gpui::{Context, IntoElement, deferred, div, prelude::*, px, uniform_list};
 use gpui_kit::base::{Align, ElementExt as _, Placement, Positioner, POPUP_PRIORITY};
 use serde_json::Value;
 
 use crate::components::{
     self, BadgeKind, ButtonVariant, Tooltip, badge, button_l, button_with_icon_l,
-    button_with_icon_loading_l, input_container, page_header, section_title, textarea_container,
+    button_with_icon_loading_l, input_container, page_header, section_title, text_area_scroll_container, textarea_container,
 };
 use crate::i18n::I18n;
 use crate::text_area::TextArea;
@@ -48,7 +48,8 @@ pub fn render_tool_page(
 
     // Ensure active tool_tab is supported by this tool; fall back to Providers if not.
     let valid_tab = match ws.ui.tool_tab {
-        ToolTab::Providers | ToolTab::Common | ToolTab::Prompts | ToolTab::Runtime | ToolTab::Sessions => true,
+        ToolTab::Providers | ToolTab::Prompts | ToolTab::Runtime | ToolTab::Sessions => true,
+        ToolTab::Common => tool == ToolId::Pi,
         ToolTab::Extensions => matches!(tool, ToolId::Pi | ToolId::OhMyPi),
         ToolTab::Plugins => matches!(tool, ToolId::ClaudeCode | ToolId::Codex | ToolId::Grok),
         ToolTab::Marketplace => matches!(tool, ToolId::ClaudeCode | ToolId::Codex | ToolId::Grok),
@@ -74,11 +75,13 @@ pub fn render_tool_page(
     col = col.child(tabs_bar(tool, ws, cx));
 
     match ws.ui.tool_tab {
-        ToolTab::Providers | ToolTab::Common => {
+        ToolTab::Providers => {
             if tool == ToolId::Pi {
                 col = col.child(pi_model_settings_section(ws, cx));
             }
             col = col.child(providers_section(tool, ws, cx));
+        }
+        ToolTab::Common => {
             if tool == ToolId::Pi {
                 col = col.child(pi_other_settings_section(ws, cx));
             }
@@ -132,6 +135,9 @@ fn tabs_bar(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
     ];
     if matches!(tool, ToolId::Pi | ToolId::OhMyPi) {
         tabs.push((ToolTab::Extensions, i.t("扩展", "Extensions")));
+    }
+    if tool == ToolId::Pi {
+        tabs.push((ToolTab::Common, i.t("其他设置", "Other Settings")));
     }
     if tool == ToolId::ClaudeCode || tool == ToolId::Codex || tool == ToolId::Grok {
         tabs.push((ToolTab::Plugins, i.t("已安装插件", "Installed Plugins")));
@@ -312,6 +318,7 @@ fn extract_provider_subtitle(tool: ToolId, p: &ProviderRecord, _i: &crate::i18n:
             ToolId::ClaudeDesktop => "https://claude.ai/download",
             ToolId::Hermes => "https://hermes.ai",
             ToolId::Dsh => "https://dsh.ai",
+            ToolId::Agents => "",
         };
         if !official_url.is_empty() {
             return official_url.to_string();
@@ -1633,25 +1640,7 @@ fn apply_prompt(tool: ToolId, id: &str, ws: &mut Workspace, cx: &mut Context<Wor
 // ---------------------------------------------------------------------------
 
 fn reveal_in_explorer(path: &std::path::Path) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .spawn();
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        if let Some(parent) = path.parent() {
-            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
-        }
-    }
+    super::open_path_in_default_manager(path);
 }
 
 fn open_in_system_editor(path: &std::path::Path) {
@@ -1708,36 +1697,19 @@ pub fn render_runtime_edit_dialog(
                 ))
                 .child(path.display().to_string()),
         )
-        .child(
-            div()
-                .w_full()
-                .h(px(380.0))
-                .id("runtime-editor-wrap")
-                .rounded(px(6.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(t.input_border)
-                .shadow_xs()
-                .cursor_text()
-                .track_focus(&editor.read(cx).focus_handle)
-                .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
-                .hover(move |h| h.border_color(t.card_border_hover))
-                .overflow_y_scroll()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener({
-                        let ed = editor.clone();
-                        move |_this, event: &MouseDownEvent, window, cx| {
-                            ed.update(cx, |ta, cx| {
-                                ta.focus_handle.focus(window, cx);
-                                ta.start_blink(cx);
-                                ta.on_mouse_down(event.position, event.click_count, cx);
-                            });
-                        }
-                    }),
-                )
-                .child(editor.clone()),
-        )
+        .child({
+            let scroll_handle = editor.read(cx).scroll_handle.clone();
+            let focus_handle = editor.read(cx).focus_handle.clone();
+            text_area_scroll_container(
+                "runtime-editor-wrap",
+                "runtime-editor-scrollbar",
+                &t,
+                px(380.0),
+                &scroll_handle,
+                &focus_handle,
+                editor.clone(),
+            )
+        })
         .child(
             div()
                 .flex()
@@ -2315,132 +2287,181 @@ fn pi_searchable_select(
 fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
-    let mut section = div()
-        .flex()
-        .flex_col()
-        .gap(px(10.0))
-        .p(px(14.0))
-        .rounded(px(10.0))
-        .bg(t.card_bg)
-        .border_1()
-        .border_color(t.card_border)
-        .child(section_title(
-            &t,
-            i.t("其他设置", "Other Settings"),
-            Some(i.t(
-                "settings.json 的其余字段；packages 由扩展链管理，保存时自动保留",
-                "other settings.json fields; packages is owned by the extension chain and preserved on save",
-            )),
-        ));
 
     match aitoolplus_core::pi_pages::read_other_settings(&ws.paths) {
         Ok(other) => {
-            if let Some(obj) = other.as_object()
-                && obj.is_empty()
-            {
-                section = section.child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(t.text_muted)
-                        .child(i.t("（无其他设置）", "(no other settings)")),
-                );
-            }
-            if let Some(obj) = other.as_object() {
-                let mut rows = div().flex().flex_col().gap(px(6.0));
-                for (key, value) in obj {
-                    let display = match value {
-                        Value::String(s) => s.clone(),
-                        other => serde_json::to_string(other).unwrap_or_default(),
-                    };
-                    rows = rows.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .w(px(180.0))
-                                    .text_size(px(12.0))
-                                    .text_color(t.text_secondary)
-                                    .child(key.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(12.0))
-                                    .text_color(t.text_primary)
-                                    .child(display),
-                            ),
-                    );
-                }
-                section = section.child(rows);
-            }
-
-            let pretty = serde_json::to_string_pretty(&other).unwrap_or_default();
+            let pretty = serde_json::to_string_pretty(&other).unwrap_or_else(|_| "{}".to_string());
             let editor = ws.ui.pi_other_editor(&pretty, cx);
             let editor_save = editor.clone();
-            section = section
+            let editor_fmt = editor.clone();
+            let scroll_handle = editor.read(cx).scroll_handle.clone();
+            let focus_handle = editor.read(cx).focus_handle.clone();
+
+            let header = div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .w_full()
+                .child(section_title(
+                    &t,
+                    i.t("Pi 其他设置 (settings.json)", "Pi Other Settings (settings.json)"),
+                    Some(i.t(
+                        "管理 ~/.pi/agent/settings.json 中除 packages 以外的所有顶层字段（如 default_provider、theme 等）",
+                        "All settings in ~/.pi/agent/settings.json outside packages (e.g. default_provider, theme, etc.)",
+                    )),
+                ))
                 .child(
                     div()
-                        .p(px(10.0))
-                        .h(px(220.0))
-                        .id("pi-other-editor-wrap")
-                        .overflow_y_scroll()
-                        .rounded(px(8.0))
-                        .bg(t.input_bg)
-                        .border_1()
-                        .border_color(t.input_border)
-                        .track_focus(&editor.read(cx).focus_handle)
-                        .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
-                        .hover(move |h| h.border_color(t.card_border_hover))
-                        .child(editor),
-                )
-                .child(div().flex().justify_end().child(button_l(
-                    "pi-other-save",
-                    i.t("保存其他设置", "Save Other Settings"),
-                    ButtonVariant::Primary,
-                    &t,
-                    cx,
-                    move |ws, _, _, cx| {
-                        let text: String = editor_save.update(cx, |ta, _| ta.text().to_string());
-                        match serde_json::from_str::<Value>(&text) {
-                            Ok(edited) => {
-                                match aitoolplus_core::pi_pages::write_other_settings(
-                                    &ws.paths, &edited,
-                                ) {
-                                    Ok(_) => {
-                                        ws.ui.pi_other_editor = None;
-                                        let msg = ws.i18n.t("已保存", "saved").to_string();
-                                        ws.ui.toast(msg, false);
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(button_l(
+                            "pi-other-fmt",
+                            i.t("格式化 JSON", "Format JSON"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                let text: String = editor_fmt.read(cx).text().to_string();
+                                match serde_json::from_str::<Value>(&text) {
+                                    Ok(val) => {
+                                        if let Ok(formatted) = serde_json::to_string_pretty(&val) {
+                                            editor_fmt.update(cx, |ta, cx| ta.set_text(formatted, cx));
+                                            let msg = ws.i18n.t("已格式化 JSON", "Formatted JSON").to_string();
+                                            ws.ui.toast(msg, false);
+                                        }
                                     }
-                                    Err(e) => ws.ui.toast(format!("save failed: {e}"), true),
+                                    Err(e) => {
+                                        let msg = ws.i18n.t(&format!("JSON 格式不正确：{e}"), &format!("Invalid JSON: {e}")).to_string();
+                                        ws.ui.toast(msg, true);
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                let msg = ws
-                                    .i18n
-                                    .t(&format!("JSON 无效：{e}"), &format!("invalid JSON: {e}"))
-                                    .to_string();
-                                ws.ui.toast(msg, true);
-                            }
-                        }
-                        cx.notify();
-                    },
-                )));
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "pi-other-reload",
+                            i.t("重新加载", "Reload"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                ws.ui.pi_other_editor = None;
+                                let msg = ws.i18n.t("已从磁盘重新加载设置", "Reloaded settings from disk").to_string();
+                                ws.ui.toast(msg, false);
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "pi-other-save",
+                            i.t("保存设置", "Save Settings"),
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                let text: String = editor_save.read(cx).text().to_string();
+                                match serde_json::from_str::<Value>(&text) {
+                                    Ok(edited) => {
+                                        match aitoolplus_core::pi_pages::write_other_settings(
+                                            &ws.paths, &edited,
+                                        ) {
+                                            Ok(_) => {
+                                                ws.ui.pi_other_editor = None;
+                                                let msg = ws.i18n.t("已保存其他设置", "Other settings saved").to_string();
+                                                ws.ui.toast(msg, false);
+                                            }
+                                            Err(e) => ws.ui.toast(format!("save failed: {e}"), true),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let msg = ws
+                                            .i18n
+                                            .t(&format!("JSON 无效：{e}"), &format!("invalid JSON: {e}"))
+                                            .to_string();
+                                        ws.ui.toast(msg, true);
+                                    }
+                                }
+                                cx.notify();
+                            },
+                        )),
+                );
+
+            let editor_box = div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .w_full()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(i.t("设置文件：~/.pi/agent/settings.json", "Settings file: ~/.pi/agent/settings.json"))
+                        .child(
+                            div()
+                                .px(px(6.0))
+                                .py(px(2.0))
+                                .rounded(px(4.0))
+                                .bg(t.card_border)
+                                .text_size(px(11.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(t.text_primary)
+                                .child("JSON"),
+                        ),
+                )
+                .child(text_area_scroll_container(
+                    "pi-other-editor-wrap",
+                    "pi-other-scrollbar",
+                    &t,
+                    px(520.0),
+                    &scroll_handle,
+                    &focus_handle,
+                    editor,
+                ))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(t.text_muted)
+                        .child(i.t(
+                            "提示：packages 字段由「扩展」页签统一维护管理，此处修改时会自动合并保留已安装扩展配置。",
+                            "Note: the packages field is maintained by the Extensions tab and will be preserved automatically.",
+                        )),
+                );
+
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(14.0))
+                .p(px(16.0))
+                .rounded(px(10.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .child(header)
+                .child(editor_box)
+                .into_any_element()
         }
-        Err(e) => {
-            section = section.child(crate::components::error_strip(
-                "rules-read-err",
-                i.t("规则读取失败", "Rules read failed"),
+        Err(e) => div()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .p(px(16.0))
+            .rounded(px(10.0))
+            .bg(t.card_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(crate::components::error_strip(
+                "pi-other-read-err",
+                i.t("读取 settings.json 失败", "Failed to read settings.json"),
                 &e,
                 &t,
                 cx,
                 None,
-            ));
-        }
+            ))
+            .into_any_element(),
     }
-
-    section.into_any_element()
 }
 
 fn spawn_tool_action<F>(
@@ -3316,22 +3337,18 @@ fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                     ),
             );
         }
+        let scroll_handle = editor.read(cx).scroll_handle.clone();
+        let focus_handle = editor.read(cx).focus_handle.clone();
         card = card
-            .child(
-                div()
-                    .p(px(10.0))
-                    .h(px(220.0))
-                    .id(gpui::SharedString::from(format!("addon-editor-wrap-{}", kind.key())))
-                    .overflow_y_scroll()
-                    .rounded(px(8.0))
-                    .bg(t.input_bg)
-                    .border_1()
-                    .border_color(t.card_border)
-                    .track_focus(&editor.read(cx).focus_handle)
-                    .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
-                    .hover(move |h| h.border_color(t.card_border_hover))
-                    .child(editor),
-            )
+            .child(text_area_scroll_container(
+                gpui::SharedString::from(format!("addon-editor-wrap-{}", kind.key())),
+                gpui::SharedString::from(format!("addon-scrollbar-{}", kind.key())),
+                &t,
+                px(220.0),
+                &scroll_handle,
+                &focus_handle,
+                editor,
+            ))
             .child(
                 div()
                     .flex()
@@ -10403,36 +10420,19 @@ pub fn render_prompt_dialog(
                 .flex_col()
                 .gap(px(6.0))
                 .child(field_label(i.t("提示词内容（Markdown）", "Prompt Content (Markdown)")))
-                .child(
-                    div()
-                        .w_full()
-                        .h(px(320.0))
-                        .id("prompt-content-editor-wrap")
-                        .rounded(px(6.0))
-                        .bg(t.input_bg)
-                        .border_1()
-                        .border_color(t.input_border)
-                        .shadow_xs()
-                        .cursor_text()
-                        .track_focus(&content.read(cx).focus_handle)
-                        .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
-                        .hover(move |h| h.border_color(t.card_border_hover))
-                        .overflow_y_scroll()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener({
-                                let editor = content.clone();
-                                move |_this, event: &MouseDownEvent, window, cx| {
-                                    editor.update(cx, |ta, cx| {
-                                        ta.focus_handle.focus(window, cx);
-                                        ta.start_blink(cx);
-                                        ta.on_mouse_down(event.position, event.click_count, cx);
-                                    });
-                                }
-                            }),
-                        )
-                        .child(content.clone()),
-                ),
+                .child({
+                    let scroll_handle = content.read(cx).scroll_handle.clone();
+                    let focus_handle = content.read(cx).focus_handle.clone();
+                    text_area_scroll_container(
+                        "prompt-content-editor-wrap",
+                        "prompt-content-scrollbar",
+                        &t,
+                        px(320.0),
+                        &scroll_handle,
+                        &focus_handle,
+                        content.clone(),
+                    )
+                }),
         )
         .child(
             div()

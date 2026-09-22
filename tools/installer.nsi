@@ -1,6 +1,8 @@
 ; AI ToolPlus NSIS Installer Script
 ; Modern UI 2 with Chinese and English support
 
+Unicode true
+
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 
@@ -17,19 +19,30 @@ SetCompressor /SOLID lzma
 !define MUI_ICON "..\crates\aitoolplus\assets\app.ico"
 !define MUI_UNICON "..\crates\aitoolplus\assets\app.ico"
 
-; Language selection
+; Installer Pages
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\aitoolplus.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "启动 AI ToolPlus / Launch AI ToolPlus"
+!define MUI_FINISHPAGE_RUN_TEXT "$(MUI_RUN_TEXT)"
 !insertmacro MUI_PAGE_FINISH
 
+; Uninstaller Pages
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
+; Languages (first is default)
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
+
+LangString MUI_RUN_TEXT ${LANG_SIMPCHINESE} "运行 AI ToolPlus"
+LangString MUI_RUN_TEXT ${LANG_ENGLISH} "Launch AI ToolPlus"
+
+LangString SHORTCUT_UNINSTALL ${LANG_SIMPCHINESE} "卸载 AI ToolPlus"
+LangString SHORTCUT_UNINSTALL ${LANG_ENGLISH} "Uninstall AI ToolPlus"
+
+LangString MSG_DELETE_DATA ${LANG_SIMPCHINESE} "是否删除所有配置文件与用户数据 (~/.aitoolplus)?$\n$\nDo you want to delete all user data (~/.aitoolplus)?"
+LangString MSG_DELETE_DATA ${LANG_ENGLISH} "Do you want to delete all user data (~/.aitoolplus)?"
 
 Section "MainSection" SecMain
     SetOutPath "$INSTDIR"
@@ -64,7 +77,7 @@ Section "MainSection" SecMain
     ; Create Shortcuts
     CreateDirectory "$SMPROGRAMS\AI ToolPlus"
     CreateShortcut "$SMPROGRAMS\AI ToolPlus\AI ToolPlus.lnk" "$INSTDIR\aitoolplus.exe" "" "$INSTDIR\app.ico"
-    CreateShortcut "$SMPROGRAMS\AI ToolPlus\卸载 AI ToolPlus.lnk" "$INSTDIR\uninstall.exe"
+    CreateShortcut "$SMPROGRAMS\AI ToolPlus\$(SHORTCUT_UNINSTALL).lnk" "$INSTDIR\uninstall.exe"
     CreateShortcut "$DESKTOP\AI ToolPlus.lnk" "$INSTDIR\aitoolplus.exe" "" "$INSTDIR\app.ico"
 
     ; Create Uninstaller
@@ -82,7 +95,7 @@ Section "Uninstall"
 
     ; Delete Shortcuts
     Delete "$SMPROGRAMS\AI ToolPlus\AI ToolPlus.lnk"
-    Delete "$SMPROGRAMS\AI ToolPlus\卸载 AI ToolPlus.lnk"
+    Delete "$SMPROGRAMS\AI ToolPlus\$(SHORTCUT_UNINSTALL).lnk"
     RMDir "$SMPROGRAMS\AI ToolPlus"
     Delete "$DESKTOP\AI ToolPlus.lnk"
 
@@ -93,7 +106,8 @@ Section "Uninstall"
     DeleteRegKey HKCU "Software\AIToolPlus"
 
     ; Ask whether to remove user data
-    MessageBox MB_YESNO|MB_ICONQUESTION "是否删除所有配置文件与用户数据 (%APPDATA%\aitoolplus)?$\n$\nDo you want to delete all user data (%APPDATA%\aitoolplus)?" IDNO skip_appdata
+    MessageBox MB_YESNO|MB_ICONQUESTION "$(MSG_DELETE_DATA)" IDNO skip_appdata
+        RMDir /r "$PROFILE\.aitoolplus"
         RMDir /r "$APPDATA\aitoolplus"
     skip_appdata:
 SectionEnd

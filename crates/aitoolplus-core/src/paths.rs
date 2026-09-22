@@ -96,6 +96,7 @@ impl Paths {
         let home = &self.home;
         match tool {
             ToolId::ClaudeCode => home.join(".claude"),
+            ToolId::Agents => home.join(".agents"),
             ToolId::Codex => home.join(".codex"),
             ToolId::GeminiCli => home.join(".gemini"),
             ToolId::Grok => home.join(".grok"),
@@ -115,6 +116,7 @@ impl Paths {
     pub fn config_files(&self, tool: ToolId) -> Vec<PathBuf> {
         match tool {
             ToolId::ClaudeCode => vec![self.tool_root(tool).join("settings.json")],
+            ToolId::Agents => vec![],
             ToolId::Codex => vec![
                 self.tool_root(tool).join("config.toml"),
                 self.tool_root(tool).join("auth.json"),
@@ -163,6 +165,7 @@ impl Paths {
     pub fn skills_dir(&self, tool: ToolId) -> Option<PathBuf> {
         Some(match tool {
             ToolId::ClaudeCode => self.tool_root(tool).join("skills"),
+            ToolId::Agents => self.tool_root(tool).join("skills"),
             ToolId::Codex => self.tool_root(tool).join("skills"),
             ToolId::Pi => self.tool_root(tool).join("skills"),
             _ => return None,
@@ -178,6 +181,11 @@ impl Paths {
         self.app_data.join("backups").join(tool.key())
     }
 
+    /// Dedicated directory for local snapshot bundles (both manual and auto).
+    pub fn local_snapshots_dir(&self) -> PathBuf {
+        self.app_data.join("backups").join("snapshots")
+    }
+
     /// Central skill repository managed by this app.
     pub fn central_skills_dir(&self) -> PathBuf {
         self.app_data.join("skills")
@@ -189,6 +197,12 @@ impl Paths {
 
     pub fn settings_file(&self) -> PathBuf {
         self.app_data.join("settings.json")
+    }
+
+    /// Sync and backup transport configuration (WebDAV, S3, etc.).
+    /// Excluded from backup archives and kept strictly local to the machine.
+    pub fn sync_file(&self) -> PathBuf {
+        self.app_data.join("sync.json")
     }
 }
 
@@ -210,13 +224,7 @@ pub fn home_dir() -> Option<PathBuf> {
 }
 
 fn default_app_data(home: &Path) -> PathBuf {
-    if let Some(dir) = std::env::var_os("APPDATA") {
-        let p = PathBuf::from(dir);
-        if p.is_absolute() {
-            return p.join("aitoolplus");
-        }
-    }
-    home.join(".local").join("share").join("aitoolplus")
+    home.join(".aitoolplus")
 }
 
 #[cfg(test)]

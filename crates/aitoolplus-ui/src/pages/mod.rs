@@ -8,6 +8,7 @@ pub mod sessions_page;
 pub mod settings_page;
 pub mod skills_page;
 pub mod tool_page;
+pub mod usage_page;
 
 use aitoolplus_core::tools::ToolId;
 use gpui::{ClickEvent, Context, IntoElement, MouseButton, Window, div, prelude::*, px};
@@ -100,6 +101,11 @@ pub struct WorkspaceState {
         aitoolplus_core::session::SessionMeta,
         gpui::Entity<TextInput>,
     )>,
+    /// Backup file rename dialog: (file_path, new_name_input).
+    pub backup_rename_dialog: Option<(
+        std::path::PathBuf,
+        gpui::Entity<TextInput>,
+    )>,
     /// Pi Model Settings transient selections (None = use on-disk value).
     pub pi_ms_provider: Option<String>,
     pub pi_ms_model: Option<String>,
@@ -112,6 +118,15 @@ pub struct WorkspaceState {
     pub provider_test_results:
         std::collections::BTreeMap<String, aitoolplus_core::api_hub::ConnectivityResult>,
     pub update_info: Option<aitoolplus_core::updater::UpdateInfo>,
+    pub update_checking: bool,
+    pub update_downloading: bool,
+    pub update_download_progress: f32,
+    pub update_download_speed: u64,
+    pub update_downloaded_bytes: u64,
+    pub update_total_bytes: u64,
+    pub update_error: Option<String>,
+    pub custom_mirror_input: gpui::Entity<TextInput>,
+    pub custom_api_input: gpui::Entity<TextInput>,
     pub remote_backups: Vec<aitoolplus_core::webdav::RemoteBackup>,
     pub backup_custom_inputs: Option<BackupCustomInputs>,
     pub tool_root_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
@@ -161,8 +176,21 @@ pub struct WorkspaceState {
     pub skill_search: gpui::Entity<TextInput>,
     pub skills_page_tab: SkillsPageTab,
     pub skill_store_search: gpui::Entity<TextInput>,
+    pub skill_store_source: SkillStoreSource,
+    pub skill_store_repo_filter: String,
+    pub skill_store_repo_dropdown_open: bool,
+    pub skill_store_status_filter: String,
+    pub skill_store_status_dropdown_open: bool,
+    pub update_mirror_dropdown_open: bool,
+    pub skill_store_repos_search: gpui::Entity<TextInput>,
+    pub skill_store_repo_manager_open: bool,
+    pub skill_store_new_repo_url: gpui::Entity<TextInput>,
+    pub skill_store_new_repo_branch: gpui::Entity<TextInput>,
+    pub skill_store_offset: usize,
+    pub skill_store_has_more: bool,
     pub skill_store_results: Vec<aitoolplus_core::skills::StoreSkillItem>,
     pub skill_store_loading: bool,
+    pub skill_store_error: Option<String>,
     pub skill_store_query: String,
     pub skill_store_installing: Option<String>,
     pub skill_detail_dialog: Option<SkillDetailState>,
@@ -203,6 +231,7 @@ pub struct WorkspaceState {
     pub antigravity_refreshing_all: bool,
     pub antigravity_search: gpui::Entity<TextInput>,
     pub antigravity_quota_window: AntigravityQuotaWindow,
+    pub antigravity_tier_filter: AntigravityTierFilter,
     pub antigravity_tab: AntigravityPageTab,
     pub antigravity_session_filter: AntigravitySessionFilter,
     pub antigravity_session_search: gpui::Entity<TextInput>,
@@ -217,6 +246,74 @@ pub struct WorkspaceState {
     pub session_expanded_outputs: std::collections::HashSet<String>,
     pub session_message_limit: usize,
     pub session_list_state: Option<(ToolId, String, (bool, bool, bool, bool, bool, bool), gpui::ListState)>,
+    pub skills_more_actions_open: bool,
+    pub cc_switch_custom_db_path: Option<std::path::PathBuf>,
+    pub cc_switch_importing: bool,
+    pub usage_db: Option<aitoolplus_core::usage::UsageDb>,
+    pub usage_range: UsageRangePreset,
+    pub usage_app_filter: Option<String>,
+    pub usage_provider_filter: Option<String>,
+    pub usage_model_filter: Option<String>,
+    pub usage_subtab: UsageSubTab,
+    pub usage_chart_metric: UsageChartMetric,
+    pub usage_chart_type: UsageChartType,
+    pub usage_hovered_bucket: Option<usize>,
+    pub usage_provider_menu_open: bool,
+    pub usage_model_menu_open: bool,
+    pub usage_date_menu_open: bool,
+    pub usage_status_menu_open: bool,
+    pub usage_refresh_menu_open: bool,
+    pub usage_page: u32,
+    pub usage_status_filter: Option<u16>,
+    pub usage_refresh_interval: u32,
+    pub usage_syncing: bool,
+    pub usage_auto_sync: bool,
+    pub usage_summary: Option<aitoolplus_core::usage::UsageSummary>,
+    pub usage_apps_summary: Vec<aitoolplus_core::usage::UsageSummaryByApp>,
+    pub usage_trends: Vec<aitoolplus_core::usage::DailyStats>,
+    pub usage_provider_stats: Vec<aitoolplus_core::usage::ProviderStats>,
+    pub usage_model_stats: Vec<aitoolplus_core::usage::ModelStats>,
+    pub usage_logs: aitoolplus_core::usage::PaginatedLogs,
+    pub usage_pricing: Vec<aitoolplus_core::usage::ModelPricingInfo>,
+    pub usage_pricing_search: Option<gpui::Entity<TextInput>>,
+    pub usage_editing_pricing: Option<(aitoolplus_core::usage::ModelPricingInfo, gpui::Entity<TextInput>, gpui::Entity<TextInput>, gpui::Entity<TextInput>, gpui::Entity<TextInput>)>,
+    pub usage_app_pricing_configs: Vec<aitoolplus_core::usage::AppPricingConfig>,
+    pub usage_app_pricing_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
+    pub usage_app_pricing_sources: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsageChartType {
+    #[default]
+    Area,
+    Bar,
+}
+
+impl UsageChartType {
+    pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
+        match self {
+            Self::Area => i18n.t("走势图", "Area"),
+            Self::Bar => i18n.t("柱状图", "Bar"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsageChartMetric {
+    #[default]
+    Tokens,
+    Requests,
+    Cost,
+}
+
+impl UsageChartMetric {
+    pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
+        match self {
+            Self::Tokens => i18n.t("Token 趋势", "Tokens"),
+            Self::Requests => i18n.t("请求量趋势", "Requests"),
+            Self::Cost => i18n.t("费用趋势", "Cost"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -242,6 +339,15 @@ pub enum AntigravityQuotaWindow {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AntigravityTierFilter {
+    #[default]
+    All,
+    Pro,
+    Ultra,
+    Free,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClaudePluginsTab {
     #[default]
     Installed,
@@ -255,11 +361,78 @@ pub enum SkillsPageTab {
     Store,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SkillStoreSource {
+    Repos,
+    #[default]
+    SkillsSh,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     General,
+    DataImport,
+    Usage,
     Backup,
+    Advanced,
     About,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsageRangePreset {
+    #[default]
+    Today,
+    Days7,
+    Days30,
+    All,
+}
+
+impl UsageRangePreset {
+    pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
+        match self {
+            Self::Today => i18n.t("今天", "Today"),
+            Self::Days7 => i18n.t("近 7 天", "7 Days"),
+            Self::Days30 => i18n.t("近 30 天", "30 Days"),
+            Self::All => i18n.t("全部", "All Time"),
+        }
+    }
+
+    pub fn timestamps(self) -> (Option<i64>, Option<i64>) {
+        let now = chrono::Local::now();
+        let end_ts = now.timestamp();
+        match self {
+            Self::Today => {
+                let start = now.date_naive().and_hms_opt(0, 0, 0)
+                    .and_then(|naive| chrono::TimeZone::from_local_datetime(&chrono::Local, &naive).single())
+                    .map(|dt| dt.timestamp())
+                    .unwrap_or(end_ts - 86400);
+                (Some(start), Some(end_ts))
+            }
+            Self::Days7 => (Some(end_ts - 7 * 86400), Some(end_ts)),
+            Self::Days30 => (Some(end_ts - 30 * 86400), Some(end_ts)),
+            Self::All => (None, None),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsageSubTab {
+    #[default]
+    Logs,
+    Providers,
+    Models,
+    Pricing,
+}
+
+impl UsageSubTab {
+    pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
+        match self {
+            Self::Logs => i18n.t("请求日志", "Request Logs"),
+            Self::Providers => i18n.t("来源统计", "Provider Stats"),
+            Self::Models => i18n.t("模型统计", "Model Stats"),
+            Self::Pricing => i18n.t("价格设置", "Model Pricing"),
+        }
+    }
 }
 
 static TOAST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -436,6 +609,7 @@ pub enum ConfirmAction {
     DeleteSkill { id: String },
     DeleteAntigravityAccount { id: String },
     DeleteAntigravitySession { session: aitoolplus_core::antigravity::AntigravitySessionMeta },
+    RestoreSkillsToPlain,
 }
 
 impl WorkspaceState {
@@ -444,6 +618,8 @@ impl WorkspaceState {
             cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
         let skill_git_url = cx.new(|cx| TextInput::new("https://github.com/owner/skill.git", cx));
         let proxy_url_input = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx));
+        let custom_mirror_input = cx.new(|cx| TextInput::new("https://ghproxy.net/", cx));
+        let custom_api_input = cx.new(|cx| TextInput::new(aitoolplus_core::updater::DEFAULT_RELEASES_API, cx));
         let pi_extension_input =
             cx.new(|cx| TextInput::new("来源，如 npm:pi-mcp-adapter", cx));
         let omp_extension_input =
@@ -457,11 +633,25 @@ impl WorkspaceState {
         let skill_search = cx.new(|cx| TextInput::new("搜索已安装 Skill…", cx));
         let skill_store_search = cx.new(|cx| TextInput::new("搜索 skills.sh 技能库（例如：git, rust, claude, review...）", cx));
         cx.subscribe(&skill_store_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
-            if let crate::text_input::TextInputEvent::Enter = event {
-                let query = this.ui.skill_store_search.read(cx).text().trim().to_string();
-                crate::pages::skills_page::trigger_store_search(this, query, cx);
+            match event {
+                crate::text_input::TextInputEvent::Enter => {
+                    let query = this.ui.skill_store_search.read(cx).text().trim().to_string();
+                    crate::pages::skills_page::trigger_store_search(this, query, cx);
+                }
+                crate::text_input::TextInputEvent::Change(text) => {
+                    if text.trim().is_empty() && !this.ui.skill_store_query.is_empty() {
+                        this.ui.skill_store_query.clear();
+                        this.ui.skill_store_error = None;
+                        this.ui.skill_store_results = aitoolplus_core::skills::curated_skills();
+                        cx.notify();
+                    }
+                }
+                _ => {}
             }
         }).detach();
+        let skill_store_repos_search = cx.new(|cx| TextInput::new("搜索仓库中的技能（例如：notion, git, rust, comic...）", cx));
+        let skill_store_new_repo_url = cx.new(|cx| TextInput::new("https://github.com/owner/repo", cx));
+        let skill_store_new_repo_branch = cx.new(|cx| TextInput::new("main", cx));
         let pi_dropdown_search = cx.new(|cx| TextInput::new("输入搜索…", cx));
         cx.subscribe(&pi_dropdown_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
             match event {
@@ -565,6 +755,7 @@ impl WorkspaceState {
             mcp_discovered: false,
             skills_discovered: false,
             rename_dialog: None,
+            backup_rename_dialog: None,
             pi_ms_initialized: false,
             pi_ms_provider_input,
             pi_ms_model_input,
@@ -579,6 +770,15 @@ impl WorkspaceState {
             downloaded_update_asset_path: None,
             provider_test_results: Default::default(),
             update_info: None,
+            update_checking: false,
+            update_downloading: false,
+            update_download_progress: 0.0,
+            update_download_speed: 0,
+            update_downloaded_bytes: 0,
+            update_total_bytes: 0,
+            update_error: None,
+            custom_mirror_input,
+            custom_api_input,
             remote_backups: vec![],
             backup_custom_inputs: None,
             tool_root_inputs: Default::default(),
@@ -617,8 +817,21 @@ impl WorkspaceState {
             skill_search,
             skills_page_tab: SkillsPageTab::Installed,
             skill_store_search,
+            skill_store_source: SkillStoreSource::default(),
+            skill_store_repo_filter: "all".to_string(),
+            skill_store_repo_dropdown_open: false,
+            skill_store_status_filter: "all".to_string(),
+            skill_store_status_dropdown_open: false,
+            update_mirror_dropdown_open: false,
+            skill_store_repos_search,
+            skill_store_repo_manager_open: false,
+            skill_store_new_repo_url,
+            skill_store_new_repo_branch,
+            skill_store_offset: 0,
+            skill_store_has_more: false,
             skill_store_results: vec![],
             skill_store_loading: false,
+            skill_store_error: None,
             skill_store_query: String::new(),
             skill_store_installing: None,
             skill_detail_dialog: None,
@@ -654,6 +867,12 @@ impl WorkspaceState {
             } else {
                 AntigravityQuotaWindow::default()
             },
+            antigravity_tier_filter: match std::env::var("AITOOLPLUS_ANTIGRAVITY_TIER").map(|v| v.to_lowercase()).as_deref() {
+                Ok("pro") => AntigravityTierFilter::Pro,
+                Ok("ultra") => AntigravityTierFilter::Ultra,
+                Ok("free") => AntigravityTierFilter::Free,
+                _ => AntigravityTierFilter::All,
+            },
             antigravity_tab: AntigravityPageTab::Accounts,
             antigravity_session_filter: AntigravitySessionFilter::All,
             antigravity_session_search,
@@ -668,6 +887,40 @@ impl WorkspaceState {
             session_expanded_outputs: std::collections::HashSet::new(),
             session_message_limit: 80,
             session_list_state: None,
+            skills_more_actions_open: false,
+            cc_switch_custom_db_path: None,
+            cc_switch_importing: false,
+            usage_db: None,
+            usage_range: UsageRangePreset::Today,
+            usage_app_filter: None,
+            usage_provider_filter: None,
+            usage_model_filter: None,
+            usage_subtab: UsageSubTab::Logs,
+            usage_chart_metric: UsageChartMetric::Tokens,
+            usage_chart_type: UsageChartType::Area,
+            usage_hovered_bucket: None,
+            usage_provider_menu_open: false,
+            usage_model_menu_open: false,
+            usage_date_menu_open: false,
+            usage_status_menu_open: false,
+            usage_refresh_menu_open: false,
+            usage_page: 0,
+            usage_status_filter: None,
+            usage_refresh_interval: 30,
+            usage_syncing: false,
+            usage_auto_sync: true,
+            usage_summary: None,
+            usage_apps_summary: Vec::new(),
+            usage_trends: Vec::new(),
+            usage_provider_stats: Vec::new(),
+            usage_model_stats: Vec::new(),
+            usage_logs: aitoolplus_core::usage::PaginatedLogs::default(),
+            usage_pricing: Vec::new(),
+            usage_pricing_search: None,
+            usage_editing_pricing: None,
+            usage_app_pricing_configs: Vec::new(),
+            usage_app_pricing_inputs: std::collections::BTreeMap::new(),
+            usage_app_pricing_sources: std::collections::BTreeMap::new(),
         }
     }
 
@@ -683,7 +936,7 @@ impl WorkspaceState {
         let editor = cx.new(|cx| {
             let mut ta = TextArea::new("{}", cx);
             ta.set_text_silent(initial, cx);
-            ta.set_max_lines(10, cx);
+            ta.set_syntax_mode(crate::text_area::SyntaxMode::Json, cx);
             ta
         });
         self.pi_other_editor = Some(editor.clone());
@@ -854,6 +1107,7 @@ impl WorkspaceState {
     pub fn on_page_change(&mut self, page: Page, _cx: &mut Context<Workspace>) {
         self.toast = None;
         self.skill_git_modal = None;
+        self.skill_store_repo_manager_open = false;
         self.selected_mcp_id = None;
         self.mcp_import_json_modal = None;
         self.mcp_import_existing_modal = false;
@@ -864,7 +1118,8 @@ impl WorkspaceState {
         }
         if let Page::Tool(tool) = page {
             let valid_tab = match self.tool_tab {
-                ToolTab::Providers | ToolTab::Common | ToolTab::Prompts | ToolTab::Runtime | ToolTab::Sessions => true,
+                ToolTab::Providers | ToolTab::Prompts | ToolTab::Runtime | ToolTab::Sessions => true,
+                ToolTab::Common => tool == aitoolplus_core::tools::ToolId::Pi,
                 ToolTab::Extensions => matches!(tool, aitoolplus_core::tools::ToolId::Pi | aitoolplus_core::tools::ToolId::OhMyPi),
                 ToolTab::Plugins => matches!(tool, aitoolplus_core::tools::ToolId::ClaudeCode | aitoolplus_core::tools::ToolId::Codex | aitoolplus_core::tools::ToolId::Grok),
                 ToolTab::Marketplace => matches!(tool, aitoolplus_core::tools::ToolId::ClaudeCode | aitoolplus_core::tools::ToolId::Codex | aitoolplus_core::tools::ToolId::Grok),
@@ -882,12 +1137,14 @@ impl WorkspaceState {
             || self.mcp_dialog.is_some()
             || self.confirm.is_some()
             || self.rename_dialog.is_some()
+            || self.backup_rename_dialog.is_some()
             || self.runtime_edit_dialog.is_some()
             || self.skill_detail_dialog.is_some()
             || self.selected_skill_id.is_some()
             || self.skill_editing_metadata.is_some()
             || self.skill_adding_tag.is_some()
             || self.skill_git_modal.is_some()
+            || self.skill_store_repo_manager_open
             || self.selected_mcp_id.is_some()
             || self.mcp_import_json_modal.is_some()
             || self.mcp_import_existing_modal
@@ -1209,6 +1466,24 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 ws.ui.toast(msg, false);
             }
         }
+        ConfirmAction::RestoreSkillsToPlain => {
+            let mut store = ws.store.store().skills.clone();
+            let (restored, errors) = aitoolplus_core::skills::restore_all_to_plain(&mut store, &ws.paths);
+            let _ = ws.store.update(|db| db.skills = store);
+            ws.persist_store();
+            let msg = if errors == 0 {
+                i.t(
+                    &format!("已成功将 {restored} 个技能超链还原为独立实体目录"),
+                    &format!("Successfully restored {restored} skill junctions to plain directories"),
+                ).to_string()
+            } else {
+                i.t(
+                    &format!("已还原 {restored} 个技能为独立实体目录，{errors} 个失败"),
+                    &format!("Restored {restored} skills to plain directories, {errors} failed"),
+                ).to_string()
+            };
+            ws.ui.toast(msg, errors > 0);
+        }
     }
     cx.notify();
 }
@@ -1341,6 +1616,25 @@ pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
         Page::Sessions => sessions_page::render_sessions_page(ws, cx),
         Page::Antigravity => antigravity_page::render_antigravity_page(ws, cx),
         Page::Settings => settings_page::render_settings_page(ws, cx),
+    }
+}
+
+/// 打开路径（文件夹或文件所在目录）：调用系统默认文件管理器（支持 Directory Opus、Total Commander、系统默认资源管理器等）
+pub fn open_path_in_default_manager(path: impl AsRef<std::path::Path>) {
+    let p = path.as_ref();
+    if !p.exists() {
+        return;
+    }
+    if p.is_dir() {
+        if opener::open(p).is_err() {
+            #[cfg(target_os = "windows")]
+            let _ = std::process::Command::new("explorer").arg(p).spawn();
+        }
+    } else {
+        if opener::reveal(p).is_err() {
+            #[cfg(target_os = "windows")]
+            let _ = std::process::Command::new("explorer").args(["/select,", &p.to_string_lossy()]).spawn();
+        }
     }
 }
 

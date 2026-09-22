@@ -99,10 +99,21 @@ pub trait ToolAdapter: Send + Sync {
     }
 }
 
+pub struct AgentsAdapter;
+impl ToolAdapter for AgentsAdapter {
+    fn tool(&self) -> ToolId {
+        ToolId::Agents
+    }
+    fn apply(&self, _ctx: &ApplyCtx) -> Result<AppliedReport, ApplyError> {
+        Ok(AppliedReport::default())
+    }
+}
+
 /// Registry: fetch the adapter for a tool.
 pub fn adapter_for(tool: ToolId) -> Box<dyn ToolAdapter> {
     match tool {
         ToolId::ClaudeCode => Box::new(claude_code::ClaudeCodeAdapter),
+        ToolId::Agents => Box::new(AgentsAdapter),
         ToolId::Codex => Box::new(codex::CodexAdapter),
         ToolId::GeminiCli => Box::new(gemini_cli::GeminiCliAdapter),
         ToolId::Grok => Box::new(grok::GrokAdapter),

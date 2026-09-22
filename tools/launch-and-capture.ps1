@@ -19,14 +19,18 @@ param(
   [string]$AntigravityDevice = "",
   [string]$AntigravityLabel = "",
   [string]$AntigravityWindow = "",
+  [string]$AntigravityTier = "",
   [string]$OpenSkill = "",
   [string]$OpenSkillGitModal = "",
   [string]$OpenMcp = "",
   [string]$OpenMcpImportJson = "",
   [string]$OpenPromptDialog = "",
   [string]$PromptId = "",
+  [string]$OpenAntigravityDialog = "",
+  [string]$AntigravityTab = "",
   [string]$TestToast = "",
-  [string]$TestToastError = ""
+  [string]$TestToastError = "",
+  [string]$UsageSubTab = ""
 )
 Get-Process aitoolplus -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
@@ -49,8 +53,11 @@ if ($AntigravityDetails -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_ANT
 if ($AntigravityDevice -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_ANTIGRAVITY_DEVICE'] = $AntigravityDevice }
 if ($AntigravityLabel -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_ANTIGRAVITY_LABEL'] = $AntigravityLabel }
 if ($AntigravityWindow -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_ANTIGRAVITY_WINDOW'] = $AntigravityWindow }
+if ($AntigravityTier -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_ANTIGRAVITY_TIER'] = $AntigravityTier }
 if ($OpenSkill -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_SKILL'] = $OpenSkill }
 if ($OpenSkillGitModal -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_SKILL_GIT_MODAL'] = "1" }
+if ($OpenAntigravityDialog -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_ANTIGRAVITY_DIALOG'] = $OpenAntigravityDialog }
+if ($AntigravityTab -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_ANTIGRAVITY_TAB'] = $AntigravityTab }
 if ($OpenMcp -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_MCP'] = $OpenMcp }
 if ($OpenMcpImportJson -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_MCP_IMPORT_JSON'] = "1" }
 if ($OpenPromptDialog -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_PROMPT_DIALOG'] = "1" }
@@ -59,6 +66,7 @@ if ($TestToast -ne "") {
   $psi.EnvironmentVariables['AITOOLPLUS_TEST_TOAST'] = $TestToast
   $psi.EnvironmentVariables['AITOOLPLUS_TEST_TOAST_ERROR'] = $TestToastError
 }
+if ($UsageSubTab -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_USAGE_SUBTAB'] = $UsageSubTab }
 if ($env:AITOOLPLUS_THEME_MODE) { $psi.EnvironmentVariables['AITOOLPLUS_THEME_MODE'] = $env:AITOOLPLUS_THEME_MODE }
 
 $launched = [System.Diagnostics.Process]::Start($psi)

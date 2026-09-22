@@ -22,16 +22,7 @@ fn fmt_time(ms: Option<i64>) -> String {
 }
 
 fn reveal_in_explorer(path: &std::path::Path) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.display()))
-            .spawn();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = path;
-    }
+    super::open_path_in_default_manager(path);
 }
 
 pub fn render_session_detail(
@@ -159,8 +150,12 @@ pub fn render_session_detail(
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(btn_text)
             .hover(|h| h.bg(t.card_hover))
-            .on_click(cx.listener(|ws, _, _, cx| {
-                ws.ui.session_actions_menu_open = !ws.ui.session_actions_menu_open;
+            .on_click(cx.listener(move |ws, _, _, cx| {
+                if is_actions_menu_open {
+                    ws.ui.session_actions_menu_open = false;
+                } else {
+                    ws.ui.session_actions_menu_open = true;
+                }
                 cx.notify();
             }))
             .child(i.t("操作", "Actions"))
@@ -404,12 +399,12 @@ pub fn render_session_detail(
         let source_p = meta.source_path.clone();
 
         // 1. Transparent click-away backdrop to close the menu on clicking outside.
-        // Positioned at top(px(42.0)) so clicking [操作] directly hits the trigger button and toggles it closed!
         let backdrop = div()
             .id("session-actions-backdrop")
+            .occlude()
             .absolute()
-            .top(px(42.0))
-            .left(px(0.0))
+            .top_0()
+            .left_0()
             .size_full()
             .on_click(cx.listener(|ws, _, _, cx| {
                 ws.ui.session_actions_menu_open = false;
@@ -420,6 +415,7 @@ pub fn render_session_detail(
         // 2. Dropdown Menu positioned under the [操作] button, painted on top of msg_list
         let mut menu = div()
             .id("session-actions-menu")
+            .occlude()
             .absolute()
             .top(px(40.0))
             .right(px(8.0))

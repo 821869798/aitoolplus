@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.91"
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/aitoolplus/aitoolplus"
 authors = ["aitoolplus contributors"]
 
@@ -30,6 +30,7 @@ hmac = "0.12"
 gpui-kit = { version = "0.6.1", default-features = false, features = ["component", "assets"] }
 async-channel = "2"
 rfd = "0.15"
+opener = { version = "0.8", features = ["reveal"] }
 unicode-segmentation = "1.12"
 
 [profile.dev.package.aitoolplus-ui]

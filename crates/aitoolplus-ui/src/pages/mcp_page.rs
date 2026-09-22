@@ -9,12 +9,12 @@
 
 use aitoolplus_core::mcp::{McpServer, McpServerType, mcp_format};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, MouseButton, MouseDownEvent, div, prelude::*, px, uniform_list};
+use gpui::{Context, IntoElement, div, prelude::*, px, uniform_list};
 use serde_json::Value;
 
 use crate::components::{
     BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l, icon_button_svg,
-    input_container,
+    input_container, text_area_scroll_container,
 };
 use crate::icons;
 use crate::text_area::TextArea;
@@ -220,7 +220,12 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
                     cx,
                     |ws, _, _, cx| {
                         let default_json = "{\n  \"mcpServers\": {\n    \n  }\n}";
-                        let editor = cx.new(|cx| TextArea::new(default_json, cx));
+                        let editor = cx.new(|cx| {
+                            let mut ta = TextArea::new("{}", cx);
+                            ta.set_syntax_mode(crate::text_area::SyntaxMode::Json, cx);
+                            ta.set_text_silent(default_json, cx);
+                            ta
+                        });
                         ws.ui.mcp_import_json_modal = Some(editor);
                         cx.notify();
                     },
@@ -1774,6 +1779,113 @@ pub fn render_mcp_import_json_modal(
     let t = ws.theme.clone();
     let i = ws.i18n;
 
+    let json_text = json_editor.read(cx).content.clone();
+    let json_validation = serde_json::from_str::<Value>(&json_text);
+    let is_json_valid = json_validation.is_ok();
+
+    let status_banner = match &json_validation {
+        Err(err) => {
+            json_editor.update(cx, |ed, _| {
+                ed.error_location = Some((err.line(), err.column()));
+            });
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .p(px(8.0))
+                .rounded(px(6.0))
+                .bg(t.danger.opacity(0.1))
+                .border_1()
+                .border_color(t.danger.opacity(0.3))
+                .child(crate::icons::svg_icon(icons::ALERT_SVG, px(16.0), t.danger))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.danger)
+                        .child(i.t(
+                            &format!(
+                                "JSON 语法错误 (第 {} 行，第 {} 列): {}",
+                                err.line(),
+                                err.column(),
+                                err
+                            ),
+                            &format!(
+                                "JSON syntax error (line {}, col {}): {}",
+                                err.line(),
+                                err.column(),
+                                err
+                            ),
+                        )),
+                )
+        }
+        Ok(_) => {
+            json_editor.update(cx, |ed, _| {
+                ed.error_location = None;
+            });
+            let mcp_check = aitoolplus_core::mcp::parse_mcp_servers_from_json(&json_text);
+            match mcp_check {
+                Ok(ref servers) if !servers.is_empty() => {
+                    let names: Vec<String> =
+                        servers.iter().map(|(name, _, _)| name.clone()).collect();
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .p(px(8.0))
+                        .rounded(px(6.0))
+                        .bg(crate::rgba_const(0x10b9811a))
+                        .border_1()
+                        .border_color(crate::rgba_const(0x10b9814d))
+                        .child(crate::icons::svg_icon(
+                            icons::CHECK_SVG,
+                            px(16.0),
+                            crate::rgba_const(0x10b981ff),
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(crate::rgba_const(0x10b981ff))
+                                .child(i.t(
+                                    &format!(
+                                        "JSON 格式正确，已识别到 {} 个 MCP 服务: {}",
+                                        servers.len(),
+                                        names.join(", ")
+                                    ),
+                                    &format!(
+                                        "Valid JSON, recognized {} MCP server(s): {}",
+                                        servers.len(),
+                                        names.join(", ")
+                                    ),
+                                )),
+                        )
+                }
+                _ => div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .p(px(8.0))
+                    .rounded(px(6.0))
+                    .bg(crate::rgba_const(0xf59e0b1a))
+                    .border_1()
+                    .border_color(crate::rgba_const(0xf59e0b4d))
+                    .child(crate::icons::svg_icon(
+                        icons::ALERT_SVG,
+                        px(16.0),
+                        crate::rgba_const(0xf59e0bff),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(crate::rgba_const(0xf59e0bff))
+                            .child(i.t(
+                                "JSON 格式正确，但未识别到 mcpServers 配置（需包含 \"mcpServers\": { ... } 结构）",
+                                "Valid JSON, but no mcpServers configuration recognized (expected '\"mcpServers\": { ... }')",
+                            )),
+                    ),
+            }
+        }
+    };
+
     let body = div()
         .flex()
         .flex_col()
@@ -1788,39 +1900,26 @@ pub fn render_mcp_import_json_modal(
                     "Supports pasting MCP JSON configuration from Claude Desktop, Cursor, VSCode, etc.:",
                 )),
         )
-        .child(
-            div()
-                .w_full()
-                .h(px(380.0))
-                .id("mcp-json-editor-wrap")
-                .rounded(px(6.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(t.input_border)
-                .shadow_xs()
-                .cursor_text()
-                .track_focus(&json_editor.read(cx).focus_handle)
-                .focus(|s| s.border_color(crate::rgba_const(0x3b82f6cc)))
-                .hover(move |h| h.border_color(t.card_border_hover))
-                .overflow_y_scroll()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener({
-                        let editor = json_editor.clone();
-                        move |_this, event: &MouseDownEvent, window, cx| {
-                            editor.update(cx, |ta, cx| {
-                                ta.focus_handle.focus(window, cx);
-                                ta.start_blink(cx);
-                                ta.on_mouse_down(event.position, event.click_count, cx);
-                            });
-                        }
-                    }),
-                )
-                .child({
-                    json_editor.update(cx, |ed, _| ed.borderless = true);
+        .child({
+            let scroll_handle = json_editor.read(cx).scroll_handle.clone();
+            let focus_handle = json_editor.read(cx).focus_handle.clone();
+            text_area_scroll_container(
+                "mcp-json-editor-wrap",
+                "mcp-json-scrollbar",
+                &t,
+                px(350.0),
+                &scroll_handle,
+                &focus_handle,
+                {
+                    json_editor.update(cx, |ed, _| {
+                        ed.borderless = true;
+                        ed.syntax_mode = crate::text_area::SyntaxMode::Json;
+                    });
                     json_editor.clone()
-                }),
-        )
+                },
+            )
+        })
+        .child(status_banner)
         .child(
             div()
                 .flex()
@@ -1840,11 +1939,39 @@ pub fn render_mcp_import_json_modal(
                 .child(button_l(
                     "mcp-import-json-submit",
                     i.t("解析并导入", "Parse & Import"),
-                    ButtonVariant::Primary,
+                    if is_json_valid {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Secondary
+                    },
                     &t,
                     cx,
                     move |ws, _, _, cx| {
-                        let json_text: String = json_editor.update(cx, |ed, _| ed.content.clone());
+                        let json_text: String =
+                            json_editor.update(cx, |ed, _| ed.content.clone());
+                        if let Err(err) = serde_json::from_str::<Value>(&json_text) {
+                            ws.ui.toast(
+                                ws.i18n
+                                    .t(
+                                        &format!(
+                                            "JSON 语法错误 (第 {} 行，第 {} 列): {}",
+                                            err.line(),
+                                            err.column(),
+                                            err
+                                        ),
+                                        &format!(
+                                            "JSON syntax error (line {}, col {}): {}",
+                                            err.line(),
+                                            err.column(),
+                                            err
+                                        ),
+                                    )
+                                    .to_string(),
+                                true,
+                            );
+                            cx.notify();
+                            return;
+                        }
                         match aitoolplus_core::mcp::parse_mcp_servers_from_json(&json_text) {
                             Ok(servers) if !servers.is_empty() => {
                                 let count = servers.len();
@@ -1858,7 +1985,10 @@ pub fn render_mcp_import_json_modal(
 
                                 // Auto sync imported servers to tools
                                 let mut mcp_store = ws.store.store().mcp.clone();
-                                aitoolplus_core::mcp::sync_all_enabled(&ws.paths, &mut mcp_store);
+                                aitoolplus_core::mcp::sync_all_enabled(
+                                    &ws.paths,
+                                    &mut mcp_store,
+                                );
                                 let _ = ws.store.update(|db| db.mcp = mcp_store);
                                 ws.persist_store();
 

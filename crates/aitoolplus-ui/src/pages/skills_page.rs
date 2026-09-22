@@ -11,7 +11,7 @@ use crate::components::{
 use crate::text_input::TextInput;
 use crate::workspace::Workspace;
 
-use super::{SkillDetailState, SkillsPageTab, modal_scaffold_custom, modal_scaffold_sized};
+use super::{SkillDetailState, SkillsPageTab, SkillStoreSource, modal_scaffold_custom, modal_scaffold_sized};
 
 pub const RECOMMENDED_SKILLS: &[(&str, &str, &str)] = &[
     ("ponytail", "极简开发原则", "https://github.com/ponytail-ai/ponytail.git"),
@@ -120,7 +120,7 @@ pub fn render_skills_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
 
     // First visit: scan the central repo and discover existing tool skills.
     if !ws.ui.skills_discovered {
-        let (added, imported) = {
+        let (_added, _imported) = {
             let mut store = ws.store.store().skills.clone();
             let added = skills::scan_central(&mut store, &ws.paths);
             let imported = skills::scan_and_import_existing(&ws.paths, &mut store)
@@ -128,9 +128,7 @@ pub fn render_skills_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             let _ = ws.store.update(|db| db.skills = store);
             (added, imported)
         };
-        if added > 0 || !imported.is_empty() {
-            ws.persist_store();
-        }
+        ws.persist_store();
         ws.ui.skills_discovered = true;
     }
 
@@ -288,10 +286,7 @@ fn render_virtual_skill_card(
         .child(crate::icons::svg_icon(crate::icons::FOLDER_SVG, px(12.0), t.text_secondary))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
-            #[cfg(target_os = "windows")]
-            {
-                let _ = std::process::Command::new("explorer").arg(&folder_reveal).spawn();
-            }
+            super::open_path_in_default_manager(&folder_reveal);
         });
 
     // 2. Copy source/path
@@ -532,6 +527,19 @@ fn render_virtual_skill_card(
             let sid_tool = sid.clone();
             let ws_entity_tool = ws_entity.clone();
             let tool_icon_svg = tool_icon(*tool);
+            let tooltip_msg = match *tool {
+                ToolId::Agents => i.t(
+                    "通用 Agent (~/.agents/skills，一般支持除了 Claude 的所有 Agent)",
+                    "Universal Agent (~/.agents/skills, generally supports all agents except Claude)",
+                ),
+                ToolId::ClaudeCode => i.t("Claude Code (~/.claude/skills)", "Claude Code (~/.claude/skills)"),
+                ToolId::Codex => i.t("Codex (~/.codex/skills)", "Codex (~/.codex/skills)"),
+                ToolId::Pi => i.t("Pi (~/.pi/agent/skills)", "Pi (~/.pi/agent/skills)"),
+                ToolId::OpenCode => i.t("OpenCode (~/.config/opencode/skill)", "OpenCode (~/.config/opencode/skill)"),
+                ToolId::OhMyPi => i.t("Oh My Pi (~/.config/oh-my-pi/skills)", "Oh My Pi (~/.config/oh-my-pi/skills)"),
+                ToolId::Kimi => i.t("Kimi (~/.kimi-code/skills)", "Kimi (~/.kimi-code/skills)"),
+                _ => i.t(tool.name_zh(), tool.name_en()),
+            };
             let pill = div()
                 .id(gpui::SharedString::from(format!("vcard-tool-{}-{}", sid, tool.key())))
                 .w(px(20.0))
@@ -547,6 +555,9 @@ fn render_virtual_skill_card(
                 .hover({
                     let bg = t.card_hover;
                     move |h| h.bg(bg)
+                })
+                .tooltip(move |_window, cx| {
+                    cx.new(|_| crate::components::Tooltip::new(tooltip_msg.clone())).into()
                 })
                 .child(crate::icons::svg_icon(tool_icon_svg, px(12.0), t.text_primary))
                 .on_click(move |_, _, cx| {
@@ -690,11 +701,14 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
     let all_skills = skills::list(&store);
     let tools: Vec<ToolId> = skills::skills_tools().to_vec();
 
-    let scan_label = i.t("扫描并导入现有技能", "Scan & Import");
-    let sync_label = i.t("全部同步", "Sync All");
-    let import_label = i.t("导入本地目录...", "Import Directory...");
-
-    let mut section = div().flex().flex_col().flex_1().h_full().min_h(px(0.0)).gap(px(10.0));
+    let mut section = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .h_full()
+        .min_h(px(0.0))
+        .gap(px(10.0));
 
     // Top control section (compact)
     let header_card = div()
@@ -717,62 +731,80 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     i.t("中央仓库", "Central Repo"),
                     Some(gpui::SharedString::from(repo.display().to_string())),
                 ))
-                .child(
-                    div()
+                .child({
+                    let is_more_open = ws.ui.skills_more_actions_open;
+                    let mut actions_bar = div()
+                        .relative()
                         .flex()
-                        .gap(px(6.0))
-                        .child(button_with_icon_l(
-                            "skills-scan-import",
-                            crate::icons::SPARKLES_SVG,
-                            scan_label,
-                            ButtonVariant::Primary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| scan_and_import_action(ws, cx),
-                        ))
-                        .child(button_with_icon_l(
-                            "skills-git-modal-btn",
-                            crate::icons::GITHUB_SVG,
-                            i.t("从 Git 安装...", "Install from Git..."),
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                let git_input = cx.new(|cx| TextInput::new("https://github.com/owner/repo.git", cx));
-                                let git_inp_for_enter = git_input.clone();
-                                cx.subscribe(&git_input, move |ws, _emitter, event: &crate::text_input::TextInputEvent, cx| {
-                                    if let crate::text_input::TextInputEvent::Enter = event {
-                                        let url = git_inp_for_enter.read(cx).text().trim().to_string();
-                                        if !url.is_empty() {
-                                            install_git_skill_action(ws, url, cx);
-                                        }
+                        .items_center()
+                        .gap(px(6.0));
+
+                    // 1. 导入现有skill (Primary)
+                    actions_bar = actions_bar.child(button_with_icon_l(
+                        "skills-scan-import",
+                        crate::icons::SPARKLES_SVG,
+                        i.t("导入现有Skill", "Import Existing Skills"),
+                        ButtonVariant::Primary,
+                        &t,
+                        cx,
+                        |ws, _, _, cx| scan_and_import_action(ws, cx),
+                    ));
+
+                    // 2. 更新全部
+                    actions_bar = actions_bar.child(button_with_icon_l(
+                        "skills-check-update",
+                        crate::icons::REFRESH_SVG,
+                        i.t("更新全部", "Update All"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, cx| check_and_update_all_action(ws, cx),
+                    ));
+
+                    // 3. 从Git安装
+                    actions_bar = actions_bar.child(button_with_icon_l(
+                        "skills-git-modal-btn",
+                        crate::icons::GITHUB_SVG,
+                        i.t("从Git安装...", "Install from Git..."),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, cx| {
+                            let git_input = cx.new(|cx| TextInput::new("https://github.com/owner/repo.git", cx));
+                            let git_inp_for_enter = git_input.clone();
+                            cx.subscribe(&git_input, move |ws, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+                                if let crate::text_input::TextInputEvent::Enter = event {
+                                    let url = git_inp_for_enter.read(cx).text().trim().to_string();
+                                    if !url.is_empty() {
+                                        install_git_skill_action(ws, url, cx);
                                     }
-                                }).detach();
-                                ws.ui.skill_git_modal = Some(git_input);
-                                cx.notify();
-                            },
-                        ))
-                        .child(button_with_icon_l(
-                            "skills-sync",
-                            crate::icons::REFRESH_SVG,
-                            sync_label,
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| sync_all_action(ws, cx),
-                        ))
-                        .child(button_with_icon_l(
-                            "skills-import",
-                            crate::icons::FOLDER_SVG,
-                            import_label,
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                import_skill_dir(ws, cx);
-                            },
-                        )),
-                ),
+                                }
+                            }).detach();
+                            ws.ui.skill_git_modal = Some(git_input);
+                            cx.notify();
+                        },
+                    ));
+
+                    // 4. 其他操作 (下拉菜单触发按钮)
+                    actions_bar = actions_bar.child(button_with_icon_l(
+                        "skills-more-actions-btn",
+                        if is_more_open { crate::icons::CHEVRON_UP_SVG } else { crate::icons::CHEVRON_DOWN_SVG },
+                        i.t("其他操作", "More Actions"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            if is_more_open {
+                                ws.ui.skills_more_actions_open = false;
+                            } else {
+                                ws.ui.skills_more_actions_open = true;
+                            }
+                            cx.notify();
+                        },
+                    ));
+
+                    actions_bar
+                }),
         );
 
     let search_bar = div()
@@ -831,7 +863,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         let rows_count = (filtered_skills.len() + 1) / 2;
         let skills_arc = std::sync::Arc::new(filtered_skills);
         let tools_arc = std::sync::Arc::new(tools);
-        let repo_arc = std::sync::Arc::new(repo);
+        let repo_arc = std::sync::Arc::new(repo.clone());
         let ws_entity = cx.entity();
         let t_clone = t.clone();
         let i_clone = i.clone();
@@ -904,6 +936,159 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .overflow_hidden()
                 .child(v_list),
         );
+    }
+
+    if ws.ui.skills_more_actions_open {
+        let repo_for_open = repo.clone();
+        let backdrop = div()
+            .id("skills-more-backdrop")
+            .occlude()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .on_click(cx.listener(|ws, _, _, cx| {
+                ws.ui.skills_more_actions_open = false;
+                cx.notify();
+            }));
+
+        let mut menu = div()
+            .id("skills-more-actions-menu")
+            .occlude()
+            .absolute()
+            .top(px(45.0))
+            .right(px(11.0))
+            .w(px(168.0))
+            .p(px(4.0))
+            .rounded(px(6.0))
+            .bg(t.card_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .shadow_xl()
+            .flex()
+            .flex_col()
+            .gap(px(2.0));
+
+        // 选项 1: 全部同步
+        menu = menu.child(
+            div()
+                .id("skills-menu-sync-all")
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(4.0))
+                .text_size(px(12.5))
+                .text_color(t.text_primary)
+                .hover(|h| h.bg(t.card_hover))
+                .child(crate::icons::svg_icon(crate::icons::REFRESH_SVG, px(13.0), t.text_secondary))
+                .child(i.t("全部同步", "Sync All"))
+                .on_click(cx.listener(|ws, _, _, cx| {
+                    ws.ui.skills_more_actions_open = false;
+                    sync_all_action(ws, cx);
+                })),
+        );
+
+        // 选项 2: 还原实体目录
+        menu = menu.child(
+            div()
+                .id("skills-menu-restore")
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(4.0))
+                .text_size(px(12.5))
+                .text_color(t.text_primary)
+                .hover(|h| h.bg(t.card_hover))
+                .child(crate::icons::svg_icon(crate::icons::REPEAT_SVG, px(13.0), t.text_secondary))
+                .child(i.t("还原实体目录", "Restore to Plain"))
+                .on_click(cx.listener(|ws, _, _, cx| {
+                    ws.ui.skills_more_actions_open = false;
+                    ws.ui.confirm = Some(super::ConfirmState {
+                        title: ws.i18n.t("还原为实体目录", "Restore to Plain Folders").to_string(),
+                        message: ws.i18n.t(
+                            "确定要将所有已同步工具目录中的技能超链（Junction）还原为独立的普通实体文件夹吗？\n还原后各个工具目录将拥有独立的文件副本，不再依赖中央仓库。",
+                            "Are you sure you want to restore all skill junctions in tool directories to standalone plain folders?\nAfter restoration, each tool directory will have independent file copies and will no longer depend on the central repository.",
+                        ).to_string(),
+                        action: super::ConfirmAction::RestoreSkillsToPlain,
+                    });
+                    cx.notify();
+                })),
+        );
+
+        // 选项 3: 手动导入目录...
+        menu = menu.child(
+            div()
+                .id("skills-menu-import-dir")
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(4.0))
+                .text_size(px(12.5))
+                .text_color(t.text_primary)
+                .hover(|h| h.bg(t.card_hover))
+                .child(crate::icons::svg_icon(crate::icons::FOLDER_SVG, px(13.0), t.text_secondary))
+                .child(i.t("手动导入目录...", "Import Directory..."))
+                .on_click(cx.listener(|ws, _, _, cx| {
+                    ws.ui.skills_more_actions_open = false;
+                    import_skill_dir(ws, cx);
+                })),
+        );
+
+        // 选项 4: 从 ZIP 安装...
+        menu = menu.child(
+            div()
+                .id("skills-menu-import-zip")
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(4.0))
+                .text_size(px(12.5))
+                .text_color(t.text_primary)
+                .hover(|h| h.bg(t.card_hover))
+                .child(crate::icons::svg_icon(crate::icons::FILE_TEXT_SVG, px(13.0), t.text_secondary))
+                .child(i.t("从 ZIP 安装...", "Install from ZIP..."))
+                .on_click(cx.listener(|ws, _, _, cx| {
+                    ws.ui.skills_more_actions_open = false;
+                    install_from_zip_action(ws, cx);
+                })),
+        );
+
+        // 选项 5: 打开Skill目录
+        menu = menu.child(
+            div()
+                .id("skills-menu-open-dir")
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(4.0))
+                .text_size(px(12.5))
+                .text_color(t.text_primary)
+                .hover(|h| h.bg(t.card_hover))
+                .child(crate::icons::svg_icon(crate::icons::EXTERNAL_LINK_SVG, px(13.0), t.text_secondary))
+                .child(i.t("打开Skill目录", "Open Skills Directory"))
+                .on_click(cx.listener(move |ws, _, _, cx| {
+                    ws.ui.skills_more_actions_open = false;
+                    super::open_path_in_default_manager(&repo_for_open);
+                    cx.notify();
+                })),
+        );
+
+        section = section.child(backdrop).child(menu);
     }
 
     section.into_any_element()
@@ -1109,12 +1294,7 @@ pub(crate) fn render_skill_detail_drawer(
                     &t,
                     cx,
                     move |_, _, _, _| {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let _ = std::process::Command::new("explorer")
-                                .arg(&skill_folder_for_reveal)
-                                .spawn();
-                        }
+                        super::open_path_in_default_manager(&skill_folder_for_reveal);
                     },
                 )),
         );
@@ -1263,6 +1443,19 @@ pub(crate) fn render_skill_detail_drawer(
         let tool_name = i.t(tool.name_zh(), tool.name_en());
         let sid_tool = skill.id.clone();
         let grid_pill_id = format!("drawer-tool-cell-{}-{}", skill.id, tool.key());
+        let tooltip_msg = match tool {
+            ToolId::Agents => i.t(
+                "通用 Agent 技能目录 (~/.agents/skills)，一般支持除了 Claude 的所有 Agent 工具",
+                "Universal Agent skills directory (~/.agents/skills), generally supports all Agent tools except Claude",
+            ),
+            ToolId::ClaudeCode => i.t("Claude Code 技能目录 (~/.claude/skills)", "Claude Code skills directory (~/.claude/skills)"),
+            ToolId::Codex => i.t("Codex 技能目录 (~/.codex/skills)", "Codex skills directory (~/.codex/skills)"),
+            ToolId::Pi => i.t("Pi 技能目录 (~/.pi/agent/skills)", "Pi skills directory (~/.pi/agent/skills)"),
+            ToolId::OpenCode => i.t("OpenCode 技能目录 (~/.config/opencode/skill)", "OpenCode skills directory (~/.config/opencode/skill)"),
+            ToolId::OhMyPi => i.t("Oh My Pi 技能目录 (~/.config/oh-my-pi/skills)", "Oh My Pi skills directory (~/.config/oh-my-pi/skills)"),
+            ToolId::Kimi => i.t("Kimi 技能目录 (~/.kimi-code/skills)", "Kimi skills directory (~/.kimi-code/skills)"),
+            _ => i.t(tool.name_zh(), tool.name_en()),
+        };
 
         let dot_color = if is_on {
             crate::rgba_const(0x10b981ff)
@@ -1284,6 +1477,9 @@ pub(crate) fn render_skill_detail_drawer(
                 .border_color(if is_on { t.accent.opacity(0.5) } else { t.input_border })
                 .cursor_pointer()
                 .hover(|h| h.bg(t.card_hover))
+                .tooltip(move |_window, cx| {
+                    cx.new(|_| crate::components::Tooltip::new(tooltip_msg.clone())).into()
+                })
                 .child(
                     div()
                         .w(px(6.0))
@@ -1477,12 +1673,7 @@ pub(crate) fn render_skill_detail_drawer(
         &t,
         cx,
         move |_, _, _, _| {
-            #[cfg(target_os = "windows")]
-            {
-                let _ = std::process::Command::new("explorer")
-                    .arg(&skill_folder_for_central)
-                    .spawn();
-            }
+            super::open_path_in_default_manager(&skill_folder_for_central);
         },
     );
 
@@ -1867,17 +2058,12 @@ pub fn render_skill_detail_dialog(
                 )
                 .child(button_l(
                     "skill-dlg-reveal",
-                    i.t("在资源管理器中定位", "Reveal in Explorer"),
+                    i.t("在文件管理器中定位", "Reveal in File Manager"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
                     move |_, _, _, _| {
-                        #[cfg(target_os = "windows")]
-                        {
-                            let _ = std::process::Command::new("explorer")
-                                .arg(&path_clone)
-                                .spawn();
-                        }
+                        super::open_path_in_default_manager(&path_clone);
                     },
                 )),
         )
@@ -2073,232 +2259,923 @@ pub(crate) fn render_skill_git_modal(
 fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
-    let store = ws.store.store().skills.clone();
+    let mut store = ws.store.store().skills.clone();
 
-    // Initial load: if results are empty and not loading and no query, load curated
-    if ws.ui.skill_store_results.is_empty() && !ws.ui.skill_store_loading && ws.ui.skill_store_query.is_empty() {
+    // Ensure default repos exist in store and merge any new defaults
+    let mut repos_changed = false;
+    for def_repo in skills::default_skill_repos() {
+        if !store.settings.repos.iter().any(|r| r.owner.eq_ignore_ascii_case(&def_repo.owner) && r.name.eq_ignore_ascii_case(&def_repo.name)) {
+            store.settings.repos.push(def_repo);
+            repos_changed = true;
+        }
+    }
+    if repos_changed {
+        let _ = ws.store.update(|db| db.skills = store.clone());
+        ws.persist_store();
+    }
+
+    let current_source = ws.ui.skill_store_source;
+
+    // Initial load: if skills.sh results are empty and not loading and no query, load curated
+    if current_source == SkillStoreSource::SkillsSh
+        && ws.ui.skill_store_results.is_empty()
+        && !ws.ui.skill_store_loading
+        && ws.ui.skill_store_query.is_empty()
+    {
         ws.ui.skill_store_results = skills::curated_skills();
     }
 
-    let mut section = div().flex().flex_col().flex_1().h_full().min_h(px(0.0)).gap(px(12.0));
+    let mut section = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .h_full()
+        .min_h(px(0.0))
+        .gap(px(12.0));
 
-    // Header with search
-    let store_search_input = ws.ui.skill_store_search.clone();
-    let store_search_action_input = store_search_input.clone();
-
-    let search_bar = div()
+    // Top source switcher
+    let source_switcher = div()
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .child(
-            div()
-                .flex_1()
-                .child(input_container(&t, store_search_input)),
-        )
-        .child(button_with_icon_l(
-            "store-search-btn",
-            crate::icons::SEARCH_SVG,
-            i.t("搜索", "Search"),
-            ButtonVariant::Primary,
-            &t,
-            cx,
-            move |ws, _, _, cx| {
-                let query = store_search_action_input.read(cx).text().trim().to_string();
-                trigger_store_search(ws, query, cx);
+        .gap(px(2.0))
+        .p(px(2.0))
+        .rounded(px(6.0))
+        .bg(t.input_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .child(button_l(
+            "store-source-repos",
+            i.t("仓库", "Repositories"),
+            if current_source == SkillStoreSource::Repos {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Ghost
             },
-        ))
-        .child(button_with_icon_l(
-            "store-refresh-btn",
-            crate::icons::REFRESH_SVG,
-            i.t("重置推荐", "Reset"),
-            ButtonVariant::Secondary,
             &t,
             cx,
             |ws, _, _, cx| {
-                ws.ui.skill_store_search.update(cx, |inp, cx| inp.set_text_silent("", cx));
-                ws.ui.skill_store_query = String::new();
-                ws.ui.skill_store_results = skills::curated_skills();
+                let sh_query = ws.ui.skill_store_search.read(cx).text().trim().to_string();
+                if !sh_query.is_empty() {
+                    ws.ui.skill_store_repos_search.update(cx, |inp, cx| inp.set_text_silent(sh_query, cx));
+                }
+                ws.ui.skill_store_source = SkillStoreSource::Repos;
+                cx.notify();
+            },
+        ))
+        .child(button_l(
+            "store-source-skillssh",
+            "skills.sh",
+            if current_source == SkillStoreSource::SkillsSh {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Ghost
+            },
+            &t,
+            cx,
+            |ws, _, _, cx| {
+                let repo_query = ws.ui.skill_store_repos_search.read(cx).text().trim().to_string();
+                if !repo_query.is_empty() {
+                    ws.ui.skill_store_search.update(cx, |inp, cx| inp.set_text_silent(repo_query.clone(), cx));
+                    trigger_store_search(ws, repo_query, cx);
+                }
+                ws.ui.skill_store_source = SkillStoreSource::SkillsSh;
                 cx.notify();
             },
         ));
 
-    // Quick tag chips bar
-    const STORE_CHIPS: &[(&str, &str)] = &[
-        ("热门精选", ""),
-        ("Git 规范", "git"),
-        ("前端与 UI", "frontend"),
-        ("代码审查", "review"),
-        ("深度研究", "research"),
-        ("Rust 工程", "rust"),
-        ("Claude", "claude"),
-        ("文档助手", "notion"),
-    ];
-
-    let mut chips_bar = div().flex().items_center().gap(px(6.0)).flex_wrap().child(
-        div()
-            .text_size(px(12.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(t.text_secondary)
-            .child(i.t("热门分类：", "Categories:")),
-    );
-
-    for (chip_label, chip_query) in STORE_CHIPS {
-        let q_str = chip_query.to_string();
-        let chip_id = format!("chip-{}", chip_label);
-        let is_active = ws.ui.skill_store_query == q_str;
-        chips_bar = chips_bar.child(button_l(
-            gpui::SharedString::from(chip_id),
-            i.t(chip_label, chip_label),
-            if is_active { ButtonVariant::Primary } else { ButtonVariant::Secondary },
+    let header_row = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(section_title(
             &t,
-            cx,
-            move |ws, _, _, cx| {
-                ws.ui.skill_store_search.update(cx, |inp, cx| inp.set_text_silent(q_str.clone(), cx));
-                trigger_store_search(ws, q_str.clone(), cx);
-            },
-        ));
-    }
-
-    section = section
+            i.t("发现技能", "Discover Skills"),
+            Some(i.t(
+                "浏览社区仓库或检索公共技能库，一键安装至本地中心仓库并支持多工具同步",
+                "Browse community repos or search public skills, 1-click install & sync across tools",
+            )),
+        ))
         .child(
             div()
                 .flex()
                 .items_center()
-                .justify_between()
-                .child(section_title(
-                    &t,
-                    i.t("发现技能", "Discover Skills"),
-                    Some(i.t(
-                        "基于 skills.sh 与社区精选库，一键安装至本地中心仓库并支持多工具同步",
-                        "Discover & 1-click install skills from skills.sh & community repos",
-                    )),
-                ))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(t.text_muted)
-                        .child(format!("发现 {} 项技能", ws.ui.skill_store_results.len())),
-                ),
-        )
-        .child(search_bar)
-        .child(chips_bar);
+                .gap(px(10.0))
+                .child(source_switcher),
+        );
 
-    // Results area
-    if ws.ui.skill_store_loading {
-        section = section.child(
-            div()
+    section = section.child(header_row);
+
+    match current_source {
+        SkillStoreSource::Repos => {
+            let repos_search_input = ws.ui.skill_store_repos_search.clone();
+            let repo_filter_val = ws.ui.skill_store_repo_filter.clone();
+            let status_filter_val = ws.ui.skill_store_status_filter.clone();
+
+            let repo_btn_label = if repo_filter_val == "all" {
+                i.t("全部仓库", "All Repos").to_string()
+            } else {
+                repo_filter_val.clone()
+            };
+
+            let status_btn_label = match status_filter_val.as_str() {
+                "installed" => i.t("已安装", "Installed").to_string(),
+                "uninstalled" => i.t("未安装", "Uninstalled").to_string(),
+                _ => i.t("全部状态", "All Status").to_string(),
+            };
+
+            let is_repo_open = ws.ui.skill_store_repo_dropdown_open;
+            let is_status_open = ws.ui.skill_store_status_dropdown_open;
+
+            let repo_dropdown_btn = button_with_icon_l(
+                "store-repo-filter-btn",
+                if is_repo_open {
+                    crate::icons::CHEVRON_UP_SVG
+                } else {
+                    crate::icons::CHEVRON_DOWN_SVG
+                },
+                repo_btn_label,
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    if is_repo_open {
+                        ws.ui.skill_store_repo_dropdown_open = false;
+                    } else {
+                        ws.ui.skill_store_repo_dropdown_open = true;
+                        ws.ui.skill_store_status_dropdown_open = false;
+                    }
+                    cx.notify();
+                },
+            );
+
+            let status_dropdown_btn = button_with_icon_l(
+                "store-status-filter-btn",
+                if is_status_open {
+                    crate::icons::CHEVRON_UP_SVG
+                } else {
+                    crate::icons::CHEVRON_DOWN_SVG
+                },
+                status_btn_label,
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    if is_status_open {
+                        ws.ui.skill_store_status_dropdown_open = false;
+                    } else {
+                        ws.ui.skill_store_status_dropdown_open = true;
+                        ws.ui.skill_store_repo_dropdown_open = false;
+                    }
+                    cx.notify();
+                },
+            );
+
+            let manage_repos_btn = button_with_icon_l(
+                "store-manage-repos-btn",
+                crate::icons::SETTINGS_SVG,
+                i.t("管理仓库", "Manage Repos"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                |ws, _, _, cx| {
+                    ws.ui.skill_store_repo_manager_open = true;
+                    cx.notify();
+                },
+            );
+
+            let refresh_btn = button_with_icon_l(
+                "store-repos-refresh-btn",
+                crate::icons::REFRESH_SVG,
+                i.t("重置", "Reset"),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                |ws, _, _, cx| {
+                    ws.ui.skill_store_repos_search.update(cx, |inp, cx| inp.set_text_silent("", cx));
+                    ws.ui.skill_store_repo_filter = "all".to_string();
+                    ws.ui.skill_store_status_filter = "all".to_string();
+                    cx.notify();
+                },
+            );
+
+            let repos_toolbar = div()
                 .flex()
                 .items_center()
-                .justify_center()
-                .py(px(40.0))
+                .gap(px(8.0))
+                .child(div().flex_1().child(input_container(&t, repos_search_input)))
+                .child(repo_dropdown_btn)
+                .child(status_dropdown_btn)
+                .child(manage_repos_btn)
+                .child(refresh_btn);
+
+            section = section.child(repos_toolbar);
+
+            // Filter items
+            let query = ws.ui.skill_store_repos_search.read(cx).text().trim().to_string();
+            let discovered_skills = skills::discover_repo_skills(
+                &store,
+                Some(&ws.ui.skill_store_repo_filter),
+                Some(&ws.ui.skill_store_status_filter),
+                Some(&query),
+            );
+
+            if discovered_skills.is_empty() {
+                let query_str = query.clone();
+                let mut empty_container = div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(14.0))
+                    .py(px(32.0));
+
+                if !query_str.is_empty() {
+                    let q_switch = query_str.clone();
+                    empty_container = empty_container
+                        .child(crate::components::empty_state_svg(
+                            &t,
+                            crate::icons::SEARCH_SVG,
+                            i.t("未在已配置的仓库中找到匹配技能", "No matching skills found in configured repositories"),
+                            i.t(
+                                &format!("当前仅在已添加的 GitHub 仓库中检索；若要查找全球公开发布的“{}”，请切换至 skills.sh", query_str),
+                                &format!("Only configured repositories were searched. To find \"{}\" worldwide, switch to skills.sh", query_str),
+                            ),
+                        ))
+                        .child(button_with_icon_l(
+                            "switch-to-skillssh-btn",
+                            crate::icons::SEARCH_SVG,
+                            i.t(
+                                &format!("前往 skills.sh 全球技能库搜索 “{}”", query_str),
+                                &format!("Search \"{}\" on skills.sh", query_str),
+                            ),
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                ws.ui.skill_store_source = SkillStoreSource::SkillsSh;
+                                ws.ui.skill_store_search.update(cx, |inp, cx| inp.set_text_silent(q_switch.clone(), cx));
+                                trigger_store_search(ws, q_switch.clone(), cx);
+                            },
+                        ));
+                } else {
+                    empty_container = empty_container.child(crate::components::empty_state_svg(
+                        &t,
+                        crate::icons::SEARCH_SVG,
+                        i.t("未找到匹配的仓库技能", "No skills found in repositories"),
+                        i.t("点击【管理仓库】添加更多 GitHub 技能源", "Click 'Manage Repos' to add GitHub repositories"),
+                    ));
+                }
+
+                section = section.child(empty_container);
+            } else {
+                // 2-column virtual list
+                let rows_count = (discovered_skills.len() + 1) / 2;
+                let skills_arc = std::sync::Arc::new(discovered_skills);
+                let store_arc = std::sync::Arc::new(store.clone());
+                let ws_entity = cx.entity();
+                let t_clone = t.clone();
+                let i_clone = i.clone();
+                let installing_id = ws.ui.skill_store_installing.clone();
+
+                let v_list = uniform_list(
+                    "store-repos-vlist",
+                    rows_count,
+                    move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
+                        let mut row_elements = Vec::with_capacity(range.len());
+                        for row_idx in range {
+                            let idx1 = row_idx * 2;
+                            let idx2 = idx1 + 1;
+
+                            let mut row = div()
+                                .h(px(116.0))
+                                .pb(px(8.0))
+                                .flex()
+                                .gap(px(10.0))
+                                .w_full();
+
+                            if let Some(item1) = skills_arc.get(idx1) {
+                                let is_inst1 = store_arc.skills.iter().any(|s| {
+                                    s.name.eq_ignore_ascii_case(&item1.skill_id)
+                                        || s.name.eq_ignore_ascii_case(&item1.name)
+                                        || s.central_path.eq_ignore_ascii_case(&item1.skill_id)
+                                });
+                                let is_ing1 = installing_id.as_deref() == Some(&item1.id);
+                                row = row.child(
+                                    div()
+                                        .flex_1()
+                                        .h_full()
+                                        .min_w(px(0.0))
+                                        .child(render_virtual_store_skill_card(
+                                            item1,
+                                            is_inst1,
+                                            is_ing1,
+                                            &ws_entity,
+                                            &t_clone,
+                                            &i_clone,
+                                        )),
+                                );
+                            }
+
+                            if let Some(item2) = skills_arc.get(idx2) {
+                                let is_inst2 = store_arc.skills.iter().any(|s| {
+                                    s.name.eq_ignore_ascii_case(&item2.skill_id)
+                                        || s.name.eq_ignore_ascii_case(&item2.name)
+                                        || s.central_path.eq_ignore_ascii_case(&item2.skill_id)
+                                });
+                                let is_ing2 = installing_id.as_deref() == Some(&item2.id);
+                                row = row.child(
+                                    div()
+                                        .flex_1()
+                                        .h_full()
+                                        .min_w(px(0.0))
+                                        .child(render_virtual_store_skill_card(
+                                            item2,
+                                            is_inst2,
+                                            is_ing2,
+                                            &ws_entity,
+                                            &t_clone,
+                                            &i_clone,
+                                        )),
+                                );
+                            } else {
+                                row = row.child(div().flex_1().h_full().min_w(px(0.0)));
+                            }
+
+                            row_elements.push(row.into_any_element());
+                        }
+                        row_elements
+                    },
+                )
+                .size_full();
+
+                section = section.child(
+                    div()
+                        .w_full()
+                        .flex_1()
+                        .h_full()
+                        .min_h(px(0.0))
+                        .overflow_hidden()
+                        .child(v_list),
+                );
+            }
+
+            // Dropdown menus
+            if ws.ui.skill_store_repo_dropdown_open {
+                let backdrop = div()
+                    .id("store-repo-backdrop")
+                    .occlude()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .on_click(cx.listener(|ws, _, _, cx| {
+                        ws.ui.skill_store_repo_dropdown_open = false;
+                        cx.notify();
+                    }));
+
+                let mut menu = div()
+                    .id("store-repo-menu")
+                    .occlude()
+                    .absolute()
+                    .top(px(85.0))
+                    .right(px(240.0))
+                    .w(px(250.0))
+                    .max_h(px(280.0))
+                    .overflow_y_scroll()
+                    .p(px(4.0))
+                    .rounded(px(6.0))
+                    .bg(t.card_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .shadow_xl()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0));
+
+                let is_all = ws.ui.skill_store_repo_filter == "all";
+                menu = menu.child(
+                    div()
+                        .id("store-repo-opt-all")
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(px(10.0))
+                        .py(px(6.0))
+                        .rounded(px(4.0))
+                        .text_size(px(12.5))
+                        .text_color(if is_all { t.accent } else { t.text_primary })
+                        .bg(if is_all { t.card_hover } else { gpui::rgba(0x00000000) })
+                        .hover(|h| h.bg(t.card_hover))
+                        .child(i.t("全部仓库", "All Repositories"))
+                        .children(is_all.then(|| crate::icons::svg_icon(crate::icons::CHECK_SVG, px(12.0), t.accent)))
+                        .on_click(cx.listener(|ws, _, _, cx| {
+                            ws.ui.skill_store_repo_filter = "all".to_string();
+                            ws.ui.skill_store_repo_dropdown_open = false;
+                            cx.notify();
+                        })),
+                );
+
+                for repo in &store.settings.repos {
+                    let repo_tag = format!("{}/{}", repo.owner, repo.name);
+                    let repo_tag_click = repo_tag.clone();
+                    let is_sel = ws.ui.skill_store_repo_filter == repo_tag;
+                    let opt_id = format!("store-repo-opt-{}", repo_tag);
+                    menu = menu.child(
+                        div()
+                            .id(gpui::SharedString::from(opt_id))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px(px(10.0))
+                            .py(px(6.0))
+                            .rounded(px(4.0))
+                            .text_size(px(12.5))
+                            .text_color(if is_sel { t.accent } else { t.text_primary })
+                            .bg(if is_sel { t.card_hover } else { gpui::rgba(0x00000000) })
+                            .hover(|h| h.bg(t.card_hover))
+                            .child(repo_tag)
+                            .children(is_sel.then(|| crate::icons::svg_icon(crate::icons::CHECK_SVG, px(12.0), t.accent)))
+                            .on_click(cx.listener(move |ws, _, _, cx| {
+                                ws.ui.skill_store_repo_filter = repo_tag_click.clone();
+                                ws.ui.skill_store_repo_dropdown_open = false;
+                                cx.notify();
+                            })),
+                    );
+                }
+
+                section = section.child(backdrop).child(menu);
+            }
+
+            if ws.ui.skill_store_status_dropdown_open {
+                let backdrop = div()
+                    .id("store-status-backdrop")
+                    .occlude()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .on_click(cx.listener(|ws, _, _, cx| {
+                        ws.ui.skill_store_status_dropdown_open = false;
+                        cx.notify();
+                    }));
+
+                let mut menu = div()
+                    .id("store-status-menu")
+                    .occlude()
+                    .absolute()
+                    .top(px(85.0))
+                    .right(px(160.0))
+                    .w(px(140.0))
+                    .p(px(4.0))
+                    .rounded(px(6.0))
+                    .bg(t.card_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .shadow_xl()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0));
+
+                let status_options = [
+                    ("all", i.t("全部状态", "All Status")),
+                    ("installed", i.t("已安装", "Installed")),
+                    ("uninstalled", i.t("未安装", "Uninstalled")),
+                ];
+
+                for (opt_val, opt_label) in status_options {
+                    let is_sel = ws.ui.skill_store_status_filter == opt_val;
+                    let opt_val_str = opt_val.to_string();
+                    let opt_id = format!("store-status-opt-{}", opt_val);
+                    menu = menu.child(
+                        div()
+                            .id(gpui::SharedString::from(opt_id))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px(px(10.0))
+                            .py(px(6.0))
+                            .rounded(px(4.0))
+                            .text_size(px(12.5))
+                            .text_color(if is_sel { t.accent } else { t.text_primary })
+                            .bg(if is_sel { t.card_hover } else { gpui::rgba(0x00000000) })
+                            .hover(|h| h.bg(t.card_hover))
+                            .child(opt_label)
+                            .children(is_sel.then(|| crate::icons::svg_icon(crate::icons::CHECK_SVG, px(12.0), t.accent)))
+                            .on_click(cx.listener(move |ws, _, _, cx| {
+                                ws.ui.skill_store_status_filter = opt_val_str.clone();
+                                ws.ui.skill_store_status_dropdown_open = false;
+                                cx.notify();
+                            })),
+                    );
+                }
+
+                section = section.child(backdrop).child(menu);
+            }
+        }
+        SkillStoreSource::SkillsSh => {
+            let store_search_input = ws.ui.skill_store_search.clone();
+            let store_search_action_input = store_search_input.clone();
+
+            let search_bar = div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
                 .child(
+                    div()
+                        .flex_1()
+                        .child(input_container(&t, store_search_input)),
+                )
+                .child(button_with_icon_l(
+                    "store-search-btn",
+                    crate::icons::SEARCH_SVG,
+                    i.t("搜索", "Search"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let query = store_search_action_input.read(cx).text().trim().to_string();
+                        trigger_store_search(ws, query, cx);
+                    },
+                ))
+                .child(button_with_icon_l(
+                    "store-refresh-btn",
+                    crate::icons::REFRESH_SVG,
+                    i.t("重置推荐", "Reset"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.skill_store_search.update(cx, |inp, cx| inp.set_text_silent("", cx));
+                        ws.ui.skill_store_query = String::new();
+                        ws.ui.skill_store_results = skills::curated_skills();
+                        cx.notify();
+                    },
+                ));
+
+            // Category tag chips
+            const STORE_CHIPS: &[(&str, &str)] = &[
+                ("热门精选", ""),
+                ("Git 规范", "git"),
+                ("前端与 UI", "frontend"),
+                ("代码审查", "review"),
+                ("深度研究", "research"),
+                ("Rust 工程", "rust"),
+                ("Claude", "claude"),
+                ("文档助手", "notion"),
+            ];
+
+            let mut chips_bar = div().flex().items_center().gap(px(6.0)).flex_wrap().child(
+                div()
+                    .text_size(px(12.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(t.text_secondary)
+                    .child(i.t("热门分类：", "Categories:")),
+            );
+
+            for (chip_label, chip_query) in STORE_CHIPS {
+                let q_str = chip_query.to_string();
+                let chip_id = format!("chip-{}", chip_label);
+                let is_active = ws.ui.skill_store_query == q_str;
+                chips_bar = chips_bar.child(button_l(
+                    gpui::SharedString::from(chip_id),
+                    i.t(chip_label, chip_label),
+                    if is_active {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Secondary
+                    },
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        ws.ui.skill_store_search.update(cx, |inp, cx| inp.set_text_silent(q_str.clone(), cx));
+                        trigger_store_search(ws, q_str.clone(), cx);
+                    },
+                ));
+            }
+
+            section = section.child(search_bar).child(chips_bar);
+
+            if ws.ui.skill_store_loading && ws.ui.skill_store_results.is_empty() {
+                section = section.child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
-                        .text_size(px(13.5))
-                        .text_color(t.text_secondary)
-                        .child(i.t("正在从 skills.sh 检索技能库…", "Searching skills.sh...").to_string()),
-                ),
-        );
-    } else if ws.ui.skill_store_results.is_empty() {
-        section = section.child(crate::components::empty_state_svg(
-            &t,
-            crate::icons::SEARCH_SVG,
-            i.t("未找到匹配的技能", "No skills found"),
-            i.t("请尝试更换关键词，例如：git, review, rust, claude...", "Try a different search query"),
-        ));
-    } else {
-        let mut grid = div().flex().flex_col().gap(px(8.0));
-        for item in ws.ui.skill_store_results.clone() {
-            grid = grid.child(store_skill_card(item, &store, ws, cx));
+                        .justify_center()
+                        .py(px(40.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .text_size(px(13.5))
+                                .text_color(t.text_secondary)
+                                .child(i.t("正在从 skills.sh 检索技能库…", "Searching skills.sh...").to_string()),
+                        ),
+                );
+            } else if let Some(ref err_msg) = ws.ui.skill_store_error {
+                let err_display = err_msg.clone();
+                let retry_query = ws.ui.skill_store_query.clone();
+                section = section.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(14.0))
+                        .py(px(40.0))
+                        .child(crate::components::empty_state_svg(
+                            &t,
+                            crate::icons::INFO_SVG,
+                            i.t("检索技能库失败", "Failed to search skills.sh"),
+                            err_display,
+                        ))
+                        .child(button_with_icon_l(
+                            "store-retry-search-btn",
+                            crate::icons::REFRESH_SVG,
+                            i.t("重试检索", "Retry Search"),
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                trigger_store_search(ws, retry_query.clone(), cx);
+                            },
+                        )),
+                );
+            } else if ws.ui.skill_store_results.is_empty() {
+                section = section.child(crate::components::empty_state_svg(
+                    &t,
+                    crate::icons::SEARCH_SVG,
+                    i.t("未找到匹配的技能", "No skills found"),
+                    i.t("请尝试更换关键词，例如：git, review, rust, claude...", "Try a different search query"),
+                ));
+            } else {
+                let results = ws.ui.skill_store_results.clone();
+                let rows_count = (results.len() + 1) / 2;
+                let skills_arc = std::sync::Arc::new(results);
+                let store_arc = std::sync::Arc::new(store.clone());
+                let ws_entity = cx.entity();
+                let t_clone = t.clone();
+                let i_clone = i.clone();
+                let installing_id = ws.ui.skill_store_installing.clone();
+
+                let v_list = uniform_list(
+                    "store-skillssh-vlist",
+                    rows_count,
+                    move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
+                        let mut row_elements = Vec::with_capacity(range.len());
+                        for row_idx in range {
+                            let idx1 = row_idx * 2;
+                            let idx2 = idx1 + 1;
+
+                            let mut row = div()
+                                .h(px(116.0))
+                                .pb(px(8.0))
+                                .flex()
+                                .gap(px(10.0))
+                                .w_full();
+
+                            if let Some(item1) = skills_arc.get(idx1) {
+                                let is_inst1 = store_arc.skills.iter().any(|s| {
+                                    s.name.eq_ignore_ascii_case(&item1.skill_id)
+                                        || s.name.eq_ignore_ascii_case(&item1.name)
+                                        || s.central_path.eq_ignore_ascii_case(&item1.skill_id)
+                                });
+                                let is_ing1 = installing_id.as_deref() == Some(&item1.id);
+                                row = row.child(
+                                    div()
+                                        .flex_1()
+                                        .h_full()
+                                        .min_w(px(0.0))
+                                        .child(render_virtual_store_skill_card(
+                                            item1,
+                                            is_inst1,
+                                            is_ing1,
+                                            &ws_entity,
+                                            &t_clone,
+                                            &i_clone,
+                                        )),
+                                );
+                            }
+
+                            if let Some(item2) = skills_arc.get(idx2) {
+                                let is_inst2 = store_arc.skills.iter().any(|s| {
+                                    s.name.eq_ignore_ascii_case(&item2.skill_id)
+                                        || s.name.eq_ignore_ascii_case(&item2.name)
+                                        || s.central_path.eq_ignore_ascii_case(&item2.skill_id)
+                                });
+                                let is_ing2 = installing_id.as_deref() == Some(&item2.id);
+                                row = row.child(
+                                    div()
+                                        .flex_1()
+                                        .h_full()
+                                        .min_w(px(0.0))
+                                        .child(render_virtual_store_skill_card(
+                                            item2,
+                                            is_inst2,
+                                            is_ing2,
+                                            &ws_entity,
+                                            &t_clone,
+                                            &i_clone,
+                                        )),
+                                );
+                            } else {
+                                row = row.child(div().flex_1().h_full().min_w(px(0.0)));
+                            }
+
+                            row_elements.push(row.into_any_element());
+                        }
+                        row_elements
+                    },
+                )
+                .size_full();
+
+                section = section.child(
+                    div()
+                        .w_full()
+                        .flex_1()
+                        .h_full()
+                        .min_h(px(0.0))
+                        .overflow_hidden()
+                        .child(v_list),
+                );
+
+                // Footer with Load More + Powered by skills.sh
+                let mut footer = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .pt(px(2.0))
+                    .px(px(4.0));
+
+                if ws.ui.skill_store_has_more {
+                    footer = footer.child(button_with_icon_l(
+                        "store-load-more-btn",
+                        crate::icons::CHEVRON_DOWN_SVG,
+                        if ws.ui.skill_store_loading {
+                            i.t("加载中…", "Loading…")
+                        } else {
+                            i.t("加载更多", "Load More")
+                        },
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, cx| {
+                            load_more_store_search(ws, cx);
+                        },
+                    ));
+                } else {
+                    footer = footer.child(div());
+                }
+
+                footer = footer.child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(t.text_muted)
+                        .child(i.t("由 skills.sh 提供公共检索", "Powered by skills.sh")),
+                );
+
+                section = section.child(footer);
+            }
         }
-        section = section.child(
-            div()
-                .id("store-results-scroll")
-                .flex_1()
-                .h_full()
-                .min_h(px(0.0))
-                .overflow_y_scroll()
-                .child(grid),
-        );
     }
 
     section.into_any_element()
 }
 
-fn store_skill_card(
-    item: StoreSkillItem,
-    store: &skills::SkillsStore,
-    ws: &mut Workspace,
-    cx: &mut Context<Workspace>,
+fn render_virtual_store_skill_card(
+    item: &StoreSkillItem,
+    is_installed: bool,
+    is_installing: bool,
+    ws_entity: &gpui::Entity<Workspace>,
+    t: &crate::theme::Theme,
+    i: &crate::i18n::I18n,
 ) -> gpui::AnyElement {
-    let t = ws.theme.clone();
-    let i = ws.i18n;
-
-    let is_installed = store.skills.iter().any(|s| {
-        s.name.eq_ignore_ascii_case(&item.skill_id)
-            || s.name.eq_ignore_ascii_case(&item.name)
-            || s.central_path.eq_ignore_ascii_case(&item.skill_id)
-    });
-
-    let is_installing = ws.ui.skill_store_installing.as_deref() == Some(&item.id);
-
+    let item_clone = item.clone();
+    let id_str = item.id.clone();
+    let show_subpath = !item.skill_id.is_empty() && !item.skill_id.eq_ignore_ascii_case(&item.name);
     let github_url = format!("https://github.com/{}/{}", item.repo_owner, item.repo_name);
-    let github_url_clone = github_url.clone();
+    let gh_url_for_open = github_url.clone();
 
-    let install_btn = if is_installed {
-        badge(&t, i.t("已安装", "Installed"), BadgeKind::Success)
-    } else if is_installing {
-        badge(&t, i.t("安装中...", "Installing..."), BadgeKind::Warning)
-    } else {
-        let item_clone = item.clone();
-        button_with_icon_l(
-            gpui::SharedString::from(format!("store-install-{}", item.id)),
-            crate::icons::PLUS_SVG,
-            i.t("一键安装", "Install"),
-            ButtonVariant::Primary,
-            &t,
-            cx,
-            move |ws, _, _, cx| {
-                install_store_skill_action(ws, item_clone.clone(), cx);
-            },
-        )
-    };
+    let mut action_btns = div().flex().items_center().gap(px(6.0));
 
-    let gh_btn = button_with_icon_l(
-        gpui::SharedString::from(format!("store-gh-{}", item.id)),
-        crate::icons::EXTERNAL_LINK_SVG,
-        i.t("GitHub", "GitHub"),
-        ButtonVariant::Secondary,
-        &t,
-        cx,
-        move |_, _, _, _| {
-            #[cfg(target_os = "windows")]
-            {
-                let _ = std::process::Command::new("rundll32")
-                    .arg("url.dll,FileProtocolHandler")
-                    .arg(&github_url_clone)
-                    .spawn();
-            }
-        },
+    // GitHub 查看 button
+    action_btns = action_btns.child(
+        div()
+            .id(gpui::SharedString::from(format!("vcard-gh-{}", id_str)))
+            .cursor_pointer()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(5.0))
+            .text_size(px(11.5))
+            .text_color(t.text_secondary)
+            .bg(t.card_hover)
+            .border_1()
+            .border_color(t.card_border)
+            .hover(|h| h.bg(t.input_bg))
+            .child(crate::icons::svg_icon(crate::icons::EXTERNAL_LINK_SVG, px(12.0), t.text_secondary))
+            .child(i.t("查看", "View"))
+            .on_click(move |_, _, _| {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("rundll32")
+                        .arg("url.dll,FileProtocolHandler")
+                        .arg(&gh_url_for_open)
+                        .spawn();
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open").arg(&gh_url_for_open).spawn();
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = std::process::Command::new("xdg-open").arg(&gh_url_for_open).spawn();
+                }
+            }),
     );
 
+    // Install / Installed status
+    if is_installed {
+        action_btns = action_btns.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded(px(5.0))
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(crate::rgba_const(0x10b981ff))
+                .bg(crate::rgba_const(0x10b98118))
+                .border_1()
+                .border_color(crate::rgba_const(0x10b98140))
+                .child(crate::icons::svg_icon(crate::icons::CHECK_SVG, px(11.0), crate::rgba_const(0x10b981ff)))
+                .child(i.t("已安装", "Installed")),
+        );
+    } else if is_installing {
+        action_btns = action_btns.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded(px(5.0))
+                .text_size(px(11.5))
+                .text_color(t.text_muted)
+                .bg(t.card_hover)
+                .child(i.t("安装中…", "Installing…")),
+        );
+    } else {
+        let ws_entity_install = ws_entity.clone();
+        let item_for_install = item_clone.clone();
+        action_btns = action_btns.child(
+            div()
+                .id(gpui::SharedString::from(format!("vcard-install-{}", id_str)))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .px(px(9.0))
+                .py(px(4.0))
+                .rounded(px(5.0))
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(gpui::rgb(0xffffff))
+                .bg(t.accent)
+                .hover(|h| h.opacity(0.9))
+                .child(crate::icons::svg_icon(crate::icons::PLUS_SVG, px(12.0), gpui::rgb(0xffffff)))
+                .child(i.t("一键安装", "Install"))
+                .on_click(move |_, _, cx| {
+                    let item_to_install = item_for_install.clone();
+                    ws_entity_install.update(cx, |ws, cx| {
+                        install_store_skill_action(ws, item_to_install, cx);
+                    });
+                }),
+        );
+    }
+
     div()
+        .id(gpui::SharedString::from(format!("store-card-{}", id_str)))
         .flex()
-        .items_center()
+        .flex_col()
         .justify_between()
-        .gap(px(12.0))
-        .p(px(12.0))
+        .h_full()
+        .p(px(10.0))
         .rounded(px(8.0))
         .bg(t.card_bg)
         .border_1()
-        .border_color(if is_installed { t.accent.opacity(0.3) } else { t.card_border })
-        .hover(|h| h.bg(t.card_hover))
+        .border_color(if is_installed { crate::rgba_const(0x10b98140) } else { t.card_border })
+        .hover(|h| h.bg(t.card_hover).border_color(t.accent.opacity(0.4)))
         .child(
             div()
-                .flex_1()
-                .min_w(px(0.0))
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
@@ -2306,35 +3183,57 @@ fn store_skill_card(
                     div()
                         .flex()
                         .items_center()
+                        .justify_between()
                         .gap(px(8.0))
                         .child(
                             div()
-                                .text_size(px(14.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(t.text_primary)
-                                .child(item.name.clone()),
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .min_w(px(0.0))
+                                .child(
+                                    div()
+                                        .text_size(px(13.5))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(t.text_primary)
+                                        .truncate()
+                                        .child(item.name.clone()),
+                                )
+                                .children(show_subpath.then(|| {
+                                    div()
+                                        .text_size(px(11.0))
+                                        .font_family(".AppleSystemUIFontMonospaced, Consolas, monospace")
+                                        .text_color(t.text_muted)
+                                        .truncate()
+                                        .child(item.skill_id.clone())
+                                })),
                         )
-                        .child(badge(
-                            &t,
-                            item.source.clone(),
-                            BadgeKind::Neutral,
-                        ))
-                        .children((item.installs > 0).then(|| {
-                            badge(
-                                &t,
-                                format!("🔥 {} 安装", format_installs(item.installs)),
-                                BadgeKind::Accent,
-                            )
-                        })),
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .flex_shrink_0()
+                                .children((item.installs > 0).then(|| {
+                                    badge(
+                                        t,
+                                        format!("🔥 {}", format_installs(item.installs)),
+                                        BadgeKind::Neutral,
+                                    )
+                                })),
+                        ),
                 )
                 .child(
                     div()
                         .text_size(px(12.0))
                         .text_color(t.text_secondary)
-                        .child(if item.description.is_empty() {
+                        .line_height(gpui::relative(1.3))
+                        .max_h(px(32.0))
+                        .overflow_hidden()
+                        .child(if item.description.trim().is_empty() {
                             format!("来自 {}/{}", item.repo_owner, item.repo_name)
                         } else {
-                            item.description.clone()
+                            item.description.trim().to_string()
                         }),
                 ),
         )
@@ -2342,11 +3241,351 @@ fn store_skill_card(
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.0))
-                .child(gh_btn)
-                .child(install_btn),
+                .justify_between()
+                .pt(px(6.0))
+                .border_t_1()
+                .border_color(t.card_border.opacity(0.5))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(crate::icons::svg_icon(crate::icons::GITHUB_SVG, px(12.0), t.text_muted))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(t.text_muted)
+                                .child(format!("{}/{}", item.repo_owner, item.repo_name)),
+                        ),
+                )
+                .child(action_btns),
         )
         .into_any_element()
+}
+
+fn parse_repo_owner_name(input: &str) -> Option<(String, String)> {
+    let mut s = input.trim();
+    if let Some(rest) = s.strip_prefix("https://github.com/") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("http://github.com/") {
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("git@github.com:") {
+        s = rest;
+    }
+    if let Some(rest) = s.strip_suffix(".git") {
+        s = rest;
+    }
+    let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 2 {
+        Some((parts[0].to_string(), parts[1].to_string()))
+    } else {
+        None
+    }
+}
+
+pub(crate) fn render_skill_repo_manager_modal(
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let store = ws.store.store().skills.clone();
+    let configured_repos = if store.settings.repos.is_empty() {
+        skills::default_skill_repos()
+    } else {
+        store.settings.repos.clone()
+    };
+
+    let url_input = ws.ui.skill_store_new_repo_url.clone();
+    let branch_input = ws.ui.skill_store_new_repo_branch.clone();
+    let url_input_action = url_input.clone();
+    let branch_input_action = branch_input.clone();
+
+    // 1. Add repo form card
+    let add_form = div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .p(px(14.0))
+        .rounded(px(8.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .child(
+            div()
+                .text_size(px(13.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(t.text_primary)
+                .child(i.t("添加自定义 GitHub 技能仓库", "Add GitHub Skill Repository")),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(t.text_secondary)
+                        .child(i.t("仓库地址 (URL 或 owner/repo)", "Repository URL")),
+                )
+                .child(input_container(&t, url_input)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(t.text_secondary)
+                                .child(i.t("默认分支 (默认 main)", "Branch")),
+                        )
+                        .child(input_container(&t, branch_input)),
+                )
+                .child(
+                    div()
+                        .pt(px(18.0))
+                        .child(button_with_icon_l(
+                            "add-repo-btn",
+                            crate::icons::PLUS_SVG,
+                            i.t("添加仓库", "Add Repo"),
+                            ButtonVariant::Primary,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                let raw_url = url_input_action.read(cx).text().trim().to_string();
+                                let mut branch = branch_input_action.read(cx).text().trim().to_string();
+                                if branch.is_empty() {
+                                    branch = "main".to_string();
+                                }
+                                if let Some((owner, name)) = parse_repo_owner_name(&raw_url) {
+                                    let mut store = ws.store.store().skills.clone();
+                                    skills::add_skill_repo(
+                                        &mut store.settings,
+                                        skills::SkillRepo {
+                                            owner: owner.clone(),
+                                            name: name.clone(),
+                                            branch,
+                                            enabled: true,
+                                        },
+                                    );
+                                    let _ = ws.store.update(|db| db.skills = store);
+                                    ws.persist_store();
+                                    url_input_action.update(cx, |inp, cx| inp.set_text_silent("", cx));
+                                    ws.ui.toast(format!("成功添加仓库 {}/{}", owner, name), false);
+                                    cx.notify();
+                                } else {
+                                    ws.ui.toast(
+                                        ws.i18n.t(
+                                            "请输入合法的 GitHub 仓库地址 (如 owner/repo 或完整 GitHub URL)",
+                                            "Please enter a valid GitHub repository (owner/repo or URL)",
+                                        ).to_string(),
+                                        true,
+                                    );
+                                    cx.notify();
+                                }
+                            },
+                        )),
+                ),
+        );
+
+    // 2. Repos list card
+    let mut repo_items = div().flex().flex_col().gap(px(6.0));
+    for repo in configured_repos.clone() {
+        let owner = repo.owner.clone();
+        let name = repo.name.clone();
+        let branch = repo.branch.clone();
+        let repo_tag = format!("{}/{}", owner, name);
+        let repo_url = format!("https://github.com/{}/{}", owner, name);
+        let repo_url_open = repo_url.clone();
+
+        // Skill count for this repo
+        let skill_count = skills::discover_repo_skills(&store, Some(&repo_tag), Some("all"), None).len();
+
+        let owner_for_del = owner.clone();
+        let name_for_del = name.clone();
+
+        let row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .p(px(10.0))
+            .rounded(px(6.0))
+            .bg(t.card_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .hover(|h| h.bg(t.card_hover))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(crate::icons::svg_icon(crate::icons::GITHUB_SVG, px(15.0), t.text_primary))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(t.text_primary)
+                                    .child(repo_tag),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(t.text_muted)
+                                            .child(format!("分支: {branch}")),
+                                    )
+                                    .child(badge(
+                                        &t,
+                                        format!("{skill_count} 个技能"),
+                                        BadgeKind::Neutral,
+                                    )),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .id(gpui::SharedString::from(format!("repo-open-{}", repo_url)))
+                            .cursor_pointer()
+                            .p(px(6.0))
+                            .rounded(px(4.0))
+                            .hover(|h| h.bg(t.input_bg))
+                            .child(crate::icons::svg_icon(crate::icons::EXTERNAL_LINK_SVG, px(13.0), t.text_secondary))
+                            .on_click(move |_, _, _| {
+                                #[cfg(target_os = "windows")]
+                                {
+                                    let _ = std::process::Command::new("rundll32")
+                                        .arg("url.dll,FileProtocolHandler")
+                                        .arg(&repo_url_open)
+                                        .spawn();
+                                }
+                                #[cfg(target_os = "macos")]
+                                {
+                                    let _ = std::process::Command::new("open").arg(&repo_url_open).spawn();
+                                }
+                                #[cfg(target_os = "linux")]
+                                {
+                                    let _ = std::process::Command::new("xdg-open").arg(&repo_url_open).spawn();
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id(gpui::SharedString::from(format!("repo-del-{}-{}", owner, name)))
+                            .cursor_pointer()
+                            .p(px(6.0))
+                            .rounded(px(4.0))
+                            .hover(|h| h.bg(crate::rgba_const(0xef444420)))
+                            .child(crate::icons::svg_icon(crate::icons::TRASH_SVG, px(13.0), crate::rgba_const(0xef4444ff)))
+                            .on_click(cx.listener(move |ws, _, _, cx| {
+                                let mut store = ws.store.store().skills.clone();
+                                skills::remove_skill_repo(&mut store.settings, &owner_for_del, &name_for_del);
+                                let _ = ws.store.update(|db| db.skills = store);
+                                ws.persist_store();
+                                ws.ui.toast(format!("已移除仓库 {}/{}", owner_for_del, name_for_del), false);
+                                cx.notify();
+                            })),
+                    ),
+            );
+
+        repo_items = repo_items.child(row);
+    }
+
+    let repos_list_card = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child(format!("已配置仓库（{}）", configured_repos.len())),
+                ),
+        )
+        .child(
+            div()
+                .id("repo-manager-items-scroll")
+                .max_h(px(260.0))
+                .overflow_y_scroll()
+                .child(repo_items),
+        );
+
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(16.0))
+        .w(px(520.0))
+        .child(
+            div()
+                .text_size(px(12.5))
+                .text_color(t.text_secondary)
+                .line_height(gpui::relative(1.4))
+                .child(i.t(
+                    "配置常用技能源仓库。在「仓库」模式下可快速筛选和一键导入这些仓库中的 Skills。",
+                    "Configure upstream repositories. You can filter and 1-click install skills from these repos in Repos mode.",
+                )),
+        )
+        .child(add_form)
+        .child(repos_list_card)
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .pt(px(4.0))
+                .child(button_l(
+                    "repo-manager-close-btn",
+                    i.t("完成", "Done"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.skill_store_repo_manager_open = false;
+                        cx.notify();
+                    },
+                )),
+        );
+
+    modal_scaffold_sized(
+        &t,
+        &i.t("技能仓库管理", "Manage Skill Repositories"),
+        px(560.0),
+        None,
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.skill_store_repo_manager_open = false;
+            cx.notify();
+        },
+    )
 }
 
 fn scan_and_import_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
@@ -2391,24 +3630,69 @@ fn scan_and_import_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 
 pub(crate) fn trigger_store_search(ws: &mut Workspace, query: String, cx: &mut Context<Workspace>) {
     ws.ui.skill_store_query = query.clone();
+    ws.ui.skill_store_offset = 0;
     ws.ui.skill_store_loading = true;
+    ws.ui.skill_store_error = None;
+    ws.ui.skill_store_results.clear();
     cx.notify();
 
     let weak = cx.entity().downgrade();
     cx.spawn(async move |_this, cx| {
         let q = query.clone();
         let res = cx
-            .background_spawn(async move { skills::search_skills_store(&q, 30, 0) })
+            .background_spawn(async move { skills::search_skills_store(&q, 20, 0) })
             .await;
 
         let _ = weak.update(cx, |ws, cx| {
             ws.ui.skill_store_loading = false;
             match res {
                 Ok(result) => {
+                    ws.ui.skill_store_error = None;
+                    ws.ui.skill_store_has_more = result.skills.len() >= 20;
                     ws.ui.skill_store_results = result.skills;
                 }
                 Err(e) => {
+                    ws.ui.skill_store_error = Some(e.clone());
                     ws.ui.toast(format!("搜索失败: {e}"), true);
+                }
+            }
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+pub(crate) fn load_more_store_search(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.skill_store_loading {
+        return;
+    }
+    let next_offset = ws.ui.skill_store_offset + 20;
+    ws.ui.skill_store_offset = next_offset;
+    ws.ui.skill_store_loading = true;
+    cx.notify();
+
+    let weak = cx.entity().downgrade();
+    let query = ws.ui.skill_store_query.clone();
+    cx.spawn(async move |_this, cx| {
+        let q = query.clone();
+        let res = cx
+            .background_spawn(async move { skills::search_skills_store(&q, 20, next_offset) })
+            .await;
+
+        let _ = weak.update(cx, |ws, cx| {
+            ws.ui.skill_store_loading = false;
+            match res {
+                Ok(result) => {
+                    let len = result.skills.len();
+                    ws.ui.skill_store_has_more = len >= 20;
+                    for skill in result.skills {
+                        if !ws.ui.skill_store_results.iter().any(|s| s.id == skill.id) {
+                            ws.ui.skill_store_results.push(skill);
+                        }
+                    }
+                }
+                Err(e) => {
+                    ws.ui.toast(format!("加载更多失败: {e}"), true);
                 }
             }
             cx.notify();
@@ -2502,6 +3786,37 @@ fn import_skill_dir(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     .detach();
 }
 
+fn install_from_zip_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    let weak = cx.entity().downgrade();
+    let paths = ws.paths.clone();
+
+    cx.spawn(async move |_this, cx| {
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title("选择包含 Skill 的 ZIP 压缩包")
+            .add_filter("ZIP 压缩包 (*.zip)", &["zip"]);
+        if let Some(file_handle) = dialog.pick_file().await {
+            let zip_path = file_handle.path().to_path_buf();
+            let _ = weak.update(cx, |ws, cx| {
+                let mut store = ws.store.store().skills.clone();
+                match skills::install_from_zip(&paths, &mut store, &zip_path) {
+                    Ok(installed) => {
+                        let _ = ws.store.update(|db| db.skills = store);
+                        ws.persist_store();
+                        let count = installed.len();
+                        let names = installed.join(", ");
+                        ws.ui.toast(format!("成功从 ZIP 安装 {count} 个技能: {names}"), false);
+                    }
+                    Err(e) => {
+                        ws.ui.toast(format!("ZIP 安装失败: {e}"), true);
+                    }
+                }
+                cx.notify();
+            });
+        }
+    })
+    .detach();
+}
+
 fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let i = ws.i18n;
     let report = {
@@ -2528,3 +3843,36 @@ fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     ws.ui.toast(msg.to_string(), total_failed > 0);
     cx.notify();
 }
+
+fn check_and_update_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    let i = ws.i18n;
+    let (updated, failed) = {
+        let mut store = ws.store.store().skills.clone();
+        let res = skills::update_all_skills(&mut store, &ws.paths);
+        let _ = ws.store.update(|db| db.skills = store);
+        res
+    };
+    ws.persist_store();
+    let msg = if updated > 0 {
+        i.t(
+            &format!("检查完成：已更新 {updated} 个技能"),
+            &format!("Check complete: updated {updated} skills"),
+        )
+        .to_string()
+    } else if failed > 0 {
+        i.t(
+            &format!("检查完成：{failed} 个技能更新失败，请检查网络"),
+            &format!("Check complete: {failed} skills failed to update"),
+        )
+        .to_string()
+    } else {
+        i.t(
+            "检查完成：所有已安装技能均为最新版本",
+            "Check complete: all skills are up to date",
+        )
+        .to_string()
+    };
+    ws.ui.toast(msg, failed > 0);
+    cx.notify();
+}
+

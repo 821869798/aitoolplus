@@ -9,12 +9,194 @@ use std::time::Duration;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IntoElement, KeyDownEvent,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, Hsla, IntoElement, KeyDownEvent,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, div, fill, hsla, point,
+    ScrollHandle, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, div, fill, hsla, point,
     prelude::*, px, relative, rgba, size,
 };
 use unicode_segmentation::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyntaxMode {
+    #[default]
+    Plain,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonTokenType {
+    Key,
+    StringValue,
+    Number,
+    Boolean,
+    Null,
+    Punctuation,
+    Comment,
+    Plain,
+}
+
+pub fn tokenize_json_line(line: &str) -> Vec<(Range<usize>, JsonTokenType)> {
+    let mut tokens = Vec::new();
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        let b = bytes[i];
+
+        // Whitespace
+        if b == b' ' || b == b'\t' || b == b'\r' || b == b'\n' {
+            let start = i;
+            while i < len
+                && (bytes[i] == b' '
+                    || bytes[i] == b'\t'
+                    || bytes[i] == b'\r'
+                    || bytes[i] == b'\n')
+            {
+                i += 1;
+            }
+            tokens.push((start..i, JsonTokenType::Plain));
+            continue;
+        }
+
+        // Comment // ...
+        if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
+            tokens.push((i..len, JsonTokenType::Comment));
+            break;
+        }
+
+        // String "..."
+        if b == b'"' {
+            let start = i;
+            i += 1;
+            let mut escaped = false;
+            while i < len {
+                let c = bytes[i];
+                if escaped {
+                    escaped = false;
+                } else if c == b'\\' {
+                    escaped = true;
+                } else if c == b'"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            let str_range = start..i;
+
+            // Check if this string is followed by ':' (skipping whitespace), making it an object key
+            let mut j = i;
+            while j < len && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            if j < len && bytes[j] == b':' {
+                tokens.push((str_range, JsonTokenType::Key));
+            } else {
+                tokens.push((str_range, JsonTokenType::StringValue));
+            }
+            continue;
+        }
+
+        // Punctuation
+        if b == b'{' || b == b'}' || b == b'[' || b == b']' || b == b':' || b == b',' {
+            tokens.push((i..i + 1, JsonTokenType::Punctuation));
+            i += 1;
+            continue;
+        }
+
+        // Number (e.g. -123, 0.45, 1e10)
+        if b == b'-' || (b.is_ascii_digit()) {
+            let start = i;
+            if b == b'-' {
+                i += 1;
+            }
+            while i < len
+                && (bytes[i].is_ascii_digit()
+                    || bytes[i] == b'.'
+                    || bytes[i] == b'e'
+                    || bytes[i] == b'E'
+                    || bytes[i] == b'+'
+                    || bytes[i] == b'-')
+            {
+                i += 1;
+            }
+            tokens.push((start..i, JsonTokenType::Number));
+            continue;
+        }
+
+        // Identifiers: true, false, null
+        if b.is_ascii_alphabetic() {
+            let start = i;
+            while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let word = &line[start..i];
+            let token_type = match word {
+                "true" | "false" => JsonTokenType::Boolean,
+                "null" => JsonTokenType::Null,
+                _ => JsonTokenType::Plain,
+            };
+            tokens.push((start..i, token_type));
+            continue;
+        }
+
+        // Any other character (UTF-8 safe step)
+        let ch = line[i..].chars().next().unwrap_or(' ');
+        let start = i;
+        i += ch.len_utf8();
+        tokens.push((start..i, JsonTokenType::Plain));
+    }
+
+    tokens
+}
+
+fn json_token_color(token: JsonTokenType, is_dark: bool, default_color: Hsla) -> Hsla {
+    match token {
+        JsonTokenType::Key => {
+            if is_dark {
+                hsla(199.0 / 360.0, 0.89, 0.65, 1.0) // Sky-400 (#38bdf8)
+            } else {
+                hsla(199.0 / 360.0, 0.89, 0.40, 1.0) // Sky-600 (#0284c7)
+            }
+        }
+        JsonTokenType::StringValue => {
+            if is_dark {
+                hsla(142.0 / 360.0, 0.71, 0.60, 1.0) // Emerald-400 (#4ade80)
+            } else {
+                hsla(142.0 / 360.0, 0.76, 0.36, 1.0) // Emerald-600 (#16a34a)
+            }
+        }
+        JsonTokenType::Number => {
+            if is_dark {
+                hsla(38.0 / 360.0, 0.92, 0.60, 1.0) // Amber-400 (#fbbf24)
+            } else {
+                hsla(38.0 / 360.0, 0.92, 0.40, 1.0) // Amber-600 (#d97706)
+            }
+        }
+        JsonTokenType::Boolean | JsonTokenType::Null => {
+            if is_dark {
+                hsla(263.0 / 360.0, 0.85, 0.70, 1.0) // Purple-400 (#c084fc)
+            } else {
+                hsla(263.0 / 360.0, 0.85, 0.45, 1.0) // Purple-600 (#9333ea)
+            }
+        }
+        JsonTokenType::Punctuation => {
+            if is_dark {
+                hsla(215.0 / 360.0, 0.15, 0.65, 1.0) // Slate-400 (#94a3b8)
+            } else {
+                hsla(215.0 / 360.0, 0.16, 0.47, 1.0) // Slate-600 (#475569)
+            }
+        }
+        JsonTokenType::Comment => {
+            if is_dark {
+                hsla(215.0 / 360.0, 0.10, 0.45, 1.0) // Slate-500 (#64748b)
+            } else {
+                hsla(215.0 / 360.0, 0.10, 0.60, 1.0) // Slate-400 (#94a3b8)
+            }
+        }
+        JsonTokenType::Plain => default_color,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextAreaEvent {
@@ -175,6 +357,7 @@ fn wrap_logical_line(
 
 pub struct TextArea {
     pub focus_handle: FocusHandle,
+    pub scroll_handle: ScrollHandle,
     pub content: String,
     pub placeholder: String,
     pub selected_range: Range<usize>,
@@ -190,6 +373,8 @@ pub struct TextArea {
     pub drag_anchor: Option<usize>,
     pub read_only: bool,
     pub borderless: bool,
+    pub syntax_mode: SyntaxMode,
+    pub error_location: Option<(usize, usize)>,
     _blink_task: Option<gpui::Task<()>>,
 }
 
@@ -199,6 +384,7 @@ impl TextArea {
     pub fn new(placeholder: impl Into<String>, cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            scroll_handle: ScrollHandle::new(),
             content: String::new(),
             placeholder: placeholder.into(),
             selected_range: 0..0,
@@ -214,6 +400,8 @@ impl TextArea {
             drag_anchor: None,
             read_only: false,
             borderless: true,
+            syntax_mode: SyntaxMode::Plain,
+            error_location: None,
             _blink_task: None,
         }
     }
@@ -254,6 +442,16 @@ impl TextArea {
 
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
         self.soft_wrap = soft_wrap;
+        cx.notify();
+    }
+
+    pub fn set_syntax_mode(&mut self, mode: SyntaxMode, cx: &mut Context<Self>) {
+        self.syntax_mode = mode;
+        cx.notify();
+    }
+
+    pub fn set_error_location(&mut self, loc: Option<(usize, usize)>, cx: &mut Context<Self>) {
+        self.error_location = loc;
         cx.notify();
     }
 
@@ -905,7 +1103,6 @@ impl gpui::Render for TextArea {
             .track_focus(&self.focus_handle)
             .cursor_text()
             .w_full()
-            .h_full()
             .min_h(relative(1.))
             .p(px(10.0))
             .when(!self.borderless, |d| {
@@ -981,6 +1178,8 @@ impl Element for TextAreaElement {
         let ta = self.input.read(cx);
         let line_count = if !ta.visual_lines.is_empty() {
             ta.visual_lines.len()
+        } else if ta.content.is_empty() {
+            ta.placeholder.split(NL_CH).count().max(1)
         } else {
             ta.content.split(NL_CH).count().max(1)
         };
@@ -1023,7 +1222,7 @@ impl Element for TextAreaElement {
         let mut visual_lines = Vec::new();
 
         let all_lines: Vec<String> = if content.is_empty() {
-            vec![placeholder.clone()]
+            placeholder.split(NL_CH).map(String::from).collect()
         } else {
             content.split(NL_CH).map(String::from).collect()
         };
@@ -1031,7 +1230,7 @@ impl Element for TextAreaElement {
         let wrap_width = (bounds.size.width - px(4.0)).max(px(50.0));
 
         let mut byte_offset = 0usize;
-        for line_text in all_lines.iter() {
+        for (line_idx, line_text) in all_lines.iter().enumerate() {
             let line_start = byte_offset;
             let line_end = line_start + line_text.len();
             byte_offset = line_end + 1;
@@ -1094,6 +1293,49 @@ impl Element for TextAreaElement {
                         strikethrough: None,
                     }]
                 }
+            } else if ta.syntax_mode == SyntaxMode::Json && !is_placeholder {
+                let is_dark = style.color.l > 0.5;
+                let tokens = tokenize_json_line(line_text);
+                let err_col_0 = if let Some((el, ec)) = ta.error_location {
+                    if el == line_idx + 1 {
+                        Some(ec.saturating_sub(1).min(line_text.len()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let mut r = Vec::new();
+                for (range, ttype) in tokens {
+                    let col = json_token_color(ttype, is_dark, color);
+                    let is_err = if let Some(ec0) = err_col_0 {
+                        (range.start <= ec0 && ec0 < range.end)
+                            || (ec0 >= line_text.len() && range.end == line_text.len())
+                    } else {
+                        false
+                    };
+
+                    let underline = if is_err {
+                        Some(UnderlineStyle {
+                            color: Some(rgba(0xef4444ff).into()),
+                            thickness: px(1.5),
+                            wavy: true,
+                        })
+                    } else {
+                        None
+                    };
+
+                    r.push(TextRun {
+                        len: range.len(),
+                        font: style.font(),
+                        color: col,
+                        background_color: None,
+                        underline,
+                        strikethrough: None,
+                    });
+                }
+                r
             } else {
                 vec![TextRun {
                     len: line_text.len(),
@@ -1340,5 +1582,24 @@ mod tests {
         assert!(!check_matches(12, 0, 3, 0..5));
         assert!(!check_matches(12, 1, 3, 6..6));
         assert!(check_matches(12, 2, 3, 7..12));
+    }
+
+    #[test]
+    fn test_tokenize_json_line() {
+        let line = r#"  "mcpServers": { "github": { "command": "npx", "args": [-1, 2.5, true, false, null] } } // comment"#;
+        let tokens = tokenize_json_line(line);
+        let key_count = tokens.iter().filter(|(_, t)| *t == JsonTokenType::Key).count();
+        let str_count = tokens.iter().filter(|(_, t)| *t == JsonTokenType::StringValue).count();
+        let num_count = tokens.iter().filter(|(_, t)| *t == JsonTokenType::Number).count();
+        let bool_count = tokens.iter().filter(|(_, t)| *t == JsonTokenType::Boolean).count();
+        let null_count = tokens.iter().filter(|(_, t)| *t == JsonTokenType::Null).count();
+        let comment_count = tokens.iter().filter(|(_, t)| *t == JsonTokenType::Comment).count();
+
+        assert_eq!(key_count, 4); // "mcpServers":, "github":, "command":, "args":
+        assert_eq!(str_count, 1); // "npx"
+        assert_eq!(num_count, 2); // -1, 2.5
+        assert_eq!(bool_count, 2); // true, false
+        assert_eq!(null_count, 1); // null
+        assert_eq!(comment_count, 1); // // comment
     }
 }
