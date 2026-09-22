@@ -40,10 +40,10 @@ pub fn unprotect_secret(stored: &str) -> String {
     if stored.is_empty() {
         return String::new();
     }
-    if let Some(encoded) = stored.strip_prefix(DPAPI_PREFIX) {
+    if let Some(_encoded) = stored.strip_prefix(DPAPI_PREFIX) {
         #[cfg(target_os = "windows")]
         {
-            let cipher = match base64::engine::general_purpose::STANDARD.decode(encoded.trim()) {
+            let cipher = match base64::engine::general_purpose::STANDARD.decode(_encoded.trim()) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     tracing::warn!("invalid base64 in DPAPI secret: {e}");

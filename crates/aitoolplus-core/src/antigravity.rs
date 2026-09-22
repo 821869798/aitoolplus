@@ -1449,7 +1449,7 @@ pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::paths::home_dir() {
             for folder_name in folder_names {
                 paths.push(home.join(format!(
                     ".config/{}/User/globalStorage/state.vscdb",
@@ -2069,9 +2069,11 @@ pub fn switch_account_target(
 }
 
 /// Write device profile to VS Code / Antigravity IDE storage.json if present.
-pub fn write_device_profile_to_storage(target: Option<&str>, profile: &DeviceProfile) -> Result<(), String> {
+pub fn write_device_profile_to_storage(_target: Option<&str>, _profile: &DeviceProfile) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        let target = _target;
+        let profile = _profile;
         let appdata = match std::env::var("APPDATA") {
             Ok(v) => v,
             Err(_) => return Ok(()),

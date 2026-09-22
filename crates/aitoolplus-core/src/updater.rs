@@ -490,17 +490,17 @@ pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String>
             downloaded_asset.display()
         ));
     }
-    let filename = downloaded_asset
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-
-    let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let current_pid = std::process::id();
-
     #[cfg(target_os = "windows")]
     {
+        let filename = downloaded_asset
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let current_pid = std::process::id();
+
         if filename.contains("setup")
             || filename.contains("installer")
             || filename.ends_with(".msi")
