@@ -1129,6 +1129,25 @@ pub fn segmented_tab_bar<V: 'static, T: PartialEq + Copy + 'static>(
     cx: &mut Context<V>,
     on_select: impl Fn(&mut V, T, &mut Window, &mut Context<V>) + 'static + Copy,
 ) -> gpui::AnyElement {
+    segmented_tab_bar_with_dots(
+        id_prefix,
+        tabs.into_iter().map(|(t, l)| (t, l, false)).collect(),
+        active_tab,
+        theme,
+        cx,
+        on_select,
+    )
+}
+
+/// Segmented tab bar with optional notification dot per tab.
+pub fn segmented_tab_bar_with_dots<V: 'static, T: PartialEq + Copy + 'static>(
+    id_prefix: &'static str,
+    tabs: Vec<(T, SharedString, bool)>,
+    active_tab: T,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_select: impl Fn(&mut V, T, &mut Window, &mut Context<V>) + 'static + Copy,
+) -> gpui::AnyElement {
     let t = theme.clone();
 
     let mut row = div()
@@ -1143,7 +1162,7 @@ pub fn segmented_tab_bar<V: 'static, T: PartialEq + Copy + 'static>(
         .border_1()
         .border_color(t.card_border);
 
-    for (tab_val, label) in tabs {
+    for (tab_val, label, show_dot) in tabs {
         let is_active = tab_val == active_tab;
         let tab_theme = t.clone();
 
@@ -1156,6 +1175,7 @@ pub fn segmented_tab_bar<V: 'static, T: PartialEq + Copy + 'static>(
             .flex()
             .items_center()
             .justify_center()
+            .gap(px(6.0))
             .text_size(px(12.5))
             .when(is_active, |s| {
                 s.bg(tab_theme.tab_active_bg)
@@ -1172,6 +1192,15 @@ pub fn segmented_tab_bar<V: 'static, T: PartialEq + Copy + 'static>(
                     })
             })
             .child(label)
+            .when(show_dot, |s| {
+                s.child(
+                    div()
+                        .w(px(6.5))
+                        .h(px(6.5))
+                        .rounded_full()
+                        .bg(tab_theme.danger),
+                )
+            })
             .on_click(cx.listener(move |view, _ev: &gpui::ClickEvent, window, cx| {
                 on_select(view, tab_val, window, cx);
             }));

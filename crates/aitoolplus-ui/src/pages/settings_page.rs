@@ -15,19 +15,26 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    let tabs = [
-        (SettingsTab::General, i.t("通用", "General")),
-        (SettingsTab::DataImport, i.t("数据导入", "Data Import")),
-        (SettingsTab::Usage, i.t("使用统计", "Usage Statistics")),
-        (SettingsTab::Backup, i.t("备份", "Backup")),
-        (SettingsTab::Advanced, i.t("高级选项", "Advanced")),
-        (SettingsTab::About, i.t("关于", "About")),
+    let has_update = ws
+        .ui
+        .update_info
+        .as_ref()
+        .map(|u| u.update_available)
+        .unwrap_or(false);
+
+    let tabs = vec![
+        (SettingsTab::General, i.t("通用", "General"), false),
+        (SettingsTab::DataImport, i.t("数据导入", "Data Import"), false),
+        (SettingsTab::Usage, i.t("使用统计", "Usage Statistics"), false),
+        (SettingsTab::Backup, i.t("备份", "Backup"), false),
+        (SettingsTab::Advanced, i.t("高级选项", "Advanced"), false),
+        (SettingsTab::About, i.t("关于", "About"), has_update),
     ];
 
     let current_tab = ws.ui.settings_tab;
-    let tab_bar = crate::components::segmented_tab_bar(
+    let tab_bar = crate::components::segmented_tab_bar_with_dots(
         "settings",
-        tabs.to_vec(),
+        tabs,
         current_tab,
         &t,
         cx,
@@ -3367,18 +3374,9 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                             &t,
                             cx,
                             move |ws, _, _, cx| {
-                                match aitoolplus_core::updater::install_update_and_restart(
-                                    &path_for_install,
-                                ) {
-                                    Ok(()) => {}
-                                    Err(error) => {
-                                        ws.ui.toast(
-                                            format!("更新失败: {error}"),
-                                            true,
-                                        );
-                                        cx.notify();
-                                    }
-                                }
+                                ws.ui.update_install_confirm_dialog =
+                                    Some(path_for_install.clone());
+                                cx.notify();
                             },
                         ))
                         .child(button_l(
@@ -3608,6 +3606,8 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                     match result {
                                         Ok(path) => {
                                             ws.ui.downloaded_update_asset_path =
+                                                Some(path.clone());
+                                            ws.ui.update_install_confirm_dialog =
                                                 Some(path.clone());
                                             ws.ui.toast(
                                                 ws.i18n

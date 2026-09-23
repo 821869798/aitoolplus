@@ -115,6 +115,7 @@ pub struct WorkspaceState {
     pub restore_conflict_strategy: aitoolplus_core::backup::ConflictStrategy,
     pub restore_allow_custom_absolute: bool,
     pub downloaded_update_asset_path: Option<std::path::PathBuf>,
+    pub update_install_confirm_dialog: Option<std::path::PathBuf>,
     pub provider_test_results:
         std::collections::BTreeMap<String, aitoolplus_core::api_hub::ConnectivityResult>,
     pub update_info: Option<aitoolplus_core::updater::UpdateInfo>,
@@ -778,6 +779,7 @@ impl WorkspaceState {
             restore_conflict_strategy: aitoolplus_core::backup::ConflictStrategy::Overwrite,
             restore_allow_custom_absolute: false,
             downloaded_update_asset_path: None,
+            update_install_confirm_dialog: None,
             provider_test_results: Default::default(),
             update_info: None,
             update_checking: false,
@@ -1164,6 +1166,7 @@ impl WorkspaceState {
             || self.antigravity_details_account.is_some()
             || self.antigravity_device_account.is_some()
             || self.antigravity_editing_label.is_some()
+            || self.update_install_confirm_dialog.is_some()
     }
 
     /// Resolve or lazily create the common-config editor for a tool.
@@ -1388,6 +1391,163 @@ pub fn render_confirm_dialog(
         ws.ui.confirm = None;
         cx.notify();
     })
+}
+
+pub fn render_update_install_dialog(
+    asset_path: std::path::PathBuf,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    let title = i.t("安装新版本更新", "Install Application Update");
+    let version_text = if let Some(info) = &ws.ui.update_info {
+        format!("v{} → v{}", info.current_version, info.latest_version)
+    } else {
+        String::new()
+    };
+
+    let filename = asset_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    let path_clone = asset_path.clone();
+
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(14.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .w(px(36.0))
+                        .h(px(36.0))
+                        .rounded(px(8.0))
+                        .bg(t.accent.opacity(0.12))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(crate::icons::svg_icon(
+                            crate::icons::DOWNLOAD_SVG,
+                            px(20.0),
+                            t.accent,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(t.text_primary)
+                                .child(i.t(
+                                    "新版本更新包已下载完成",
+                                    "Update Package Downloaded Successfully",
+                                )),
+                        )
+                        .when(!version_text.is_empty(), |s| {
+                            s.child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(t.accent)
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child(version_text),
+                            )
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .p(px(12.0))
+                .rounded(px(6.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .line_height(gpui::relative(1.5))
+                        .text_color(t.text_secondary)
+                        .child(i.t(
+                            "安装包已通过 SHA-256 安全校验，是否立即退出当前应用并运行安装程序进行升级？",
+                            "The update package has passed SHA-256 verification. Would you like to exit the app and launch the installer now?",
+                        )),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(t.text_muted)
+                        .child(format!("{}: {}", i.t("安装包文件", "File"), filename)),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(t.success)
+                        .child(i.t(
+                            "✓ 个人数据与配置统一保存在 ~/.aitoolplus，升级不受任何影响",
+                            "✓ All configurations in ~/.aitoolplus are safe and will be preserved",
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .items_center()
+                .gap(px(8.0))
+                .child(button_l(
+                    "install-update-later-btn",
+                    i.t("稍后安装", "Install Later"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.update_install_confirm_dialog = None;
+                        cx.notify();
+                    },
+                ))
+                .child(button_l(
+                    "install-update-now-btn",
+                    i.t("立即安装并重启", "Install and Restart Now"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        ws.ui.update_install_confirm_dialog = None;
+                        ws.ui.downloaded_update_asset_path = None;
+                        if let Err(e) =
+                            aitoolplus_core::updater::install_update_and_restart(&path_clone)
+                        {
+                            ws.ui.toast(format!("启动安装程序失败: {e}"), true);
+                            cx.notify();
+                        }
+                    },
+                )),
+        );
+
+    modal_scaffold_sized(
+        &t,
+        &title,
+        px(480.0),
+        None,
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.update_install_confirm_dialog = None;
+            cx.notify();
+        },
+    )
 }
 
 fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<Workspace>) {

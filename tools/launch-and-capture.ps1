@@ -72,6 +72,7 @@ if ($env:AITOOLPLUS_TEST_UPDATE) { $psi.EnvironmentVariables['AITOOLPLUS_TEST_UP
 if ($env:AITOOLPLUS_CURRENT_VERSION) { $psi.EnvironmentVariables['AITOOLPLUS_CURRENT_VERSION'] = $env:AITOOLPLUS_CURRENT_VERSION }
 if ($env:AITOOLPLUS_FORCE_PORTABLE) { $psi.EnvironmentVariables['AITOOLPLUS_FORCE_PORTABLE'] = $env:AITOOLPLUS_FORCE_PORTABLE }
 if ($env:AITOOLPLUS_FORCE_INSTALLER) { $psi.EnvironmentVariables['AITOOLPLUS_FORCE_INSTALLER'] = $env:AITOOLPLUS_FORCE_INSTALLER }
+if ($env:AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL) { $psi.EnvironmentVariables['AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL'] = $env:AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL }
 
 $launched = [System.Diagnostics.Process]::Start($psi)
 Write-Host "launched pid=$($launched.Id) page=$Page tab=$Tab"

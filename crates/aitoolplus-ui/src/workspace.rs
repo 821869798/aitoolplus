@@ -290,6 +290,11 @@ impl Workspace {
             }
         }
 
+        if std::env::var("AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL").is_ok() {
+            ws.ui.update_install_confirm_dialog =
+                Some(ws.paths.app_data.join("updates").join("aitoolplus-setup.exe"));
+        }
+
         if let Ok(mcp_name_or_id) = std::env::var("AITOOLPLUS_OPEN_MCP") {
             if mcp_name_or_id == "first" {
                 if let Some(s) = ws.store.store().mcp.servers.first() {
@@ -984,6 +989,7 @@ impl Render for Workspace {
             let antigravity_details = self.ui.antigravity_details_account.clone();
             let antigravity_device = self.ui.antigravity_device_account.clone();
             let antigravity_label_edit = self.ui.antigravity_editing_label.clone();
+            let update_install_confirm = self.ui.update_install_confirm_dialog.clone();
             let mut out = vec![];
             if let Some(d) = dialogs {
                 out.push(pages::tool_page::render_provider_dialog(d, self, cx));
@@ -1078,6 +1084,9 @@ impl Render for Workspace {
             }
             if let Some((id, input)) = antigravity_label_edit {
                 out.push(pages::antigravity_page::render_label_edit_dialog(&id, input, self, cx));
+            }
+            if let Some(path) = update_install_confirm {
+                out.push(pages::render_update_install_dialog(path, self, cx));
             }
             out
         } else {
