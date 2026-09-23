@@ -5,6 +5,7 @@
 //! to the local Windows user profile. When read, legacy plaintext passwords
 //! and unprotected strings are parsed transparently for backward compatibility.
 
+#[cfg(target_os = "windows")]
 use base64::Engine;
 
 const DPAPI_PREFIX: &str = "dpapi:";

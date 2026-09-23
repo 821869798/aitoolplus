@@ -4,28 +4,36 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
+#[cfg(windows)]
 use windows::Win32::System::Threading::CreateMutexW;
+#[cfg(windows)]
 use windows::core::PCWSTR;
 
 const IPC_ADDRESS: &str = "127.0.0.1:43827";
 
 pub struct Claim {
+    #[cfg(windows)]
     handle: windows::Win32::Foundation::HANDLE,
     receiver: Option<mpsc::Receiver<String>>,
 }
 
 /// Returns None if another instance is already running.
 pub fn acquire() -> Option<Claim> {
-    let name: Vec<u16> = "Global\\aitoolplus-single-instance"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let handle = unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) }.ok()?;
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        let _ = unsafe { CloseHandle(handle) };
-        return None;
-    }
+    #[cfg(windows)]
+    let handle = {
+        let name: Vec<u16> = "Global\\aitoolplus-single-instance"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let handle = unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) }.ok()?;
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            let _ = unsafe { CloseHandle(handle) };
+            return None;
+        }
+        handle
+    };
 
     let listener = TcpListener::bind(IPC_ADDRESS).ok()?;
     let (sender, receiver) = mpsc::channel();
@@ -47,6 +55,7 @@ pub fn acquire() -> Option<Claim> {
         .ok()?;
 
     Some(Claim {
+        #[cfg(windows)]
         handle,
         receiver: Some(receiver),
     })
@@ -141,69 +150,77 @@ pub fn pump_messages(
 
 /// Register `aitoolbox://` for the current user (Windows, no elevation).
 pub fn register_protocol() -> Result<(), String> {
-    use windows::Win32::System::Registry::{
-        HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-        RegCreateKeyExW, RegSetValueExW,
-    };
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-    fn set_default(subkey: &str, value: &str) -> Result<(), String> {
-        let subkey = wide(subkey);
-        let mut key = windows::Win32::System::Registry::HKEY::default();
-        let status = unsafe {
-            RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(subkey.as_ptr()),
-                None,
-                None,
-                REG_OPTION_NON_VOLATILE,
-                KEY_SET_VALUE,
-                None,
-                &mut key,
-                None,
-            )
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Registry::{
+            HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
+            RegCreateKeyExW, RegSetValueExW,
         };
-        if status != windows::Win32::Foundation::ERROR_SUCCESS {
-            return Err(format!("create protocol key failed: {}", status.0));
+
+        fn wide(value: &str) -> Vec<u16> {
+            value.encode_utf16().chain(std::iter::once(0)).collect()
         }
-        let value = wide(value);
-        let bytes =
-            unsafe { std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), value.len() * 2) };
-        let status = unsafe { RegSetValueExW(key, PCWSTR::null(), None, REG_SZ, Some(bytes)) };
-        let _ = unsafe { RegCloseKey(key) };
-        if status == windows::Win32::Foundation::ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Err(format!("write protocol key failed: {}", status.0))
+        fn set_default(subkey: &str, value: &str) -> Result<(), String> {
+            let subkey = wide(subkey);
+            let mut key = windows::Win32::System::Registry::HKEY::default();
+            let status = unsafe {
+                RegCreateKeyExW(
+                    HKEY_CURRENT_USER,
+                    PCWSTR(subkey.as_ptr()),
+                    None,
+                    None,
+                    REG_OPTION_NON_VOLATILE,
+                    KEY_SET_VALUE,
+                    None,
+                    &mut key,
+                    None,
+                )
+            };
+            if status != windows::Win32::Foundation::ERROR_SUCCESS {
+                return Err(format!("create protocol key failed: {}", status.0));
+            }
+            let value = wide(value);
+            let bytes =
+                unsafe { std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), value.len() * 2) };
+            let status = unsafe { RegSetValueExW(key, PCWSTR::null(), None, REG_SZ, Some(bytes)) };
+            let _ = unsafe { RegCloseKey(key) };
+            if status == windows::Win32::Foundation::ERROR_SUCCESS {
+                Ok(())
+            } else {
+                Err(format!("write protocol key failed: {}", status.0))
+            }
         }
+
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        let cmd = format!("\"{}\" \"%1\"", executable.display());
+
+        // Register aitoolplus:// (primary)
+        set_default("Software\\Classes\\aitoolplus", "URL:AI ToolPlus Protocol")?;
+        set_default("Software\\Classes\\aitoolplus\\URL Protocol", "")?;
+        set_default(
+            "Software\\Classes\\aitoolplus\\shell\\open\\command",
+            &cmd,
+        )?;
+
+        // Register aitoolbox:// (legacy compatibility)
+        set_default("Software\\Classes\\aitoolbox", "URL:AI ToolPlus Protocol")?;
+        set_default("Software\\Classes\\aitoolbox\\URL Protocol", "")?;
+        set_default(
+            "Software\\Classes\\aitoolbox\\shell\\open\\command",
+            &cmd,
+        )?;
+
+        Ok(())
     }
-
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let cmd = format!("\"{}\" \"%1\"", executable.display());
-
-    // Register aitoolplus:// (primary)
-    set_default("Software\\Classes\\aitoolplus", "URL:AI ToolPlus Protocol")?;
-    set_default("Software\\Classes\\aitoolplus\\URL Protocol", "")?;
-    set_default(
-        "Software\\Classes\\aitoolplus\\shell\\open\\command",
-        &cmd,
-    )?;
-
-    // Register aitoolbox:// (legacy compatibility)
-    set_default("Software\\Classes\\aitoolbox", "URL:AI ToolPlus Protocol")?;
-    set_default("Software\\Classes\\aitoolbox\\URL Protocol", "")?;
-    set_default(
-        "Software\\Classes\\aitoolbox\\shell\\open\\command",
-        &cmd,
-    )?;
-
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        Ok(())
+    }
 }
 
 impl Drop for Claim {
     fn drop(&mut self) {
+        #[cfg(windows)]
         let _ = unsafe { CloseHandle(self.handle) };
     }
 }

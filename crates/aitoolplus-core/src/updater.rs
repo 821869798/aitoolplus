@@ -311,7 +311,7 @@ pub fn best_asset(info: &UpdateInfo) -> Option<&UpdateAsset> {
     best_asset_for_mode(info, is_installer_installed())
 }
 
-pub fn best_asset_for_mode(info: &UpdateInfo, is_installer: bool) -> Option<&UpdateAsset> {
+pub fn best_asset_for_mode(info: &UpdateInfo, #[allow(unused_variables)] is_installer: bool) -> Option<&UpdateAsset> {
     let valid_assets: Vec<&UpdateAsset> = info
         .assets
         .iter()

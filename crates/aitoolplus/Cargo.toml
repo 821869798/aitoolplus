@@ -25,9 +25,13 @@ async-channel.workspace = true
 rfd.workspace = true
 notify = "7"
 
-# Default features pull in gtk / libxdo which are Linux-only.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 tray-icon = { version = "0.24", default-features = false }
 muda = { version = "0.19", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
+muda = { version = "0.19", default-features = false, features = ["gtk"] }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
