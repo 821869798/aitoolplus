@@ -397,6 +397,8 @@ pub struct AppSettings {
     /// Remembered window bounds (x, y, w, h). Restored on launch.
     #[serde(default)]
     pub window_bounds: Option<(i32, i32, u32, u32)>,
+    #[serde(default = "default_true")]
+    pub usage_auto_scan_sessions: bool,
     #[serde(default)]
     pub last_page: String,
 }
@@ -459,6 +461,7 @@ impl Default for AppSettings {
             antigravity_auto_sync: true,
             last_antigravity_refresh_time: None,
             window_bounds: None,
+            usage_auto_scan_sessions: true,
             last_page: String::new(),
         }
     }
