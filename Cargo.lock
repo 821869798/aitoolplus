@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "aitoolplus"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aitoolplus-core",
  "aitoolplus-ui",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "aitoolplus-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "aitoolplus-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aitoolplus-core",
  "anyhow",

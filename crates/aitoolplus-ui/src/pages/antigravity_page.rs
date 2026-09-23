@@ -426,7 +426,7 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                         // Search bar
                         .child(
                             div()
-                                .w(px(200.0))
+                                .w(px(260.0))
                                 .child(input_container(&t, ws.ui.antigravity_search.clone())),
                         ),
                 ),
