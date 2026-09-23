@@ -1,8 +1,8 @@
 1 ICON "assets/app.ico"
 
 1 VERSIONINFO
-FILEVERSION 0,1,1,0
-PRODUCTVERSION 0,1,1,0
+FILEVERSION 0,1,2,0
+PRODUCTVERSION 0,1,2,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x40004L
@@ -15,12 +15,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "aitoolplus contributors\0"
             VALUE "FileDescription", "AI ToolPlus - AI workbench on GPUI\0"
-            VALUE "FileVersion", "0.1.1.0\0"
+            VALUE "FileVersion", "0.1.2.0\0"
             VALUE "InternalName", "aitoolplus.exe\0"
             VALUE "LegalCopyright", "GPL-3.0-only\0"
             VALUE "OriginalFilename", "aitoolplus.exe\0"
             VALUE "ProductName", "AI ToolPlus\0"
-            VALUE "ProductVersion", "0.1.1.0\0"
+            VALUE "ProductVersion", "0.1.2.0\0"
         END
     END
     BLOCK "VarFileInfo"

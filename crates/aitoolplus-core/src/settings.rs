@@ -100,10 +100,61 @@ unsafe fn windows_user_default_ui_language() -> u16 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ProxyMode {
+    #[default]
     Direct,
     Custom,
-    #[default]
     System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyType {
+    #[default]
+    Direct,
+    Http,
+    Https,
+    Socks5,
+    Socks4,
+    System,
+}
+
+impl ProxyType {
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Http | Self::Https | Self::Socks5 | Self::Socks4)
+    }
+
+    pub fn scheme(&self) -> &'static str {
+        match self {
+            Self::Direct => "",
+            Self::Http => "http",
+            Self::Https => "https",
+            Self::Socks5 => "socks5",
+            Self::Socks4 => "socks4",
+            Self::System => "",
+        }
+    }
+
+    pub fn label(&self, is_zh: bool) -> &'static str {
+        match self {
+            Self::Direct => if is_zh { "直接连接" } else { "Direct" },
+            Self::Http => "HTTP",
+            Self::Https => "HTTPS",
+            Self::Socks5 => "SOCKS5",
+            Self::Socks4 => "SOCKS4",
+            Self::System => if is_zh { "跟随系统" } else { "System" },
+        }
+    }
+
+    pub fn all() -> &'static [ProxyType] {
+        &[
+            ProxyType::Direct,
+            ProxyType::Http,
+            ProxyType::Https,
+            ProxyType::Socks5,
+            ProxyType::Socks4,
+            ProxyType::System,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +323,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub proxy_mode: ProxyMode,
     #[serde(default)]
+    pub proxy_type: ProxyType,
+    #[serde(default = "default_proxy_host")]
+    pub proxy_host: String,
+    #[serde(default = "default_proxy_port")]
+    pub proxy_port: String,
+    #[serde(default)]
     pub proxy_url: String,
     #[serde(skip)]
     pub backup_type: BackupType,
@@ -348,6 +405,14 @@ fn default_antigravity_refresh_interval() -> u32 {
     15
 }
 
+pub fn default_proxy_host() -> String {
+    "127.0.0.1".into()
+}
+
+pub fn default_proxy_port() -> String {
+    "7890".into()
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -356,7 +421,10 @@ impl Default for AppSettings {
             start_with_system: false,
             minimize_to_tray_on_close: true,
             start_minimized: false,
-            proxy_mode: ProxyMode::System,
+            proxy_mode: ProxyMode::Direct,
+            proxy_type: ProxyType::Direct,
+            proxy_host: default_proxy_host(),
+            proxy_port: default_proxy_port(),
             proxy_url: String::new(),
             backup_type: BackupType::Local,
             webdav: WebDavConfig::default(),
@@ -392,6 +460,156 @@ impl Default for AppSettings {
             last_antigravity_refresh_time: None,
             window_bounds: None,
             last_page: String::new(),
+        }
+    }
+}
+
+impl AppSettings {
+    /// Compute the effective proxy URL from proxy_type, proxy_host, and proxy_port
+    pub fn effective_proxy_url(&self) -> String {
+        if !self.proxy_type.is_custom() {
+            return String::new();
+        }
+        let scheme = self.proxy_type.scheme();
+        let host = if self.proxy_host.trim().is_empty() {
+            "127.0.0.1"
+        } else {
+            self.proxy_host.trim()
+        };
+        let port = if self.proxy_port.trim().is_empty() {
+            "7890"
+        } else {
+            self.proxy_port.trim()
+        };
+        format!("{scheme}://{host}:{port}")
+    }
+
+    /// Synchronize proxy_mode, proxy_type, proxy_host, proxy_port, and proxy_url
+    pub fn sync_proxy(&mut self) {
+        if self.proxy_type.is_custom() {
+            self.proxy_mode = ProxyMode::Custom;
+            self.proxy_url = self.effective_proxy_url();
+        } else if self.proxy_type == ProxyType::System {
+            self.proxy_mode = ProxyMode::System;
+            self.proxy_url = String::new();
+        } else {
+            self.proxy_mode = ProxyMode::Direct;
+            self.proxy_type = ProxyType::Direct;
+            self.proxy_url = String::new();
+        }
+    }
+
+    /// Normalize proxy settings when loading from file or legacy config
+    pub fn normalize_proxy(&mut self) {
+        if self.proxy_type == ProxyType::Direct && self.proxy_mode == ProxyMode::Custom && !self.proxy_url.is_empty() {
+            if let Ok(parsed) = url::Url::parse(&self.proxy_url) {
+                let scheme = parsed.scheme();
+                self.proxy_type = match scheme {
+                    "http" => ProxyType::Http,
+                    "https" => ProxyType::Https,
+                    "socks4" => ProxyType::Socks4,
+                    "socks5" | "socks5h" => ProxyType::Socks5,
+                    _ => ProxyType::Http,
+                };
+                if let Some(host) = parsed.host_str() {
+                    self.proxy_host = host.to_string();
+                }
+                if let Some(port) = parsed.port() {
+                    self.proxy_port = port.to_string();
+                }
+            }
+        } else if self.proxy_type == ProxyType::Direct && self.proxy_mode == ProxyMode::System {
+            self.proxy_type = ProxyType::System;
+        }
+        if self.proxy_host.trim().is_empty() {
+            self.proxy_host = default_proxy_host();
+        }
+        if self.proxy_port.trim().is_empty() {
+            self.proxy_port = default_proxy_port();
+        }
+    }
+}
+
+/// Apply proxy configuration to the current process's environment variables.
+pub fn apply_proxy_env(settings: &AppSettings) {
+    unsafe {
+        match settings.proxy_mode {
+            ProxyMode::Custom if !settings.proxy_url.trim().is_empty() => {
+                let url = settings.proxy_url.trim();
+                std::env::set_var("HTTP_PROXY", url);
+                std::env::set_var("HTTPS_PROXY", url);
+                if url.starts_with("socks") {
+                    std::env::set_var("ALL_PROXY", url);
+                }
+                std::env::remove_var("AITOOLPLUS_PROXY_MODE");
+            }
+            ProxyMode::Direct => {
+                std::env::remove_var("HTTP_PROXY");
+                std::env::remove_var("HTTPS_PROXY");
+                std::env::remove_var("ALL_PROXY");
+                std::env::set_var("AITOOLPLUS_PROXY_MODE", "direct");
+            }
+            _ => {
+                std::env::remove_var("AITOOLPLUS_PROXY_MODE");
+            }
+        }
+    }
+}
+
+/// Test the connectivity of a proxy URL (or direct connection) by attempting to reach reliable endpoints.
+pub fn test_proxy_connectivity(proxy_url: &str) -> Result<u128, String> {
+    let trimmed = proxy_url.trim();
+
+    let mut builder = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(6));
+
+    if !trimmed.is_empty() && trimmed != "direct" {
+        let proxy = ureq::Proxy::new(trimmed)
+            .map_err(|e| format!("代理配置格式错误: {e}"))?;
+        builder = builder.proxy(proxy);
+    }
+
+    let agent = builder.build();
+
+    let start = std::time::Instant::now();
+    let res = agent
+        .get("https://cloudflare.com/cdn-cgi/trace")
+        .set("User-Agent", "aitoolplus/1.0")
+        .call();
+
+    match res {
+        Ok(resp) if resp.status() == 200 || resp.status() == 204 => {
+            Ok(start.elapsed().as_millis())
+        }
+        Ok(_) => Ok(start.elapsed().as_millis()),
+        Err(e) => {
+            let fallback_res = agent
+                .get("https://www.google.com/generate_204")
+                .set("User-Agent", "aitoolplus/1.0")
+                .call();
+            match fallback_res {
+                Ok(_) => Ok(start.elapsed().as_millis()),
+                Err(_) => {
+                    let err_str = e.to_string();
+                    let msg = if err_str.contains("10061")
+                        || err_str.to_lowercase().contains("connection refused")
+                    {
+                        "代理服务器拒绝连接，请检查本地代理客户端是否已开启".to_string()
+                    } else if err_str.contains("10060")
+                        || err_str.to_lowercase().contains("timed out")
+                        || err_str.to_lowercase().contains("timeout")
+                    {
+                        "连接代理服务器超时，请检查代理服务器地址和端口".to_string()
+                    } else if err_str.to_lowercase().contains("socks") || err_str.contains("Proxy")
+                    {
+                        format!("代理握手失败: {err_str}")
+                    } else {
+                        err_str
+                    };
+                    Err(msg)
+                }
+            }
         }
     }
 }
@@ -439,6 +657,7 @@ impl AppSettings {
         if settings.backup_retain_count == 0 {
             settings.backup_retain_count = 10;
         }
+        settings.normalize_proxy();
 
         let sync_path = path.with_file_name("sync.json");
         let sync = SyncSettings::load(&sync_path);
@@ -452,6 +671,7 @@ impl AppSettings {
         let mut cloned = self.clone();
         cloned.auto_backup_interval_days = (cloned.backup_interval_hours / 24).max(1);
         cloned.auto_backup_max_keep = cloned.backup_retain_count as u32;
+        cloned.sync_proxy();
 
         // Persist sync settings to isolated sync.json
         let sync_path = path.with_file_name("sync.json");
@@ -528,5 +748,44 @@ mod tests {
         assert_eq!(loaded.webdav.username, "user1");
         assert_eq!(loaded.webdav.password, "secret_pass_123");
         assert_eq!(loaded.s3.secret_access_key, "s3_secret_xyz");
+    }
+
+    #[test]
+    fn test_proxy_settings_sync_and_normalize() {
+        let mut s = AppSettings::default();
+        assert_eq!(s.proxy_type, ProxyType::Direct);
+        assert_eq!(s.proxy_mode, ProxyMode::Direct);
+        assert_eq!(s.proxy_host, "127.0.0.1");
+        assert_eq!(s.proxy_port, "7890");
+
+        // Custom SOCKS5
+        s.proxy_type = ProxyType::Socks5;
+        s.proxy_host = "proxy.example.com".into();
+        s.proxy_port = "1080".into();
+        s.sync_proxy();
+        assert_eq!(s.proxy_mode, ProxyMode::Custom);
+        assert_eq!(s.proxy_url, "socks5://proxy.example.com:1080");
+
+        // Back to direct
+        s.proxy_type = ProxyType::Direct;
+        s.sync_proxy();
+        assert_eq!(s.proxy_mode, ProxyMode::Direct);
+        assert_eq!(s.proxy_url, "");
+
+        // Legacy proxy_url normalization
+        let mut legacy = AppSettings::default();
+        legacy.proxy_mode = ProxyMode::Custom;
+        legacy.proxy_url = "http://myproxy.local:8080".into();
+        legacy.normalize_proxy();
+        assert_eq!(legacy.proxy_type, ProxyType::Http);
+        assert_eq!(legacy.proxy_host, "myproxy.local");
+        assert_eq!(legacy.proxy_port, "8080");
+    }
+
+    #[test]
+    fn test_proxy_connectivity_direct() {
+        // Direct test should either succeed or fail gracefully without panicking
+        let res = test_proxy_connectivity("direct");
+        println!("Direct connectivity test result: {:?}", res);
     }
 }

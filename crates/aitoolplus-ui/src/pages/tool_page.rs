@@ -304,6 +304,21 @@ fn card_icon_btn(
 }
 
 fn extract_provider_subtitle(tool: ToolId, p: &ProviderRecord, _i: &crate::i18n::I18n) -> String {
+    // 1. 优先显示 备注
+    if let Some(ref n) = p.notes {
+        let trimmed = n.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    // 2. 其次显示 官网链接
+    if let Some(ref w) = p.website_url {
+        let trimmed = w.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
     if p.category == "official" || aitoolplus_core::providers::is_official_provider(tool, &p.id) {
         let official_url = match tool {
             ToolId::ClaudeCode => "https://www.anthropic.com/claude-code",
@@ -324,22 +339,13 @@ fn extract_provider_subtitle(tool: ToolId, p: &ProviderRecord, _i: &crate::i18n:
             return official_url.to_string();
         }
     }
+
+    // 3. 最后显示 接口地址
     let (endpoint_url, _) = p.resolve_credentials(tool);
     if !endpoint_url.is_empty() {
         return endpoint_url;
     }
-    if let Some(ref w) = p.website_url {
-        let trimmed = w.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
-    if let Some(ref n) = p.notes {
-        let trimmed = n.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
-        }
-    }
+
     String::new()
 }
 
@@ -488,14 +494,83 @@ fn provider_row(
                         }))
                         .children(p.is_disabled.then(|| {
                             crate::components::badge(&t, i.t("已停用", "Disabled"), crate::components::BadgeKind::Danger)
+                        }))
+                        .children(p.website_url.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|web_url| {
+                            let web_url_for_click = web_url.to_string();
+                            div()
+                                .id(gpui::SharedString::from(format!("provider-site-{}", p.id)))
+                                .flex()
+                                .items_center()
+                                .gap(px(3.5))
+                                .px(px(6.0))
+                                .py(px(1.5))
+                                .rounded(px(4.0))
+                                .bg(t.card_bg)
+                                .border_1()
+                                .border_color(t.card_border)
+                                .cursor_pointer()
+                                .hover(|s| s.border_color(t.accent).bg(t.card_hover))
+                                .tooltip({
+                                    let tip = format!("官网: {web_url_for_click}");
+                                    move |_window, cx| cx.new(|_| Tooltip::new(tip.clone())).into()
+                                })
+                                .on_click(cx.listener(move |_ws, _ev, _w, _cx| {
+                                    open_in_browser(&web_url_for_click);
+                                }))
+                                .child(
+                                    gpui::svg()
+                                        .data(crate::icons::EXTERNAL_LINK_SVG)
+                                        .size(px(10.5))
+                                        .text_color(t.accent),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(t.accent)
+                                        .child(i.t("官网", "Website")),
+                                )
                         })),
                 )
                 .children((!subtitle.is_empty()).then(|| {
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(t.text_muted)
-                        .child(subtitle)
-                        .into_any_element()
+                    let is_url = subtitle.starts_with("http://") || subtitle.starts_with("https://");
+                    if is_url {
+                        let open_url = subtitle.clone();
+                        div()
+                            .id(gpui::SharedString::from(format!("provider-sub-link-{}", p.id)))
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(t.accent).underline())
+                            .tooltip({
+                                let tip = format!("在浏览器中打开: {open_url}");
+                                move |_window, cx| cx.new(|_| Tooltip::new(tip.clone())).into()
+                            })
+                            .on_click(cx.listener(move |_ws, _ev, _w, _cx| {
+                                open_in_browser(&open_url);
+                            }))
+                            .child(
+                                gpui::svg()
+                                    .data(crate::icons::EXTERNAL_LINK_SVG)
+                                    .size(px(10.5))
+                                    .text_color(t.text_muted),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(t.text_muted)
+                                    .hover(|s| s.text_color(t.accent))
+                                    .child(subtitle),
+                            )
+                            .into_any_element()
+                    } else {
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(t.text_muted)
+                            .child(subtitle)
+                            .into_any_element()
+                    }
                 })),
         );
 

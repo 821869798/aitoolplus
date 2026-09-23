@@ -71,7 +71,7 @@ Section "MainSection" SecMain
     ; Register in Add/Remove Programs
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayName" "AI ToolPlus"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayIcon" "$INSTDIR\aitoolplus.exe"
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayVersion" "0.1.1"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayVersion" "0.1.2"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "Publisher" "aitoolplus contributors"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "InstallLocation" "$INSTDIR"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "UninstallString" '"$INSTDIR\uninstall.exe"'

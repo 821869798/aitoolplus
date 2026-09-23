@@ -162,6 +162,23 @@ impl Workspace {
                 input.set_text_silent(settings.proxy_url.clone(), cx)
             });
         }
+        let host_val = if settings.proxy_host.trim().is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            settings.proxy_host.clone()
+        };
+        ui.proxy_host_input.update(cx, |input, cx| {
+            input.set_text_silent(host_val, cx);
+        });
+        let port_val = if settings.proxy_port.trim().is_empty() {
+            "7890".to_string()
+        } else {
+            settings.proxy_port.clone()
+        };
+        ui.proxy_port_input.update(cx, |input, cx| {
+            input.set_text_silent(port_val, cx);
+        });
+        aitoolplus_core::settings::apply_proxy_env(&settings);
         if !settings.custom_update_mirror_url.is_empty() {
             ui.custom_mirror_input.update(cx, |input, cx| {
                 input.set_text_silent(settings.custom_update_mirror_url.clone(), cx)

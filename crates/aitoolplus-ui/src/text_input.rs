@@ -31,6 +31,7 @@ pub struct TextInput {
     pub borderless: bool,
     pub cursor_visible: bool,
     pub drag_anchor: Option<usize>,
+    pub scroll_offset: Pixels,
     _blink_task: Option<gpui::Task<()>>,
 }
 
@@ -54,6 +55,7 @@ impl TextInput {
             borderless: false,
             cursor_visible: false,
             drag_anchor: None,
+            scroll_offset: px(0.0),
             _blink_task: None,
         }
     }
@@ -88,6 +90,7 @@ impl TextInput {
         self.content = text.into();
         self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
+        self.scroll_offset = px(0.0);
         cx.emit(TextInputEvent::Change(self.content.clone()));
         cx.notify();
     }
@@ -97,6 +100,7 @@ impl TextInput {
         self.content = text.into();
         self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
+        self.scroll_offset = px(0.0);
         cx.notify();
     }
 
@@ -406,6 +410,16 @@ impl TextInput {
         let Some(anchor) = self.drag_anchor else {
             return;
         };
+        if let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) {
+            if position.x > bounds.right() {
+                let over = (position.x - bounds.right()).min(px(40.0));
+                let max_scroll = (line.width - bounds.size.width + px(8.0)).max(px(0.0));
+                self.scroll_offset = (self.scroll_offset + over).min(max_scroll);
+            } else if position.x < bounds.left() {
+                let over = (bounds.left() - position.x).min(px(40.0));
+                self.scroll_offset = (self.scroll_offset - over).max(px(0.0));
+            }
+        }
         let curr = self.index_for_mouse_position(position);
         if curr >= anchor {
             self.selected_range = anchor..curr;
@@ -431,13 +445,14 @@ impl TextInput {
         else {
             return 0;
         };
-        if position.x <= bounds.left() {
+        let local_x = position.x - bounds.left() + self.scroll_offset;
+        if local_x <= px(0.0) {
             return 0;
         }
-        if position.x >= bounds.right() {
+        if local_x >= line.width {
             return self.content.len();
         }
-        let shaped_idx = line.closest_index_for_x(position.x - bounds.left());
+        let shaped_idx = line.closest_index_for_x(local_x);
         self.shaped_offset_to_content_offset(shaped_idx)
     }
 
@@ -649,8 +664,8 @@ impl EntityInputHandler for TextInput {
         let start_x = last_layout.x_for_index(shaped_start);
         let end_x = last_layout.x_for_index(shaped_end);
         Some(Bounds::from_corners(
-            point(bounds.left() + start_x, bounds.top()),
-            point(bounds.left() + end_x, bounds.bottom()),
+            point(bounds.left() + start_x - self.scroll_offset, bounds.top()),
+            point(bounds.left() + end_x - self.scroll_offset, bounds.bottom()),
         ))
     }
 
@@ -662,13 +677,14 @@ impl EntityInputHandler for TextInput {
     ) -> Option<usize> {
         let last_bounds = self.last_bounds.as_ref()?;
         let last_layout = self.last_layout.as_ref()?;
-        if point.x <= last_bounds.left() {
+        let local_x = point.x - last_bounds.left() + self.scroll_offset;
+        if local_x <= px(0.0) {
             return Some(0);
         }
-        if point.x >= last_bounds.right() {
+        if local_x >= last_layout.width {
             return Some(self.offset_to_utf16(self.content.len()));
         }
-        let shaped_idx = last_layout.closest_index_for_x(point.x - last_bounds.left());
+        let shaped_idx = last_layout.closest_index_for_x(local_x);
         let content_idx = self.shaped_offset_to_content_offset(shaped_idx);
         Some(self.offset_to_utf16(content_idx))
     }
@@ -687,6 +703,7 @@ impl gpui::Render for TextInput {
             .px(px(10.0))
             .flex()
             .items_center()
+            .overflow_hidden()
             .rounded(px(6.0))
             .when(is_focused && !self.borderless, |d| {
                 d.border_1().border_color(rgba(0x3b82f6cc))
@@ -710,6 +727,29 @@ impl gpui::Render for TextInput {
                     this.on_mouse_up(event.position, cx);
                 }),
             )
+            .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _window, cx| {
+                let delta = match event.delta {
+                    gpui::ScrollDelta::Pixels(p) => {
+                        if p.x != px(0.0) {
+                            -p.x
+                        } else {
+                            -p.y
+                        }
+                    }
+                    gpui::ScrollDelta::Lines(l) => {
+                        if l.x != 0.0 {
+                            px(-l.x * 24.0)
+                        } else {
+                            px(-l.y * 24.0)
+                        }
+                    }
+                };
+                if let (Some(bounds), Some(line)) = (this.last_bounds.as_ref(), this.last_layout.as_ref()) {
+                    let max_scroll = (line.width - bounds.size.width + px(8.0)).max(px(0.0));
+                    this.scroll_offset = (this.scroll_offset + delta).clamp(px(0.0), max_scroll);
+                    cx.notify();
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
@@ -725,6 +765,7 @@ pub struct TextInputPrepaint {
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
+    scroll_offset: Pixels,
 }
 
 impl IntoElement for TextInputElement {
@@ -857,34 +898,62 @@ impl Element for TextInputElement {
         let shaped_sel_end = display_text.floor_char_boundary(shaped_sel_end.min(display_text.len())).max(shaped_sel_start);
 
         let cursor_pos = line.x_for_index(shaped_cursor);
+
+        let line_width = line.width;
+        let visible_width = bounds.size.width;
+        let mut scroll_offset = input.scroll_offset;
+
+        if line_width <= visible_width {
+            scroll_offset = px(0.0);
+        } else {
+            // Keep cursor in view with comfortable padding
+            let padding = px(16.0);
+            if cursor_pos - scroll_offset > visible_width - padding {
+                scroll_offset = cursor_pos - visible_width + padding;
+            } else if cursor_pos - scroll_offset < padding {
+                scroll_offset = (cursor_pos - padding).max(px(0.0));
+            }
+            let max_scroll = (line_width - visible_width + px(8.0)).max(px(0.0));
+            scroll_offset = scroll_offset.clamp(px(0.0), max_scroll);
+        }
+
         let (selection, cursor) = if !content.is_empty() && !selected_range.is_empty() {
-            (
-                Some(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(shaped_sel_start),
-                            bounds.top(),
+            let sel_start_x = bounds.left() + line.x_for_index(shaped_sel_start) - scroll_offset;
+            let sel_end_x = bounds.left() + line.x_for_index(shaped_sel_end) - scroll_offset;
+            let sel_min = sel_start_x.min(sel_end_x);
+            let sel_max = sel_start_x.max(sel_end_x);
+            let left = sel_min.max(bounds.left()).min(bounds.right());
+            let right = sel_max.max(bounds.left()).min(bounds.right());
+            if right > left {
+                (
+                    Some(fill(
+                        Bounds::from_corners(
+                            point(left, bounds.top()),
+                            point(right, bounds.bottom()),
                         ),
-                        point(
-                            bounds.left() + line.x_for_index(shaped_sel_end),
-                            bounds.bottom(),
-                        ),
-                    ),
-                    rgba(0x3b82f640),
-                )),
-                None,
-            )
+                        rgba(0x3b82f640),
+                    )),
+                    None,
+                )
+            } else {
+                (None, None)
+            }
         } else if is_focused && cursor_visible && !input.read_only {
-            (
-                None,
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top() + px(1.0)),
-                        size(px(1.5), bounds.bottom() - bounds.top() - px(2.0)),
-                    ),
-                    style.color,
-                )),
-            )
+            let cur_x = bounds.left() + cursor_pos - scroll_offset;
+            if cur_x >= bounds.left() - px(1.0) && cur_x <= bounds.right() {
+                (
+                    None,
+                    Some(fill(
+                        Bounds::new(
+                            point(cur_x, bounds.top() + px(1.0)),
+                            size(px(1.5), bounds.bottom() - bounds.top() - px(2.0)),
+                        ),
+                        style.color,
+                    )),
+                )
+            } else {
+                (None, None)
+            }
         } else {
             (None, None)
         };
@@ -893,6 +962,7 @@ impl Element for TextInputElement {
             line: Some(line),
             cursor,
             selection,
+            scroll_offset,
         }
     }
 
@@ -919,8 +989,9 @@ impl Element for TextInputElement {
 
         if let Some(line) = prepaint.line.take() {
             let line_height = window.line_height();
+            let scroll_offset = prepaint.scroll_offset;
             let _ = line.paint(
-                point(bounds.left(), bounds.top()),
+                point(bounds.left() - scroll_offset, bounds.top()),
                 line_height,
                 gpui::TextAlign::Left,
                 None,
@@ -930,6 +1001,7 @@ impl Element for TextInputElement {
             self.input.update(cx, |input, _| {
                 input.last_layout = Some(line);
                 input.last_bounds = Some(bounds);
+                input.scroll_offset = scroll_offset;
             });
         }
 

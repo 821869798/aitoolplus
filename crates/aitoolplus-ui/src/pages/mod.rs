@@ -134,6 +134,11 @@ pub struct WorkspaceState {
     pub addon_editors: std::collections::BTreeMap<String, gpui::Entity<TextArea>>,
     pub skill_git_url: gpui::Entity<TextInput>,
     pub proxy_url_input: gpui::Entity<TextInput>,
+    pub proxy_protocol_dropdown_open: bool,
+    pub proxy_host_input: gpui::Entity<TextInput>,
+    pub proxy_port_input: gpui::Entity<TextInput>,
+    pub is_testing_proxy: bool,
+    pub proxy_test_result: Option<Result<u128, String>>,
     pub cli_path_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
     pub pi_extensions:
         Option<Result<aitoolplus_core::pi_extensions::PiExtensionListResult, String>>,
@@ -746,6 +751,22 @@ impl WorkspaceState {
         let agent_session_search = cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
         let antigravity_search = cx.new(|cx| TextInput::new("搜索账号（邮箱、备注）…", cx));
         let antigravity_session_search = cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
+
+        let proxy_host_input = cx.new(|cx| TextInput::new("127.0.0.1", cx));
+        let proxy_port_input = cx.new(|cx| TextInput::new("7890", cx));
+        let port_entity = proxy_port_input.clone();
+        cx.subscribe(&proxy_port_input, move |_this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            if let crate::text_input::TextInputEvent::Change(text) = event {
+                let filtered: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
+                if filtered != *text {
+                    port_entity.update(cx, |input, cx| {
+                        input.set_text_silent(filtered, cx);
+                    });
+                    cx.notify();
+                }
+            }
+        }).detach();
+
         Self {
             tool_tab: ToolTab::Providers,
             common_editors: Default::default(),
@@ -797,6 +818,11 @@ impl WorkspaceState {
             addon_editors: Default::default(),
             skill_git_url,
             proxy_url_input,
+            proxy_protocol_dropdown_open: false,
+            proxy_host_input,
+            proxy_port_input,
+            is_testing_proxy: false,
+            proxy_test_result: None,
             cli_path_inputs: Default::default(),
             pi_extensions: None,
             pi_extensions_loading: false,

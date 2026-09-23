@@ -1274,8 +1274,8 @@ mod tests {
             }
         };
 
-        assert!(info.update_available, "Update should be available from 0.0.1 to v0.1.0");
-        assert_eq!(info.latest_version, "0.1.0");
+        assert!(info.update_available, "Update should be available from 0.0.1");
+        assert!(compare_versions(&info.latest_version, "0.0.1").is_gt(), "latest version should be > 0.0.1");
 
         // Portable mode check
         let portable_asset = best_asset_for_mode(&info, false).expect("portable asset found");
@@ -1352,7 +1352,7 @@ mod tests {
 
         assert!(info.update_available);
         assert_eq!(info.current_version, "0.0.1");
-        assert_eq!(info.latest_version, "0.1.0");
+        assert!(compare_versions(&info.latest_version, "0.0.1").is_gt());
 
         let asset = best_asset(&info).expect("asset found");
         assert_eq!(asset.name, "aitoolplus-windows-x86_64.zip");

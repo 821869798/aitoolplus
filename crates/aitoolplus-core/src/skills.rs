@@ -1495,6 +1495,10 @@ fn get_windows_system_proxy() -> Option<String> {
 }
 
 pub fn resolve_proxy() -> Option<String> {
+    if std::env::var("AITOOLPLUS_PROXY_MODE").as_deref() == Ok("direct") {
+        return None;
+    }
+
     if let Ok(env_proxy) = std::env::var("ALL_PROXY")
         .or_else(|_| std::env::var("all_proxy"))
         .or_else(|_| std::env::var("HTTPS_PROXY"))
