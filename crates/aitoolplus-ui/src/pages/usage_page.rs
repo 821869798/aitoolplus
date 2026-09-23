@@ -2595,7 +2595,7 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         if is_syncing {
             i.t("正在同步中...", "Syncing...")
         } else {
-            i.t("立即扫描同步", "Sync Now")
+            i.t("立即同步", "Sync Now")
         },
         ButtonVariant::Primary,
         &t,
@@ -2656,15 +2656,15 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                                 .text_size(px(13.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t("本地会话记录自动扫描同步", "Local Session Record Sync")),
+                                .child(i.t("自动扫描会话记录", "Auto-Scan Session Records")),
                         )
                         .child(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_muted)
                                 .child(i.t(
-                                    "自动追踪 Claude Code、Codex、Gemini、Grok、Pi 等本地 CLI 工具的会话日志与 Token 消耗",
-                                    "Track local CLI session logs and token usage from Claude Code, Codex, Gemini, Grok, Pi",
+                                    "定期扫描各客户端的本地会话记录以统计用量；关闭后仅在手动同步时扫描",
+                                    "Periodically scan local session logs from CLI clients to aggregate usage; when disabled, scan only on manual sync",
                                 )),
                         ),
                 ),

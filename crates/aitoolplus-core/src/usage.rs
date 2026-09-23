@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use chrono::{DateTime, Local, TimeZone};
+use chrono::{Local, TimeZone};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -1317,7 +1317,43 @@ impl UsageDb {
             }
         };
 
-        // 1. Claude Code
+        // Pre-fetch session_log_sync cursors for fast mtime check (avoids re-parsing unchanged files)
+        let mut cursors: HashMap<String, i64> = HashMap::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT file_path, last_modified FROM session_log_sync") {
+            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+                for r in rows.flatten() {
+                    cursors.insert(r.0, r.1);
+                }
+            }
+        }
+
+        let mut sync_file = |p: &Path, ingest_fn: &dyn Fn(&Connection, &Path, &dyn Fn(&str, u32, u32, u32, u32) -> String, &mut SessionSyncResult)| {
+            report.files_scanned += 1;
+            let mtime = p.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let path_str = p.to_string_lossy().to_string();
+            if let Some(&last_mod) = cursors.get(&path_str) {
+                if last_mod == mtime && mtime > 0 {
+                    return;
+                }
+            }
+            ingest_fn(&conn, p, &calc_cost, &mut report);
+            let now_sec = chrono::Local::now().timestamp();
+            let _ = conn.execute(
+                "INSERT INTO session_log_sync (file_path, last_modified, last_line_offset, last_synced_at)
+                 VALUES (?1, ?2, 0, ?3)
+                 ON CONFLICT(file_path) DO UPDATE SET
+                     last_modified = excluded.last_modified,
+                     last_synced_at = excluded.last_synced_at",
+                rusqlite::params![path_str, mtime, now_sec],
+            );
+        };
+
+        // 1. Claude Code (~/.claude/projects/*/*.jsonl)
         let claude_projects = paths.home.join(".claude").join("projects");
         if claude_projects.is_dir() {
             if let Ok(entries) = fs::read_dir(&claude_projects) {
@@ -1327,8 +1363,7 @@ impl UsageDb {
                             for f in files.flatten() {
                                 let p = f.path();
                                 if p.extension().map_or(false, |ext| ext == "jsonl") {
-                                    report.files_scanned += 1;
-                                    Self::ingest_claude_jsonl(&conn, &p, &calc_cost, &mut report);
+                                    sync_file(&p, &Self::ingest_claude_jsonl);
                                 }
                             }
                         }
@@ -1337,35 +1372,134 @@ impl UsageDb {
             }
         }
 
-        // 2. Codex
+        // 2. Codex (~/.codex/sessions/YYYY/MM/DD/*.jsonl + ~/.codex/archived_sessions/*.jsonl)
         let codex_sessions = paths.home.join(".codex").join("sessions");
         if codex_sessions.is_dir() {
-            if let Ok(files) = fs::read_dir(&codex_sessions) {
+            let mut codex_files = Vec::new();
+            Self::collect_files_recursive(&codex_sessions, "jsonl", 0, 4, &mut codex_files);
+            for p in codex_files {
+                sync_file(&p, &Self::ingest_codex_jsonl);
+            }
+        }
+        let codex_archived = paths.home.join(".codex").join("archived_sessions");
+        if codex_archived.is_dir() {
+            if let Ok(files) = fs::read_dir(&codex_archived) {
                 for f in files.flatten() {
                     let p = f.path();
                     if p.extension().map_or(false, |ext| ext == "jsonl") {
-                        report.files_scanned += 1;
-                        Self::ingest_codex_jsonl(&conn, &p, &calc_cost, &mut report);
+                        sync_file(&p, &Self::ingest_codex_jsonl);
                     }
                 }
             }
         }
 
-        // 3. Pi
+        // 3. Pi (~/.pi/agent/sessions/*.jsonl)
         let pi_sessions = paths.home.join(".pi").join("agent").join("sessions");
         if pi_sessions.is_dir() {
             if let Ok(files) = fs::read_dir(&pi_sessions) {
                 for f in files.flatten() {
                     let p = f.path();
                     if p.extension().map_or(false, |ext| ext == "jsonl") {
-                        report.files_scanned += 1;
-                        Self::ingest_pi_jsonl(&conn, &p, &calc_cost, &mut report);
+                        sync_file(&p, &Self::ingest_pi_jsonl);
                     }
                 }
             }
         }
 
+        // 4. Gemini CLI (~/.gemini/tmp/*/chats/session-*.json)
+        let gemini_tmp = paths.home.join(".gemini").join("tmp");
+        if gemini_tmp.is_dir() {
+            let mut gemini_files = Vec::new();
+            Self::collect_files_recursive(&gemini_tmp, "json", 0, 4, &mut gemini_files);
+            for p in gemini_files {
+                if p.file_name().map_or(false, |n| n.to_string_lossy().starts_with("session-")) {
+                    sync_file(&p, &Self::ingest_gemini_json);
+                }
+            }
+        }
+
         Ok(report)
+    }
+
+    fn collect_files_recursive(dir: &Path, ext: &str, current_depth: u32, max_depth: u32, files: &mut Vec<PathBuf>) {
+        if current_depth > max_depth {
+            return;
+        }
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    Self::collect_files_recursive(&path, ext, current_depth + 1, max_depth, files);
+                } else if path.extension().map_or(false, |e| e == ext) {
+                    files.push(path);
+                }
+            }
+        }
+    }
+
+    fn ingest_gemini_json(
+        conn: &Connection,
+        path: &Path,
+        calc_cost: &dyn Fn(&str, u32, u32, u32, u32) -> String,
+        report: &mut SessionSyncResult,
+    ) {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let val: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+
+        if let Some(messages) = val.get("messages").and_then(|m| m.as_array()) {
+            for msg in messages {
+                if let Some(tokens) = msg.get("tokens") {
+                    let inp = tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    let out = tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    let cr = tokens.get("cached").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    let thoughts = tokens.get("thoughts").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    let total_out = out.saturating_add(thoughts);
+
+                    if inp == 0 && total_out == 0 && cr == 0 {
+                        continue;
+                    }
+
+                    let model = msg.get("model").and_then(|v| v.as_str()).unwrap_or("gemini-2.5-pro");
+                    let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let req_id = if !msg_id.is_empty() {
+                        format!("gemini:{msg_id}")
+                    } else {
+                        format!("gemini:{:x}", md5_hash(&serde_json::to_string(msg).unwrap_or_default()))
+                    };
+
+                    let created_at = msg.get("timestamp")
+                        .and_then(|v| v.as_str())
+                        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                        .map(|dt| dt.timestamp())
+                        .unwrap_or_else(|| Local::now().timestamp());
+
+                    let total_cost = calc_cost(model, inp, total_out, cr, 0);
+
+                    let inserted = conn.execute(
+                        "INSERT OR IGNORE INTO proxy_request_logs (
+                            request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                            cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
+                            status_code, created_at, data_source
+                        ) VALUES (?1, '_gemini_session', 'gemini', ?2, ?3, ?4, ?5, 0, ?6, 0, 200, ?7, 'gemini_session')",
+                        params![req_id, model, inp, total_out, cr, total_cost, created_at],
+                    );
+
+                    if let Ok(n) = inserted {
+                        if n > 0 {
+                            report.imported += 1;
+                        } else {
+                            report.skipped += 1;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn ingest_claude_jsonl(
@@ -1408,7 +1542,7 @@ impl UsageDb {
 
                             let created_at = val.get("timestamp")
                                 .and_then(|v| v.as_str())
-                                .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
                                 .map(|dt| dt.timestamp())
                                 .unwrap_or_else(|| Local::now().timestamp());
 
@@ -1449,16 +1583,80 @@ impl UsageDb {
         };
         let reader = std::io::BufReader::new(file);
 
+        let mut current_model = "gpt-5-codex".to_string();
+
         for line_res in reader.lines() {
             let line = match line_res {
                 Ok(l) => l,
                 Err(_) => continue,
             };
-            if !line.contains("\"usage\"") {
+            if line.is_empty() {
                 continue;
             }
 
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+                let entry_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                // 1. Turn context: track active model
+                if entry_type == "turn_context" {
+                    if let Some(payload) = val.get("payload") {
+                        if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
+                            if !m.is_empty() {
+                                current_model = m.to_string();
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // 2. Event message with token_count
+                if entry_type == "event_msg" {
+                    if let Some(payload) = val.get("payload") {
+                        if payload.get("type").and_then(|v| v.as_str()) == Some("token_count") {
+                            if let Some(info) = payload.get("info") {
+                                let usage_obj = info.get("last_token_usage").or_else(|| info.get("total_token_usage"));
+                                if let Some(usage) = usage_obj {
+                                    let inp = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                    let out = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                    let cr = usage.get("cached_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+                                    if inp == 0 && out == 0 && cr == 0 {
+                                        continue;
+                                    }
+
+                                    let req_id = format!("codex:{:x}", md5_hash(&line));
+                                    let created_at = val.get("timestamp")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                                        .map(|dt| dt.timestamp())
+                                        .unwrap_or_else(|| Local::now().timestamp());
+
+                                    let total_cost = calc_cost(&current_model, inp, out, cr, 0);
+
+                                    let inserted = conn.execute(
+                                        "INSERT OR IGNORE INTO proxy_request_logs (
+                                            request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                                            cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
+                                            status_code, created_at, data_source
+                                        ) VALUES (?1, '_codex_session', 'codex', ?2, ?3, ?4, ?5, 0, ?6, 0, 200, ?7, 'codex_session')",
+                                        params![req_id, current_model, inp, out, cr, total_cost, created_at],
+                                    );
+
+                                    if let Ok(n) = inserted {
+                                        if n > 0 {
+                                            report.imported += 1;
+                                        } else {
+                                            report.skipped += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // 3. Fallback to generic usage if present
                 if let Some(usage) = val.get("usage") {
                     let inp = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                     let out = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -1466,7 +1664,7 @@ impl UsageDb {
                         .and_then(|d| d.get("cached_tokens"))
                         .and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
-                    let model = val.get("model").and_then(|v| v.as_str()).unwrap_or("gpt-4o");
+                    let model = val.get("model").and_then(|v| v.as_str()).unwrap_or(&current_model);
                     let req_id = format!("codex:{:x}", md5_hash(&line));
                     let created_at = val.get("created_at")
                         .and_then(|v| v.as_i64())
@@ -1662,6 +1860,55 @@ mod tests {
         db.update_model_pricing(&update_pricing).expect("save pricing");
         let pricing2 = db.get_model_pricing().expect("get updated pricing");
         assert!(pricing2.iter().any(|p| p.model_id == "custom-model-*"));
+    }
+
+    #[test]
+    fn test_session_sync_recursive_codex_and_incremental_cursor() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let home = temp_dir.path().join("home");
+        let app_data = temp_dir.path().join("appdata");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&app_data).unwrap();
+        let paths = Paths::new(home.clone(), app_data);
+
+        let db = UsageDb::open(&paths).unwrap();
+
+        // 1. Setup nested codex session
+        let codex_dir = home.join(".codex").join("sessions").join("2026").join("02").join("02");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let codex_file = codex_dir.join("rollout-test.jsonl");
+        let codex_content = r#"{"timestamp":"2026-02-02T10:00:00Z","type":"session_meta","payload":{"id":"session-123"}}
+{"timestamp":"2026-02-02T10:00:01Z","type":"turn_context","payload":{"model":"gpt-5.2-codex"}}
+{"timestamp":"2026-02-02T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50,"cached_input_tokens":20}}}}
+"#;
+        std::fs::write(&codex_file, codex_content).unwrap();
+
+        // 2. Setup gemini session
+        let gemini_chats = home.join(".gemini").join("tmp").join("proj-1").join("chats");
+        std::fs::create_dir_all(&gemini_chats).unwrap();
+        let gemini_file = gemini_chats.join("session-2026-01-01.json");
+        let gemini_content = r#"{
+            "sessionId": "gem-1",
+            "messages": [
+                {
+                    "id": "msg-1",
+                    "timestamp": "2026-01-01T10:00:00Z",
+                    "model": "gemini-2.5-flash",
+                    "tokens": {"input": 200, "output": 80, "cached": 50, "thoughts": 10}
+                }
+            ]
+        }"#;
+        std::fs::write(&gemini_file, gemini_content).unwrap();
+
+        // First sync: should discover nested codex and gemini
+        let rep1 = db.sync_session_usage(&paths).unwrap();
+        assert_eq!(rep1.files_scanned, 2, "Should scan both files");
+        assert_eq!(rep1.imported, 2, "Should import both records");
+
+        // Second sync: both files are unchanged, should skip parsing via session_log_sync cursor
+        let rep2 = db.sync_session_usage(&paths).unwrap();
+        assert_eq!(rep2.files_scanned, 2, "Should check both files");
+        assert_eq!(rep2.imported, 0, "Unchanged files should not be re-imported");
     }
 }
 
