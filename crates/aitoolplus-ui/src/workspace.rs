@@ -283,6 +283,23 @@ impl Workspace {
             ws.ui.skills_more_actions_open = true;
         }
 
+        if std::env::var("AITOOLPLUS_TEST_UPDATE").is_ok() {
+            let ver = std::env::var("AITOOLPLUS_CURRENT_VERSION").unwrap_or_else(|_| "0.0.1".into());
+            if let Ok(info) = aitoolplus_core::updater::check_latest(&ver) {
+                if std::env::var("AITOOLPLUS_TEST_DOWNLOADED_UPDATE").is_ok() {
+                    if let Some(asset) = aitoolplus_core::updater::best_asset(&info) {
+                        let path = ws.paths.app_data.join("updates").join(&asset.name);
+                        if let Some(p) = path.parent() {
+                            let _ = std::fs::create_dir_all(p);
+                        }
+                        let _ = std::fs::write(&path, b"mock update archive");
+                        ws.ui.downloaded_update_asset_path = Some(path);
+                    }
+                }
+                ws.ui.update_info = Some(info);
+            }
+        }
+
         if let Ok(mcp_name_or_id) = std::env::var("AITOOLPLUS_OPEN_MCP") {
             if mcp_name_or_id == "first" {
                 if let Some(s) = ws.store.store().mcp.servers.first() {

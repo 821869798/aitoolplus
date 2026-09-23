@@ -166,14 +166,23 @@ enum ReleasePayload {
 }
 
 pub fn check_latest(current_version: &str) -> Result<UpdateInfo, String> {
+    let version = std::env::var("AITOOLPLUS_CURRENT_VERSION")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| current_version.to_string());
     let api = std::env::var("AITOOLPLUS_UPDATE_API")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_RELEASES_API.into());
-    check_latest_at(&api, current_version)
+    check_latest_at(&api, &version)
 }
 
 pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, String> {
+    let effective_version = std::env::var("AITOOLPLUS_CURRENT_VERSION")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| current_version.to_string());
+
     let res = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -185,7 +194,7 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
     let response = match res {
         Ok(resp) => resp,
         Err(ureq::Error::Status(404, _)) => {
-            let current = normalize_version(current_version);
+            let current = normalize_version(&effective_version);
             return Ok(UpdateInfo {
                 current_version: current.clone(),
                 latest_version: current,
@@ -206,7 +215,7 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
         .into_json()
         .map_err(|error| format!("update response parse failed: {error}"))?;
 
-    let current = normalize_version(current_version);
+    let current = normalize_version(&effective_version);
 
     match payload {
         ReleasePayload::Github(release) => {
@@ -269,18 +278,126 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
     }
 }
 
+/// Check if the currently running executable was installed via installer (NSIS)
+/// or is running as a standalone / portable executable.
+pub fn is_installer_installed() -> bool {
+    if let Ok(val) = std::env::var("AITOOLPLUS_FORCE_INSTALLER") {
+        return val == "1" || val.eq_ignore_ascii_case("true");
+    }
+    if let Ok(val) = std::env::var("AITOOLPLUS_FORCE_PORTABLE") {
+        if val == "1" || val.eq_ignore_ascii_case("true") {
+            return false;
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(parent) = exe_path.parent() {
+                if parent.join("uninstall.exe").exists() {
+                    return true;
+                }
+                let path_str = parent.to_string_lossy().to_ascii_lowercase();
+                if path_str.contains(r"programs\aitoolplus")
+                    || path_str.contains(r"program files\aitoolplus")
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 pub fn best_asset(info: &UpdateInfo) -> Option<&UpdateAsset> {
-    let platform = if cfg!(windows) {
-        ["windows", "win", ".exe", ".msi"]
-    } else if cfg!(target_os = "macos") {
-        ["macos", "darwin", ".dmg", ".app"]
-    } else {
-        ["linux", "appimage", ".deb", ".rpm"]
-    };
-    info.assets.iter().find(|asset| {
-        let name = asset.name.to_ascii_lowercase();
-        platform.iter().any(|part| name.contains(part))
-    })
+    best_asset_for_mode(info, is_installer_installed())
+}
+
+pub fn best_asset_for_mode(info: &UpdateInfo, is_installer: bool) -> Option<&UpdateAsset> {
+    let valid_assets: Vec<&UpdateAsset> = info
+        .assets
+        .iter()
+        .filter(|asset| {
+            let name = asset.name.to_ascii_lowercase();
+            !name.ends_with(".sha256")
+                && !name.ends_with(".sig")
+                && !name.ends_with(".json")
+                && !name.ends_with(".blockmap")
+        })
+        .collect();
+
+    #[cfg(target_os = "windows")]
+    {
+        if is_installer {
+            // Installer mode: prefer setup.exe / installer.exe / .msi
+            if let Some(asset) = valid_assets.iter().find(|a| {
+                let name = a.name.to_ascii_lowercase();
+                (name.contains("setup") || name.contains("installer") || name.ends_with(".msi"))
+                    && name.ends_with(".exe")
+            }) {
+                return Some(*asset);
+            }
+        } else {
+            // Portable mode: prefer .zip containing windows / x86_64
+            if let Some(asset) = valid_assets.iter().find(|a| {
+                let name = a.name.to_ascii_lowercase();
+                name.ends_with(".zip") && (name.contains("win") || name.contains("x86_64"))
+            }) {
+                return Some(*asset);
+            }
+            // If no zip, check for standalone non-installer .exe
+            if let Some(asset) = valid_assets.iter().find(|a| {
+                let name = a.name.to_ascii_lowercase();
+                name.ends_with(".exe") && !name.contains("setup") && !name.contains("installer")
+            }) {
+                return Some(*asset);
+            }
+        }
+
+        // Fallback: any windows executable or archive
+        valid_assets.into_iter().find(|a| {
+            let name = a.name.to_ascii_lowercase();
+            name.ends_with(".exe") || name.ends_with(".zip") || name.ends_with(".msi")
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        valid_assets.into_iter().find(|a| {
+            let name = a.name.to_ascii_lowercase();
+            name.ends_with(".dmg") || name.ends_with(".app.tar.gz") || name.ends_with(".zip")
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        valid_assets.into_iter().find(|a| {
+            let name = a.name.to_ascii_lowercase();
+            name.ends_with(".appimage") || name.ends_with(".deb") || name.ends_with(".tar.gz")
+        })
+    }
+}
+
+/// Try to fetch the expected SHA-256 checksum from a matching `.sha256` asset in the release.
+pub fn fetch_expected_sha256(
+    info: &UpdateInfo,
+    asset: &UpdateAsset,
+    mirror: &UpdateMirror,
+    custom_prefix: &str,
+) -> Option<String> {
+    let sha_asset_name = format!("{}.sha256", asset.name);
+    let sha_asset = info.assets.iter().find(|a| a.name == sha_asset_name)?;
+    let url = mirror.apply_url(&sha_asset.download_url, custom_prefix);
+    let resp = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .get(&url)
+        .set("User-Agent", "AIToolPlus-Updater")
+        .call()
+        .ok()?;
+    let text = resp.into_string().ok()?;
+    text.split_whitespace().next().map(|s| s.trim().to_lowercase())
 }
 
 pub fn download(asset: &UpdateAsset, output: &Path) -> Result<PathBuf, String> {
@@ -429,6 +546,61 @@ pub fn verify_asset_sha256(file: &Path, expected_hex: &str) -> Result<bool, Stri
     Ok(actual_hex.eq_ignore_ascii_case(expected_hex.trim()))
 }
 
+/// Generate the PowerShell update script for in-place replacement and restart.
+#[cfg(target_os = "windows")]
+pub fn build_update_script_content(
+    downloaded_asset: &Path,
+    current_exe: &Path,
+    current_pid: u32,
+) -> Result<String, String> {
+    let filename = downloaded_asset
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if filename.ends_with(".zip") {
+        let current_dir = current_exe
+            .parent()
+            .ok_or_else(|| "cannot determine application directory".to_string())?;
+
+        Ok(format!(
+            "Wait-Process -Id {pid} -Timeout 15 -ErrorAction SilentlyContinue\r\n\
+             Start-Sleep -Milliseconds 600\r\n\
+             $tempExtract = Join-Path $env:TEMP ('aitoolplus_extract_' + [System.Guid]::NewGuid().ToString('N'))\r\n\
+             New-Item -ItemType Directory -Path $tempExtract -Force | Out-Null\r\n\
+             Expand-Archive -Force -Path \"{src}\" -DestinationPath $tempExtract\r\n\
+             $extractedExe = Get-ChildItem -Path $tempExtract -Filter \"aitoolplus.exe\" -Recurse | Select-Object -First 1\r\n\
+             if ($extractedExe) {{\r\n\
+                 $root = $extractedExe.Directory.FullName\r\n\
+                 Copy-Item -Path \"$root\\*\" -Destination \"{dst_dir}\" -Recurse -Force\r\n\
+             }} else {{\r\n\
+                 Copy-Item -Path \"$tempExtract\\*\" -Destination \"{dst_dir}\" -Recurse -Force\r\n\
+             }}\r\n\
+             Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue\r\n\
+             Start-Process \"{dst_exe}\"\r\n\
+             Remove-Item -Force \"$PSCommandPath\" -ErrorAction SilentlyContinue\r\n",
+            pid = current_pid,
+            src = downloaded_asset.to_string_lossy().replace('"', "`\""),
+            dst_dir = current_dir.to_string_lossy().replace('"', "`\""),
+            dst_exe = current_exe.to_string_lossy().replace('"', "`\"")
+        ))
+    } else if filename.ends_with(".exe") && !filename.contains("setup") && !filename.contains("installer") {
+        Ok(format!(
+            "Wait-Process -Id {pid} -Timeout 15 -ErrorAction SilentlyContinue\r\n\
+             Start-Sleep -Milliseconds 600\r\n\
+             Copy-Item -Force \"{src}\" \"{dst}\"\r\n\
+             Start-Process \"{dst}\"\r\n\
+             Remove-Item -Force \"$PSCommandPath\" -ErrorAction SilentlyContinue\r\n",
+            pid = current_pid,
+            src = downloaded_asset.to_string_lossy().replace('"', "`\""),
+            dst = current_exe.to_string_lossy().replace('"', "`\"")
+        ))
+    } else {
+        Err("unsupported update asset format for script replacement".into())
+    }
+}
+
 /// Launch the downloaded installer or perform in-place replacement and restart.
 /// Exits the current process upon successful launch.
 pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String> {
@@ -446,9 +618,6 @@ pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String>
             .unwrap_or("")
             .to_ascii_lowercase();
 
-        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let current_pid = std::process::id();
-
         if filename.contains("setup")
             || filename.contains("installer")
             || filename.ends_with(".msi")
@@ -457,39 +626,32 @@ pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String>
                 .spawn()
                 .map_err(|e| format!("failed to launch installer: {e}"))?;
             std::process::exit(0);
-        } else if filename.ends_with(".exe") {
-            let temp_script = downloaded_asset
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join("run_update.ps1");
-            let script_content = format!(
-                "Wait-Process -Id {pid} -Timeout 15 -ErrorAction SilentlyContinue\r\n\
-                 Copy-Item -Force \"{src}\" \"{dst}\"\r\n\
-                 Start-Process \"{dst}\"\r\n\
-                 Remove-Item -Force \"$PSCommandPath\" -ErrorAction SilentlyContinue\r\n",
-                pid = current_pid,
-                src = downloaded_asset.to_string_lossy().replace('"', "`\""),
-                dst = current_exe.to_string_lossy().replace('"', "`\"")
-            );
-            std::fs::write(&temp_script, script_content).map_err(|e| e.to_string())?;
-
-            std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-WindowStyle",
-                    "Hidden",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    &temp_script.to_string_lossy(),
-                ])
-                .spawn()
-                .map_err(|e| format!("failed to spawn updater script: {e}"))?;
-
-            std::process::exit(0);
-        } else {
-            Err("unsupported update asset format for auto-install".into())
         }
+
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let current_pid = std::process::id();
+        let script_content = build_update_script_content(downloaded_asset, &current_exe, current_pid)?;
+
+        let temp_script = downloaded_asset
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("run_update.ps1");
+        std::fs::write(&temp_script, script_content).map_err(|e| e.to_string())?;
+
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                &temp_script.to_string_lossy(),
+            ])
+            .spawn()
+            .map_err(|e| format!("failed to spawn updater script: {e}"))?;
+
+        std::process::exit(0);
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -941,6 +1103,191 @@ mod tests {
             &[],
         ));
     }
+
+    #[test]
+    fn test_portable_vs_installer_asset_selection() {
+        let assets = vec![
+            UpdateAsset {
+                name: "aitoolplus-setup.exe.sha256".to_string(),
+                download_url: "https://example.com/aitoolplus-setup.exe.sha256".to_string(),
+                size: 66,
+            },
+            UpdateAsset {
+                name: "aitoolplus-setup.exe".to_string(),
+                download_url: "https://example.com/aitoolplus-setup.exe".to_string(),
+                size: 5127083,
+            },
+            UpdateAsset {
+                name: "aitoolplus-windows-x86_64.zip".to_string(),
+                download_url: "https://example.com/aitoolplus-windows-x86_64.zip".to_string(),
+                size: 6564794,
+            },
+            UpdateAsset {
+                name: "aitoolplus-windows-x86_64.zip.sha256".to_string(),
+                download_url: "https://example.com/aitoolplus-windows-x86_64.zip.sha256".to_string(),
+                size: 66,
+            },
+            UpdateAsset {
+                name: "latest.json".to_string(),
+                download_url: "https://example.com/latest.json".to_string(),
+                size: 351,
+            },
+        ];
+
+        let info = UpdateInfo {
+            current_version: "0.0.1".to_string(),
+            latest_version: "0.1.0".to_string(),
+            update_available: true,
+            release_url: "https://example.com".to_string(),
+            release_notes: "test notes".to_string(),
+            published_at: None,
+            assets,
+        };
+
+        // When running in installer mode, setup.exe should be selected
+        let installer_asset = best_asset_for_mode(&info, true).expect("installer asset");
+        assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
+
+        // When running in portable mode, zip should be selected
+        let portable_asset = best_asset_for_mode(&info, false).expect("portable asset");
+        assert_eq!(portable_asset.name, "aitoolplus-windows-x86_64.zip");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_build_update_script_zip() {
+        let zip_asset = Path::new(r"C:\Users\User\AppData\Roaming\aitoolplus\updates\aitoolplus-windows-x86_64.zip");
+        let current_exe = Path::new(r"D:\Tools\aitoolplus\aitoolplus.exe");
+        let script = build_update_script_content(zip_asset, current_exe, 12345).unwrap();
+
+        assert!(script.contains("Wait-Process -Id 12345"));
+        assert!(script.contains("Expand-Archive -Force"));
+        assert!(script.contains(r"aitoolplus-windows-x86_64.zip"));
+        assert!(script.contains(r"D:\Tools\aitoolplus"));
+        assert!(script.contains(r"Start-Process"));
+        assert!(script.contains("Remove-Item -Force \"$PSCommandPath\""));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_build_update_script_standalone_exe() {
+        let exe_asset = Path::new(r"C:\Users\User\AppData\Roaming\aitoolplus\updates\aitoolplus.exe");
+        let current_exe = Path::new(r"D:\Tools\aitoolplus\aitoolplus.exe");
+        let script = build_update_script_content(exe_asset, current_exe, 12345).unwrap();
+
+        assert!(script.contains("Wait-Process -Id 12345"));
+        assert!(script.contains("Copy-Item -Force"));
+        assert!(script.contains(r"Start-Process"));
+    }
+
+    #[test]
+    fn test_live_github_release_detection_and_portable_asset() {
+        let info = match check_latest("0.0.1") {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!("Skipping live test due to network/rate limit: {e}");
+                return;
+            }
+        };
+
+        assert!(info.update_available, "Update should be available from 0.0.1 to v0.1.0");
+        assert_eq!(info.latest_version, "0.1.0");
+
+        // Portable mode check
+        let portable_asset = best_asset_for_mode(&info, false).expect("portable asset found");
+        assert_eq!(portable_asset.name, "aitoolplus-windows-x86_64.zip");
+        assert!(portable_asset.download_url.contains("aitoolplus-windows-x86_64.zip"));
+
+        // Installer mode check
+        let installer_asset = best_asset_for_mode(&info, true).expect("installer asset found");
+        assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
+        assert!(installer_asset.download_url.contains("aitoolplus-setup.exe"));
+    }
+
+    #[test]
+    fn test_live_download_and_verify_portable_zip() {
+        let info = match check_latest("0.0.1") {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!("Skipping live test: {e}");
+                return;
+            }
+        };
+
+        let asset = best_asset_for_mode(&info, false).expect("portable asset found");
+        let mirror = UpdateMirror::GhProxy;
+        let download_url = mirror.apply_url(&asset.download_url, "");
+        println!("Testing live download from: {download_url}");
+
+        let expected_sha = fetch_expected_sha256(&info, asset, &mirror, "").expect("expected sha fetched");
+        println!("Expected SHA-256: {expected_sha}");
+        assert_eq!(expected_sha.len(), 64);
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target_zip = temp_dir.path().join(&asset.name);
+
+        let downloaded_path = download_with_progress(&download_url, asset.size, &target_zip, |p| {
+            if (p.percentage as u32) % 25 == 0 {
+                println!("Download progress: {:.1}% ({}/{} bytes)", p.percentage, p.downloaded, p.total);
+            }
+            true
+        }).expect("download succeeded");
+
+        assert_eq!(downloaded_path, target_zip);
+        assert!(target_zip.is_file());
+
+        let sha_valid = verify_asset_sha256(&target_zip, &expected_sha).expect("sha verification succeeded");
+        assert!(sha_valid, "Downloaded zip hash must match expected SHA-256!");
+        println!("SHA-256 verification passed!");
+
+        // Now test extraction logic
+        let extract_dir = temp_dir.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).unwrap();
+        let file = std::fs::File::open(&target_zip).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        archive.extract(&extract_dir).unwrap();
+        assert!(extract_dir.join("aitoolplus.exe").exists(), "Extracted zip contains aitoolplus.exe!");
+        println!("Extraction verified: aitoolplus.exe present!");
+    }
+
+    #[test]
+    fn test_env_var_version_override_and_best_asset() {
+        unsafe {
+            std::env::set_var("AITOOLPLUS_CURRENT_VERSION", "0.0.1");
+            std::env::set_var("AITOOLPLUS_FORCE_PORTABLE", "1");
+            std::env::remove_var("AITOOLPLUS_FORCE_INSTALLER");
+        }
+
+        let info = match check_latest("0.1.0") {
+            Ok(info) => info,
+            Err(e) => {
+                eprintln!("Skipping live test: {e}");
+                return;
+            }
+        };
+
+        assert!(info.update_available);
+        assert_eq!(info.current_version, "0.0.1");
+        assert_eq!(info.latest_version, "0.1.0");
+
+        let asset = best_asset(&info).expect("asset found");
+        assert_eq!(asset.name, "aitoolplus-windows-x86_64.zip");
+
+        // Now test forcing installer mode
+        unsafe {
+            std::env::remove_var("AITOOLPLUS_FORCE_PORTABLE");
+            std::env::set_var("AITOOLPLUS_FORCE_INSTALLER", "1");
+        }
+        let installer_asset = best_asset(&info).expect("installer asset found");
+        assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
+
+        // Clean up environment variables
+        unsafe {
+            std::env::remove_var("AITOOLPLUS_CURRENT_VERSION");
+            std::env::remove_var("AITOOLPLUS_FORCE_INSTALLER");
+        }
+    }
 }
+
 
 

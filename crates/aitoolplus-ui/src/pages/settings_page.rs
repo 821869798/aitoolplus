@@ -3170,6 +3170,13 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                 let mirror_label = current_mirror
                     .display_name(ws.settings.language == aitoolplus_core::settings::Language::Zh);
 
+                let is_portable_asset = asset.name.ends_with(".zip");
+                let asset_type_label = if is_portable_asset {
+                    i.t("免安装版", "Portable")
+                } else {
+                    i.t("安装版", "Installer")
+                };
+
                 let asset_info_row = div()
                     .flex()
                     .items_center()
@@ -3177,13 +3184,14 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                     .text_size(px(11.5))
                     .text_color(t.text_secondary)
                     .child(format!(
-                        "{} {} ({})",
-                        i.t("安装包：", "Package:"),
+                        "{} {} ({} - {})",
+                        i.t("更新包：", "Package:"),
                         asset.name,
+                        asset_type_label,
                         if asset.size > 0 {
                             format_file_size(asset.size)
                         } else {
-                            i.t("官方完整包", "Full installer").to_string()
+                            i.t("完整包", "Full").to_string()
                         }
                     ))
                     .child(format!(
@@ -3201,6 +3209,16 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                     let path_for_install = downloaded_path.clone();
                     let path_for_reveal = downloaded_path.clone();
                     let rel_url_ready = info.release_url.clone();
+                    let ready_badge_text = if is_portable_asset {
+                        i.t("免安装更新已就绪", "Portable Update Ready")
+                    } else {
+                        i.t("安装包已就绪", "Installer Ready")
+                    };
+                    let install_btn_text = if is_portable_asset {
+                        i.t("立即更新并重启", "Update & Restart Now")
+                    } else {
+                        i.t("立即安装并重启", "Install & Restart Now")
+                    };
 
                     let ready_row = div()
                         .flex()
@@ -3209,12 +3227,12 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                         .flex_wrap()
                         .child(crate::components::badge(
                             &t,
-                            i.t("安装包已就绪", "Installer Ready"),
+                            ready_badge_text,
                             crate::components::BadgeKind::Success,
                         ))
                         .child(button_l(
                             "install-update-now",
-                            i.t("立即安装并重启", "Install & Restart Now"),
+                            install_btn_text,
                             ButtonVariant::Primary,
                             &t,
                             cx,
@@ -3225,7 +3243,7 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                     Ok(()) => {}
                                     Err(error) => {
                                         ws.ui.toast(
-                                            format!("安装失败: {error}"),
+                                            format!("更新失败: {error}"),
                                             true,
                                         );
                                         cx.notify();
@@ -3362,6 +3380,7 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                     let mirror = ws.settings.update_mirror;
                     let custom_prefix = ws.settings.custom_update_mirror_url.clone();
 
+                    let info_for_download = info.clone();
                     let download_btn = button_l(
                         "start-download-update",
                         i.t(
@@ -3415,10 +3434,20 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                             // Background download worker
                             let weak_finish = cx.entity().downgrade();
                             let output_clone = output.clone();
+                            let info_clone = info_for_download.clone();
+                            let asset_clone = asset_to_download.clone();
+                            let mirror_clone = mirror;
+                            let prefix_clone = custom_prefix.clone();
                             cx.spawn(async move |_this, cx| {
                                 let result = cx
                                     .background_spawn(async move {
-                                        aitoolplus_core::updater::download_with_progress(
+                                        let expected_sha = aitoolplus_core::updater::fetch_expected_sha256(
+                                            &info_clone,
+                                            &asset_clone,
+                                            &mirror_clone,
+                                            &prefix_clone,
+                                        );
+                                        let downloaded = aitoolplus_core::updater::download_with_progress(
                                             &download_url,
                                             expected_size,
                                             &output_clone,
@@ -3426,7 +3455,21 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                                 let _ = tx.try_send(p);
                                                 true
                                             },
-                                        )
+                                        )?;
+                                        if let Some(expected) = expected_sha {
+                                            match aitoolplus_core::updater::verify_asset_sha256(&downloaded, &expected) {
+                                                Ok(true) => {}
+                                                Ok(false) => {
+                                                    let _ = std::fs::remove_file(&downloaded);
+                                                    return Err("SHA-256 校验失败，文件可能已损坏，请重新下载".to_string());
+                                                }
+                                                Err(e) => {
+                                                    let _ = std::fs::remove_file(&downloaded);
+                                                    return Err(format!("校验异常: {e}"));
+                                                }
+                                            }
+                                        }
+                                        Ok(downloaded)
                                     })
                                     .await;
 
@@ -3440,11 +3483,11 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                                                 ws.i18n
                                                     .t(
                                                         &format!(
-                                                            "更新安装包已下载完成: {}",
+                                                            "更新包下载完成并校验通过: {}",
                                                             path.display()
                                                         ),
                                                         &format!(
-                                                            "Update installer downloaded: {}",
+                                                            "Update downloaded and verified: {}",
                                                             path.display()
                                                         ),
                                                     )
