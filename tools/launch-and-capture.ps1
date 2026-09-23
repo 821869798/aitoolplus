@@ -68,6 +68,10 @@ if ($TestToast -ne "") {
 }
 if ($UsageSubTab -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_USAGE_SUBTAB'] = $UsageSubTab }
 if ($env:AITOOLPLUS_THEME_MODE) { $psi.EnvironmentVariables['AITOOLPLUS_THEME_MODE'] = $env:AITOOLPLUS_THEME_MODE }
+if ($env:AITOOLPLUS_TEST_UPDATE) { $psi.EnvironmentVariables['AITOOLPLUS_TEST_UPDATE'] = $env:AITOOLPLUS_TEST_UPDATE }
+if ($env:AITOOLPLUS_CURRENT_VERSION) { $psi.EnvironmentVariables['AITOOLPLUS_CURRENT_VERSION'] = $env:AITOOLPLUS_CURRENT_VERSION }
+if ($env:AITOOLPLUS_FORCE_PORTABLE) { $psi.EnvironmentVariables['AITOOLPLUS_FORCE_PORTABLE'] = $env:AITOOLPLUS_FORCE_PORTABLE }
+if ($env:AITOOLPLUS_FORCE_INSTALLER) { $psi.EnvironmentVariables['AITOOLPLUS_FORCE_INSTALLER'] = $env:AITOOLPLUS_FORCE_INSTALLER }
 
 $launched = [System.Diagnostics.Process]::Start($psi)
 Write-Host "launched pid=$($launched.Id) page=$Page tab=$Tab"

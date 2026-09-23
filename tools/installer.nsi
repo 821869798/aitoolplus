@@ -45,6 +45,10 @@ LangString MSG_DELETE_DATA ${LANG_SIMPCHINESE} "是否删除所有配置文件�
 LangString MSG_DELETE_DATA ${LANG_ENGLISH} "Do you want to delete all user data (~/.aitoolplus)?"
 
 Section "MainSection" SecMain
+    ; Terminate running instance if any before overwriting
+    nsExec::Exec 'taskkill /F /IM aitoolplus.exe'
+    Sleep 300
+
     SetOutPath "$INSTDIR"
     File "..\target\release\aitoolplus.exe"
     File "..\crates\aitoolplus\assets\app.ico"

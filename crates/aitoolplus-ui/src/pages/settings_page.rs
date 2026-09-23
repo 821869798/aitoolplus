@@ -3009,18 +3009,33 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                             match result {
                                 Ok(inf) => {
                                     let message = if inf.update_available {
-                                        ws.i18n
-                                            .t(
-                                                &format!(
-                                                    "发现新版本 v{}",
-                                                    inf.latest_version
-                                                ),
-                                                &format!(
-                                                    "New version v{} available",
-                                                    inf.latest_version
-                                                ),
-                                            )
-                                            .to_string()
+                                        if !aitoolplus_core::updater::is_installer_installed() {
+                                            ws.i18n
+                                                .t(
+                                                    &format!(
+                                                        "发现新版本 v{}（免安装版请前往 Release 页面下载）",
+                                                        inf.latest_version
+                                                    ),
+                                                    &format!(
+                                                        "New version v{} available (Portable: download from Releases)",
+                                                        inf.latest_version
+                                                    ),
+                                                )
+                                                .to_string()
+                                        } else {
+                                            ws.i18n
+                                                .t(
+                                                    &format!(
+                                                        "发现新版本 v{}",
+                                                        inf.latest_version
+                                                    ),
+                                                    &format!(
+                                                        "New version v{} available",
+                                                        inf.latest_version
+                                                    ),
+                                                )
+                                                .to_string()
+                                        }
                                     } else {
                                         ws.i18n
                                             .t("当前已是最新版", "Already up to date")
@@ -3165,7 +3180,122 @@ fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElemen
                 );
             }
 
-            if let Some(asset) = asset {
+            let is_installer = aitoolplus_core::updater::is_installer_installed();
+
+            if !is_installer {
+                let rel_url = info.release_url.clone();
+                let rel_url_copy = info.release_url.clone();
+                let target_ver = info.latest_version.clone();
+
+                let portable_tip = div()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .p(px(12.0))
+                    .rounded(px(6.0))
+                    .bg(t.card_bg)
+                    .border_1()
+                    .border_color(t.accent.opacity(0.3))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(crate::components::badge(
+                                &t,
+                                i.t("免安装版", "Portable"),
+                                crate::components::BadgeKind::Accent,
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(t.text_primary)
+                                    .child(i.t(
+                                        "检测到当前运行为免安装便携版",
+                                        "Detected portable standalone version",
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .line_height(gpui::relative(1.5))
+                            .text_color(t.text_secondary)
+                            .child(i.t(
+                                "免安装版无需运行安装程序。请点击下方按钮前往 GitHub Release 页面下载最新的绿色压缩包 (aitoolplus-windows-x86_64.zip)，解压替换即可完成更新。所有用户配置与规则统一保存在 ~/.aitoolplus 目录，更新不会影响您的任何数据。",
+                                "Portable edition does not require an installer. Please click below to visit GitHub Release to download the latest zip archive (aitoolplus-windows-x86_64.zip) and extract it to replace the application files. User data in ~/.aitoolplus remains safe.",
+                            )),
+                    );
+
+                let portable_action_row = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .flex_wrap()
+                    .child(button_l(
+                        "open-release-page-portable-btn",
+                        i.t("前往 Release 下载页面", "Go to Release Page"),
+                        ButtonVariant::Primary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            if !rel_url.is_empty() {
+                                cx.open_url(&rel_url);
+                                ws.ui.toast(
+                                    ws.i18n
+                                        .t(
+                                            "正在打开 Release 下载页面…",
+                                            "Opening Release page…",
+                                        )
+                                        .to_string(),
+                                    false,
+                                );
+                            }
+                        },
+                    ))
+                    .child(button_l(
+                        "copy-release-link-btn",
+                        i.t("复制下载链接", "Copy Link"),
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                rel_url_copy.clone(),
+                            ));
+                            ws.ui.toast(
+                                ws.i18n
+                                    .t(
+                                        "已复制 Release 链接到剪贴板",
+                                        "Release link copied to clipboard",
+                                    )
+                                    .to_string(),
+                                false,
+                            );
+                        },
+                    ))
+                    .child(button_l(
+                        "dismiss-update-version-btn",
+                        i.t("忽略此版本", "Dismiss Version"),
+                        ButtonVariant::Ghost,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            ws.settings.dismissed_update_version = Some(target_ver.clone());
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            ws.ui.update_info = None;
+                            ws.ui.toast(
+                                ws.i18n
+                                    .t("已忽略此版本更新", "Version update dismissed")
+                                    .to_string(),
+                                false,
+                            );
+                            cx.notify();
+                        },
+                    ));
+
+                release_card = release_card.child(portable_tip).child(portable_action_row);
+            } else if let Some(asset) = asset {
                 let current_mirror = ws.settings.update_mirror;
                 let mirror_label = current_mirror
                     .display_name(ws.settings.language == aitoolplus_core::settings::Language::Zh);
