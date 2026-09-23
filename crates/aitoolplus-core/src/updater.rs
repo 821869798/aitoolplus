@@ -178,11 +178,6 @@ pub fn check_latest(current_version: &str) -> Result<UpdateInfo, String> {
 }
 
 pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, String> {
-    let effective_version = std::env::var("AITOOLPLUS_CURRENT_VERSION")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| current_version.to_string());
-
     let res = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -194,7 +189,7 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
     let response = match res {
         Ok(resp) => resp,
         Err(ureq::Error::Status(404, _)) => {
-            let current = normalize_version(&effective_version);
+            let current = normalize_version(current_version);
             return Ok(UpdateInfo {
                 current_version: current.clone(),
                 latest_version: current,
@@ -215,7 +210,7 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
         .into_json()
         .map_err(|error| format!("update response parse failed: {error}"))?;
 
-    let current = normalize_version(&effective_version);
+    let current = normalize_version(current_version);
 
     match payload {
         ReleasePayload::Github(release) => {
@@ -601,6 +596,66 @@ pub fn build_update_script_content(
     }
 }
 
+/// Generate the POSIX shell update script for in-place replacement and restart on macOS/Linux.
+#[cfg(not(target_os = "windows"))]
+pub fn build_update_script_content(
+    downloaded_asset: &Path,
+    current_exe: &Path,
+    current_pid: u32,
+) -> Result<String, String> {
+    let filename = downloaded_asset
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let current_dir = current_exe
+        .parent()
+        .ok_or_else(|| "cannot determine application directory".to_string())?;
+
+    if filename.ends_with(".tar.gz") || filename.ends_with(".tgz") {
+        Ok(format!(
+            "#!/bin/sh\n\
+             while kill -0 {pid} 2>/dev/null; do sleep 0.2; done\n\
+             tar -xzf \"{src}\" -C \"{dst_dir}\"\n\
+             chmod +x \"{dst_exe}\"\n\
+             nohup \"{dst_exe}\" >/dev/null 2>&1 &\n\
+             rm -f \"$0\"\n",
+            pid = current_pid,
+            src = downloaded_asset.to_string_lossy(),
+            dst_dir = current_dir.to_string_lossy(),
+            dst_exe = current_exe.to_string_lossy()
+        ))
+    } else if filename.ends_with(".zip") {
+        Ok(format!(
+            "#!/bin/sh\n\
+             while kill -0 {pid} 2>/dev/null; do sleep 0.2; done\n\
+             unzip -o \"{src}\" -d \"{dst_dir}\"\n\
+             chmod +x \"{dst_exe}\"\n\
+             nohup \"{dst_exe}\" >/dev/null 2>&1 &\n\
+             rm -f \"$0\"\n",
+            pid = current_pid,
+            src = downloaded_asset.to_string_lossy(),
+            dst_dir = current_dir.to_string_lossy(),
+            dst_exe = current_exe.to_string_lossy()
+        ))
+    } else if filename.ends_with(".appimage") || !filename.contains('.') {
+        Ok(format!(
+            "#!/bin/sh\n\
+             while kill -0 {pid} 2>/dev/null; do sleep 0.2; done\n\
+             cp -f \"{src}\" \"{dst_exe}\"\n\
+             chmod +x \"{dst_exe}\"\n\
+             nohup \"{dst_exe}\" >/dev/null 2>&1 &\n\
+             rm -f \"$0\"\n",
+            pid = current_pid,
+            src = downloaded_asset.to_string_lossy(),
+            dst_exe = current_exe.to_string_lossy()
+        ))
+    } else {
+        Err("unsupported update asset format for script replacement".into())
+    }
+}
+
 /// Launch the downloaded installer or perform in-place replacement and restart.
 /// Exits the current process upon successful launch.
 pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String> {
@@ -655,9 +710,38 @@ pub fn install_update_and_restart(downloaded_asset: &Path) -> Result<(), String>
     }
     #[cfg(not(target_os = "windows"))]
     {
-        std::process::Command::new(downloaded_asset)
+        let filename = downloaded_asset
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        if filename.ends_with(".dmg") || filename.ends_with(".deb") || filename.ends_with(".rpm") {
+            let _ = opener::open(downloaded_asset);
+            std::process::exit(0);
+        }
+
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let current_pid = std::process::id();
+        let script_content = build_update_script_content(downloaded_asset, &current_exe, current_pid)?;
+
+        let temp_script = downloaded_asset
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("run_update.sh");
+        std::fs::write(&temp_script, &script_content).map_err(|e| e.to_string())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&temp_script, std::fs::Permissions::from_mode(0o755));
+        }
+
+        std::process::Command::new("/bin/sh")
+            .arg(&temp_script)
             .spawn()
-            .map_err(|e| format!("failed to launch update asset: {e}"))?;
+            .map_err(|e| format!("failed to spawn updater script: {e}"))?;
+
         std::process::exit(0);
     }
 }
