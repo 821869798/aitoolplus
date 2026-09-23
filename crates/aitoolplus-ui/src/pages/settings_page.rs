@@ -238,6 +238,28 @@ fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElem
                     },
                 ),
             ),
+            settings_row(
+                &t,
+                i.t("自动扫描本地会话用量", "Auto-Scan Local Session Usage"),
+                Some(i.t(
+                    "自动追踪并扫描 Claude Code、Codex、Pi 等本地会话记录与 Token 消耗",
+                    "Automatically scan Claude Code, Codex, Pi session files for token analytics",
+                )),
+                toggle(
+                    "usage-auto-scan-toggle-settings",
+                    ws.settings.usage_auto_scan_sessions,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.usage_auto_scan_sessions = !ws.settings.usage_auto_scan_sessions;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        if ws.settings.usage_auto_scan_sessions {
+                            ws.trigger_session_sync(cx, true);
+                        }
+                        cx.notify();
+                    },
+                ),
+            ),
         ],
     );
 

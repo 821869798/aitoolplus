@@ -18,6 +18,12 @@ pub fn render_usage_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         ws.refresh_usage_data();
     }
 
+    // Auto-scan local sessions on enter if enabled
+    if ws.settings.usage_auto_scan_sessions && !ws.ui.usage_has_auto_scanned && !ws.ui.usage_syncing {
+        ws.ui.usage_has_auto_scanned = true;
+        ws.trigger_session_sync(cx, false);
+    }
+
     let header = render_top_header(ws, cx);
     let hero = render_usage_hero(ws, cx);
     let chart = render_trend_chart(ws, cx);
@@ -370,6 +376,74 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         },
     );
 
+    // Session sync action button
+    let is_syncing = ws.ui.usage_syncing;
+    let sync_sessions_btn = button_with_icon_l(
+        "usage-header-sync-sessions-btn",
+        crate::icons::REFRESH_SVG,
+        if is_syncing {
+            i.t("同步中...", "Syncing...")
+        } else {
+            i.t("同步会话", "Sync Sessions")
+        },
+        if is_syncing { ButtonVariant::Ghost } else { ButtonVariant::Secondary },
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.trigger_session_sync(cx, true);
+        },
+    );
+
+    // Auto-scan sessions pill / toggle
+    let auto_scan_sessions = ws.settings.usage_auto_scan_sessions;
+    let auto_scan_toggle = div()
+        .id("usage-header-auto-scan-pill")
+        .cursor_pointer()
+        .h(px(30.0))
+        .px(px(8.0))
+        .rounded(px(6.0))
+        .bg(if auto_scan_sessions { t.tab_active_bg } else { t.input_bg })
+        .border_1()
+        .border_color(if auto_scan_sessions { t.accent } else { t.card_border })
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .tooltip(move |_window, cx| {
+            cx.new(|_| crate::components::Tooltip::new(
+                i.t("自动扫描本地会话历史 (Claude Code、Codex、Pi 等) 并统计 Token", "Auto-scan local CLI session logs and token usage").to_string()
+            )).into()
+        })
+        .on_click(cx.listener(|ws, _, _, cx| {
+            ws.settings.usage_auto_scan_sessions = !ws.settings.usage_auto_scan_sessions;
+            ws.persist_settings();
+            let msg = if ws.settings.usage_auto_scan_sessions {
+                ws.trigger_session_sync(cx, true);
+                ws.i18n.t("已开启本地会话历史自动扫描同步", "Auto-scan session history enabled").to_string()
+            } else {
+                ws.i18n.t("已关闭本地会话历史自动扫描同步", "Auto-scan session history disabled").to_string()
+            };
+            ws.ui.toast(msg, false);
+            cx.notify();
+        }))
+        .child(crate::icons::svg_icon(
+            crate::icons::DATABASE_SVG,
+            px(12.5),
+            if auto_scan_sessions { t.accent } else { t.text_muted },
+        ))
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(if auto_scan_sessions { t.accent } else { t.text_secondary })
+                .child(i.t("自动扫描", "Auto Scan")),
+        )
+        .child(
+            div()
+                .w(px(7.0))
+                .h(px(7.0))
+                .rounded_full()
+                .bg(if auto_scan_sessions { crate::rgba_const(0x10b981ff) } else { t.text_muted }),
+        );
+
     // Floating Provider Menu (if open)
     let provider_menu = if ws.ui.usage_provider_menu_open {
         let mut list = vec![div()
@@ -576,6 +650,8 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                         .flex()
                         .items_center()
                         .gap(px(8.0))
+                        .child(auto_scan_toggle)
+                        .child(sync_sessions_btn)
                         .child(refresh_interval_btn)
                         .child(
                             div()
@@ -2511,7 +2587,7 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     let i = ws.i18n;
 
     let is_syncing = ws.ui.usage_syncing;
-    let auto_sync = ws.ui.usage_auto_sync;
+    let auto_sync = ws.settings.usage_auto_scan_sessions;
 
     let sync_btn = button_with_icon_l(
         "manual-session-sync-btn",
@@ -2525,42 +2601,7 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         &t,
         cx,
         |ws, _, _, cx| {
-            if ws.ui.usage_syncing {
-                return;
-            }
-            ws.ui.usage_syncing = true;
-            cx.notify();
-
-            let paths = ws.paths.clone();
-            let db_opt = ws.ensure_usage_db();
-
-            let weak = cx.entity().downgrade();
-            cx.spawn(async move |_this, cx| {
-                let res = if let Some(db) = db_opt {
-                    db.sync_session_usage(&paths)
-                } else {
-                    Err("数据库未初始化".to_string())
-                };
-
-                let _ = weak.update(cx, |ws: &mut Workspace, cx| {
-                    ws.ui.usage_syncing = false;
-                    match res {
-                        Ok(rep) => {
-                            ws.refresh_usage_data();
-                            let msg = format!(
-                                "会话用量同步完成：扫描 {} 个文件，新增入库 {} 条记录",
-                                rep.files_scanned, rep.imported
-                            );
-                            ws.ui.toast(msg, false);
-                        }
-                        Err(e) => {
-                            ws.ui.toast(format!("同步失败: {e}"), true);
-                        }
-                    }
-                    cx.notify();
-                });
-            })
-            .detach();
+            ws.trigger_session_sync(cx, true);
         },
     );
 
@@ -2570,7 +2611,15 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         &t,
         cx,
         |ws, _, _, cx| {
-            ws.ui.usage_auto_sync = !ws.ui.usage_auto_sync;
+            ws.settings.usage_auto_scan_sessions = !ws.settings.usage_auto_scan_sessions;
+            ws.persist_settings();
+            let msg = if ws.settings.usage_auto_scan_sessions {
+                ws.trigger_session_sync(cx, true);
+                ws.i18n.t("已开启本地会话历史自动扫描同步", "Auto-scan session history enabled").to_string()
+            } else {
+                ws.i18n.t("已关闭本地会话历史自动扫描同步", "Auto-scan session history disabled").to_string()
+            };
+            ws.ui.toast(msg, false);
             cx.notify();
         },
     );

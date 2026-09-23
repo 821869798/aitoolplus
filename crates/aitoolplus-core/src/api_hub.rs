@@ -416,6 +416,7 @@ pub fn fetch_models_advanced(
         .build();
 
     let mut had_auth_error = false;
+    let mut last_auth_detail: Option<String> = None;
     let mut last_err = String::new();
 
     for url in &candidates {
@@ -442,9 +443,20 @@ pub fn fetch_models_advanced(
                     });
                 }
             }
-            Err(ureq::Error::Status(401, _) | ureq::Error::Status(403, _)) => {
+            Err(ureq::Error::Status(status, response)) if status == 401 || status == 403 => {
                 had_auth_error = true;
-                last_err = format!("Candidate {url} returned 401/403");
+                if let Ok(val) = response.into_json::<Value>() {
+                    if let Some(msg) = val
+                        .pointer("/error/message")
+                        .or_else(|| val.pointer("/message"))
+                        .and_then(Value::as_str)
+                    {
+                        last_auth_detail = Some(msg.trim().to_string());
+                    }
+                }
+                if last_auth_detail.is_none() {
+                    last_err = format!("Candidate {url} returned {status}");
+                }
                 continue;
             }
             Err(ureq::Error::Status(404, _) | ureq::Error::Status(405, _)) => {
@@ -459,7 +471,21 @@ pub fn fetch_models_advanced(
     }
 
     if had_auth_error {
-        Err(ModelsFetchError::Auth)
+        if let Some(msg) = last_auth_detail {
+            if msg.to_ascii_lowercase().contains("unauthorized client")
+                || msg.to_ascii_lowercase().contains("unauthorized_client")
+            {
+                Err(ModelsFetchError::Unsupported(format!(
+                    "服务商网关拦截: {msg}（该服务商限制了客户端类型，不支持自动拉取模型列表，请直接在添加模型中手动输入模型名称）"
+                )))
+            } else {
+                Err(ModelsFetchError::Unsupported(format!(
+                    "认证失败 (401/403): {msg}"
+                )))
+            }
+        } else {
+            Err(ModelsFetchError::Auth)
+        }
     } else if !last_err.is_empty() {
         Err(ModelsFetchError::Network(last_err))
     } else {

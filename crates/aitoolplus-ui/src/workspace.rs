@@ -1185,4 +1185,51 @@ impl Workspace {
             self.ui.usage_app_pricing_configs = configs;
         }
     }
+
+    pub fn persist_settings(&mut self) {
+        (self.callbacks.save_settings)(&self.settings);
+    }
+
+    pub fn trigger_session_sync(&mut self, cx: &mut Context<Self>, notify_toast: bool) {
+        if self.ui.usage_syncing {
+            return;
+        }
+        self.ui.usage_syncing = true;
+        cx.notify();
+
+        let paths = self.paths.clone();
+        let db_opt = self.ensure_usage_db();
+
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            let res = if let Some(db) = db_opt {
+                db.sync_session_usage(&paths)
+            } else {
+                Err("数据库未初始化".to_string())
+            };
+
+            let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                ws.ui.usage_syncing = false;
+                match res {
+                    Ok(rep) => {
+                        ws.refresh_usage_data();
+                        if notify_toast || rep.imported > 0 {
+                            let msg = format!(
+                                "会话用量同步完成：扫描 {} 个文件，新增入库 {} 条记录",
+                                rep.files_scanned, rep.imported
+                            );
+                            ws.ui.toast(msg, false);
+                        }
+                    }
+                    Err(e) => {
+                        if notify_toast {
+                            ws.ui.toast(format!("同步失败: {e}"), true);
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
 }
