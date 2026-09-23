@@ -3083,15 +3083,25 @@ fn fetch_models_action(
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) {
-    let settings = ws
+    let provider = ws
         .store
         .store()
         .tool(tool)
         .providers
         .iter()
         .find(|p| p.id == provider_id)
-        .map(|p| p.settings())
-        .unwrap_or_default();
+        .cloned();
+    let settings = provider.as_ref().map(|p| p.settings()).unwrap_or_default();
+    let api_format = provider.as_ref().and_then(|p| p.parsed_meta().api_format);
+    let custom_headers = provider.as_ref().and_then(|p| {
+        p.parsed_meta().custom_headers.map(|list| {
+            let mut map = std::collections::BTreeMap::new();
+            for item in list {
+                map.insert(item.name, item.value);
+            }
+            map
+        })
+    });
 
     let Some((base_url, api_key)) = aitoolplus_core::api_hub::provider_endpoint(&settings) else {
         let msg = ws
@@ -3106,9 +3116,15 @@ fn fetch_models_action(
     let weak = cx.entity().downgrade();
     cx.spawn(async move |this, cx| {
         let result = cx
-            .background_spawn(
-                async move { aitoolplus_core::api_hub::fetch_models(&base_url, &api_key) },
-            )
+            .background_spawn(async move {
+                aitoolplus_core::api_hub::fetch_models_advanced(
+                    &base_url,
+                    &api_key,
+                    api_format.as_deref(),
+                    custom_headers.as_ref(),
+                    None,
+                )
+            })
             .await;
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
             let i = ws.i18n;
@@ -6460,10 +6476,18 @@ struct ExtractedProviderConfig {
 
 fn extract_provider_config(tool: ToolId, raw_json: &str) -> ExtractedProviderConfig {
     let val: Value = serde_json::from_str(raw_json).unwrap_or(Value::Object(Default::default()));
+    let default_api_format = match tool {
+        ToolId::ClaudeCode | ToolId::ClaudeDesktop => "anthropic",
+        ToolId::Codex => "openai_responses",
+        ToolId::OpenCode => "openai",
+        ToolId::GeminiCli => "gemini",
+        ToolId::Pi | ToolId::OhMyPi => "openai-completions",
+        _ => "openai",
+    };
     let mut cfg = ExtractedProviderConfig {
         base_url: String::new(),
         api_key: String::new(),
-        api_format: "anthropic".to_string(),
+        api_format: default_api_format.to_string(),
         model: String::new(),
         sonnet_model: String::new(),
         sonnet_name: String::new(),
@@ -6729,6 +6753,11 @@ pub fn open_provider_dialog(
         });
 
     let mut extracted = extract_provider_config(tool, &raw_config);
+    if let Some(p) = &existing {
+        if let Some(fmt) = &p.parsed_meta().api_format {
+            extracted.api_format = fmt.clone();
+        }
+    }
     if existing.is_none() {
         extracted.base_url = String::new();
         extracted.api_key = String::new();
@@ -6908,8 +6937,8 @@ pub fn open_provider_dialog(
                 .and_then(Value::as_array)
                 .map(|arr| arr.iter().any(|v| v.as_str() == Some("image")))
                 .unwrap_or(false);
-            let cw_str = item.get("contextWindow").map(|v| v.to_string()).unwrap_or_else(|| "128000".into());
-            let mt_str = item.get("maxTokens").map(|v| v.to_string()).unwrap_or_else(|| "16384".into());
+            let cw_str = item.get("contextWindow").map(|v| v.to_string()).unwrap_or_else(|| "1000000".into());
+            let mt_str = item.get("maxTokens").map(|v| v.to_string()).unwrap_or_else(|| "128000".into());
 
             let id_ent = cx.new(|cx| {
                 let mut inp = TextInput::new(i.t("模型 ID，如 deepseek-chat", "Model ID"), cx);
@@ -6922,12 +6951,12 @@ pub fn open_provider_dialog(
                 inp
             });
             let cw_ent = cx.new(|cx| {
-                let mut inp = TextInput::new(i.t("上下文窗口，如 128000", "Context window"), cx);
+                let mut inp = TextInput::new(i.t("上下文窗口，如 1000000", "Context window"), cx);
                 inp.set_text_silent(cw_str, cx);
                 inp
             });
             let mt_ent = cx.new(|cx| {
-                let mut inp = TextInput::new(i.t("最大输出，如 16384", "Max tokens"), cx);
+                let mut inp = TextInput::new(i.t("最大输出，如 128000", "Max tokens"), cx);
                 inp.set_text_silent(mt_str, cx);
                 inp
             });
@@ -6947,13 +6976,13 @@ pub fn open_provider_dialog(
         let id_ent = cx.new(|cx| TextInput::new(i.t("模型 ID，如 deepseek-chat", "Model ID"), cx));
         let name_ent = cx.new(|cx| TextInput::new(i.t("显示名称，如 DeepSeek-V3", "Display name"), cx));
         let cw_ent = cx.new(|cx| {
-            let mut inp = TextInput::new(i.t("上下文窗口，如 128000", "Context window"), cx);
-            inp.set_text_silent("128000", cx);
+            let mut inp = TextInput::new(i.t("上下文窗口，如 1000000", "Context window"), cx);
+            inp.set_text_silent("1000000", cx);
             inp
         });
         let mt_ent = cx.new(|cx| {
-            let mut inp = TextInput::new(i.t("最大输出，如 16384", "Max tokens"), cx);
-            inp.set_text_silent("16384", cx);
+            let mut inp = TextInput::new(i.t("最大输出，如 128000", "Max tokens"), cx);
+            inp.set_text_silent("128000", cx);
             inp
         });
         pi_models.push(crate::pages::PiModelDraft {
@@ -8365,15 +8394,15 @@ pub fn render_provider_dialog(
                                                         inp.set_text_silent(fm.display_name.clone().unwrap_or_else(|| fm.id.clone()), cx);
                                                         inp
                                                     });
-                                                    let cw_str = fm.context_length.map(|l| l.to_string()).unwrap_or_else(|| "128000".into());
+                                                    let cw_str = fm.context_length.map(|l| l.to_string()).unwrap_or_else(|| "1000000".into());
                                                     let ctx_ent = cx.new(|cx| {
-                                                        let mut inp = TextInput::new("例如 128000", cx);
+                                                        let mut inp = TextInput::new("例如 1000000", cx);
                                                         inp.set_text_silent(cw_str, cx);
                                                         inp
                                                     });
                                                     let max_ent = cx.new(|cx| {
-                                                        let mut inp = TextInput::new("例如 4096", cx);
-                                                        inp.set_text_silent("16384".to_string(), cx);
+                                                        let mut inp = TextInput::new("例如 128000", cx);
+                                                        inp.set_text_silent("128000".to_string(), cx);
                                                         inp
                                                     });
                                                     let reasoning = fm.id.contains("reasoner") || fm.id.contains("r1");
@@ -8415,12 +8444,12 @@ pub fn render_provider_dialog(
                                             let name_ent = cx.new(|cx| TextInput::new("显示名称，如 DeepSeek-V3", cx));
                                             let cw_ent = cx.new(|cx| {
                                                 let mut inp = TextInput::new("上下文窗口", cx);
-                                                inp.set_text_silent("128000", cx);
+                                                inp.set_text_silent("1000000", cx);
                                                 inp
                                             });
                                             let mt_ent = cx.new(|cx| {
                                                 let mut inp = TextInput::new("最大输出", cx);
-                                                inp.set_text_silent("16384", cx);
+                                                inp.set_text_silent("128000", cx);
                                                 inp
                                             });
                                             d.pi_models.push(crate::pages::PiModelDraft {
@@ -10780,6 +10809,7 @@ fn save_provider(
         cost_multiplier: (!cost_multiplier_txt.is_empty()).then(|| cost_multiplier_txt),
         pricing_model_source: (pricing_model_source != "inherit").then(|| pricing_model_source),
         model_rewrites: (!model_rewrites.is_empty()).then(|| model_rewrites),
+        api_format: (!api_format.is_empty()).then(|| api_format.clone()),
     };
 
     let mut env_headers = Vec::new();

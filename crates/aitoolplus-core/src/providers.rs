@@ -51,6 +51,8 @@ pub struct ProviderMeta {
     pub pricing_model_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "modelRewrites")]
     pub model_rewrites: Option<Vec<ModelRewriteRule>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "apiFormat")]
+    pub api_format: Option<String>,
 }
 
 /// Custom HTTP header item.
@@ -998,6 +1000,7 @@ mod tests {
                     to: "deepseek-chat".into(),
                 },
             ]),
+            api_format: Some("anthropic".into()),
         };
         record.set_meta(&meta);
         assert!(record.meta.is_some());

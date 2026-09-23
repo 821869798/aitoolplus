@@ -176,22 +176,36 @@ pub fn build_auth_headers(
     let mut headers = Vec::new();
     let key = api_key.trim();
     if !key.is_empty() {
+        // ALWAYS include standard Bearer authorization.
+        // /v1/models is an OpenAI-standard route. Almost all reverse proxies and gateways
+        // (including AnyRouter, OneAPI, NewAPI, PackHub, OpenRouter, DeepSeek) strictly require
+        // `Authorization: Bearer <key>` to query /v1/models, even when proxying Claude or Codex.
+        headers.push(("Authorization".to_string(), format!("Bearer {key}")));
+
+        // In addition, supply protocol-specific headers (e.g. Anthropic, Gemini) so native
+        // or protocol-strict endpoints also succeed.
         match api_format {
             Some("anthropic-messages") | Some("anthropic") => {
                 headers.push(("x-api-key".to_string(), key.to_string()));
+                headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
             }
             Some("google-generative-ai") | Some("gemini") | Some("gemini_native") => {
                 headers.push(("x-goog-api-key".to_string(), key.to_string()));
             }
             _ => {
-                headers.push(("Authorization".to_string(), format!("Bearer {key}")));
+                headers.push(("x-api-key".to_string(), key.to_string()));
             }
         }
     }
     if let Some(custom) = custom_headers {
         for (k, v) in custom {
-            if !k.trim().is_empty() {
-                headers.push((k.trim().to_string(), v.trim().to_string()));
+            let k_trimmed = k.trim();
+            if !k_trimmed.is_empty() {
+                if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k_trimmed)) {
+                    headers[pos] = (k_trimmed.to_string(), v.trim().to_string());
+                } else {
+                    headers.push((k_trimmed.to_string(), v.trim().to_string()));
+                }
             }
         }
     }
@@ -239,34 +253,39 @@ pub fn parse_custom_headers(raw: &str) -> BTreeMap<String, String> {
 }
 
 /// Parse an OpenAI-style `/v1/models` response into entries.
-/// Accepts either `{ "data": [...] }` or `[...]`.
+/// Accepts `{ "data": [...] }`, `[...]`, or `{ "models": [...] }` (Google Gemini).
 pub fn parse_openai_models(body: &Value) -> Vec<FetchedModel> {
     let arr = if let Some(a) = body.get("data").and_then(Value::as_array) {
         a
     } else if let Some(a) = body.as_array() {
+        a
+    } else if let Some(a) = body.get("models").and_then(Value::as_array) {
         a
     } else {
         return vec![];
     };
     arr.iter()
         .filter_map(|m| {
-            let id = m.get("id").and_then(Value::as_str)?;
+            let id = m.get("id").or_else(|| m.get("name")).and_then(Value::as_str)?;
+            let clean_id = id.strip_prefix("models/").unwrap_or(id);
             let owned_by = m
                 .get("owned_by")
                 .or_else(|| m.get("ownedBy"))
                 .and_then(Value::as_str)
                 .map(String::from);
             Some(FetchedModel {
-                id: id.to_string(),
+                id: clean_id.to_string(),
                 owned_by,
                 display_name: m
                     .get("display_name")
+                    .or_else(|| m.get("displayName"))
                     .or_else(|| m.get("name"))
                     .and_then(Value::as_str)
                     .map(String::from),
                 context_length: m
                     .get("context_length")
                     .or_else(|| m.get("context_length_tokens"))
+                    .or_else(|| m.get("input_token_limit"))
                     .and_then(Value::as_u64),
                 input_price: m.get("input_price").and_then(Value::as_f64),
                 output_price: m.get("output_price").and_then(Value::as_f64),
@@ -279,20 +298,40 @@ pub fn parse_openai_models(body: &Value) -> Vec<FetchedModel> {
 
 /// Extract the api key + base URL from a provider record's settings JSON.
 pub fn provider_endpoint(settings: &Value) -> Option<(String, String)> {
-    // Codex stores a TOML projection in {"toml":"..."}.
-    if let Some(raw) = settings.get("toml").and_then(Value::as_str)
+    // Codex stores a TOML projection in {"toml":"..."} or {"config":"..."}.
+    if let Some(raw) = settings
+        .get("toml")
+        .or_else(|| settings.get("config"))
+        .and_then(Value::as_str)
         && let Ok(doc) = raw.parse::<toml_edit::DocumentMut>()
-        && let Some(selector) = doc.get("model_provider").and_then(|value| value.as_str())
-        && let Some(table) = doc
+    {
+        let selector = doc
+            .get("model_provider")
+            .and_then(|value| value.as_str())
+            .unwrap_or("custom");
+        if let Some(table) = doc
             .get("model_providers")
             .and_then(|providers| providers.get(selector))
-    {
-        let base = table.get("base_url").and_then(|value| value.as_str())?;
-        let key = table
-            .get("api_key")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        return Some((base.into(), key.into()));
+        {
+            if let Some(base) = table.get("base_url").and_then(|value| value.as_str()) {
+                let mut key = table
+                    .get("api_key")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if key.is_empty() {
+                    if let Some(auth_key) = settings
+                        .pointer("/auth/OPENAI_API_KEY")
+                        .or_else(|| settings.pointer("/auth/api_key"))
+                        .or_else(|| settings.pointer("/auth/token"))
+                        .and_then(Value::as_str)
+                    {
+                        key = auth_key.to_string();
+                    }
+                }
+                return Some((base.into(), key));
+            }
+        }
     }
 
     // OpenCode stores provider entries under provider.<id>.options.
@@ -313,13 +352,14 @@ pub fn provider_endpoint(settings: &Value) -> Option<(String, String)> {
         }
     }
 
-    // camelCase/snake_case and Claude env shapes.
+    // camelCase/snake_case, Claude env shapes, and Gemini env shapes.
     let base = settings
         .get("baseUrl")
         .or_else(|| settings.get("base_url"))
         .or_else(|| settings.get("baseURL"))
         .or_else(|| settings.pointer("/env/ANTHROPIC_BASE_URL"))
         .or_else(|| settings.pointer("/env/GOOGLE_GEMINI_BASE_URL"))
+        .or_else(|| settings.pointer("/env/GEMINI_BASE_URL"))
         .and_then(Value::as_str)?;
     let key = settings
         .get("apiKey")
@@ -334,6 +374,21 @@ pub fn provider_endpoint(settings: &Value) -> Option<(String, String)> {
         .or_else(|| {
             settings
                 .pointer("/env/ANTHROPIC_API_KEY")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            settings
+                .pointer("/env/GEMINI_API_KEY")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            settings
+                .pointer("/env/GOOGLE_API_KEY")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            settings
+                .pointer("/auth/OPENAI_API_KEY")
                 .and_then(Value::as_str)
         })
         .unwrap_or("");
@@ -360,6 +415,7 @@ pub fn fetch_models_advanced(
         .timeout(std::time::Duration::from_secs(15))
         .build();
 
+    let mut had_auth_error = false;
     let mut last_err = String::new();
 
     for url in &candidates {
@@ -387,7 +443,9 @@ pub fn fetch_models_advanced(
                 }
             }
             Err(ureq::Error::Status(401, _) | ureq::Error::Status(403, _)) => {
-                return Err(ModelsFetchError::Auth);
+                had_auth_error = true;
+                last_err = format!("Candidate {url} returned 401/403");
+                continue;
             }
             Err(ureq::Error::Status(404, _) | ureq::Error::Status(405, _)) => {
                 last_err = format!("Candidate {url} returned 404/405");
@@ -400,7 +458,9 @@ pub fn fetch_models_advanced(
         }
     }
 
-    if !last_err.is_empty() {
+    if had_auth_error {
+        Err(ModelsFetchError::Auth)
+    } else if !last_err.is_empty() {
         Err(ModelsFetchError::Network(last_err))
     } else {
         Err(ModelsFetchError::Unsupported(
@@ -503,19 +563,17 @@ mod tests {
     #[test]
     fn test_build_auth_headers() {
         let anthropic = build_auth_headers("sk-ant", Some("anthropic"), None);
-        assert_eq!(anthropic, vec![("x-api-key".to_string(), "sk-ant".to_string())]);
+        assert!(anthropic.contains(&("Authorization".to_string(), "Bearer sk-ant".to_string())));
+        assert!(anthropic.contains(&("x-api-key".to_string(), "sk-ant".to_string())));
+        assert!(anthropic.contains(&("anthropic-version".to_string(), "2023-06-01".to_string())));
 
         let gemini = build_auth_headers("gem-key", Some("gemini"), None);
-        assert_eq!(
-            gemini,
-            vec![("x-goog-api-key".to_string(), "gem-key".to_string())]
-        );
+        assert!(gemini.contains(&("Authorization".to_string(), "Bearer gem-key".to_string())));
+        assert!(gemini.contains(&("x-goog-api-key".to_string(), "gem-key".to_string())));
 
         let default_auth = build_auth_headers("sk-open", None, None);
-        assert_eq!(
-            default_auth,
-            vec![("Authorization".to_string(), "Bearer sk-open".to_string())]
-        );
+        assert!(default_auth.contains(&("Authorization".to_string(), "Bearer sk-open".to_string())));
+        assert!(default_auth.contains(&("x-api-key".to_string(), "sk-open".to_string())));
     }
 
     #[test]
@@ -555,5 +613,24 @@ mod tests {
         assert_eq!(models[0].owned_by.as_deref(), Some("anthropic"));
         assert_eq!(models[1].id, "deepseek-chat");
         assert_eq!(models[1].owned_by.as_deref(), Some("deepseek"));
+    }
+
+    #[test]
+    #[ignore]
+    fn test_anyrouter_claude_and_codex_fetch() {
+        let base_url = "https://anyrouter.top";
+        let api_key = "sk-Lcs8bYuZUPSNhvO9lWE4wfriQlgCxkqmYfzlThiTi8iR7bTU";
+        // Claude Code fetch simulation (with api_format: "anthropic")
+        let claude_res = fetch_models_advanced(base_url, api_key, Some("anthropic"), None, None);
+        assert!(claude_res.is_ok(), "Claude AnyRouter fetch failed: {:?}", claude_res.err());
+        let claude_models = claude_res.unwrap().models;
+        assert!(!claude_models.is_empty());
+        assert!(claude_models.iter().any(|m| m.id.starts_with("claude-")));
+
+        // Codex fetch simulation (base_url: "https://anyrouter.top/v1", api_format: "openai_responses")
+        let codex_res = fetch_models_advanced("https://anyrouter.top/v1", api_key, Some("openai_responses"), None, None);
+        assert!(codex_res.is_ok(), "Codex AnyRouter fetch failed: {:?}", codex_res.err());
+        let codex_models = codex_res.unwrap().models;
+        assert!(!codex_models.is_empty());
     }
 }
