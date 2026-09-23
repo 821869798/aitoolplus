@@ -641,6 +641,38 @@ impl Workspace {
             .detach();
         }
 
+        // Session log usage sync background worker (parity with cc-switch periodic 60s sync)
+        let weak_sync = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            // Initial sync 3 seconds after startup
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(3))
+                .await;
+            let _ = weak_sync.update(cx, |ws, cx| {
+                if ws.settings.usage_auto_scan_sessions {
+                    ws.trigger_session_sync(cx, false);
+                }
+            });
+
+            // Periodic sync loop every 60 seconds
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(60))
+                    .await;
+                let active = weak_sync
+                    .update(cx, |ws, cx| {
+                        if ws.settings.usage_auto_scan_sessions {
+                            ws.trigger_session_sync(cx, false);
+                        }
+                    })
+                    .is_ok();
+                if !active {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         ws
     }
 

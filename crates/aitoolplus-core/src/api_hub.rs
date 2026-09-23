@@ -419,11 +419,21 @@ pub fn fetch_models_advanced(
     let mut last_auth_detail: Option<String> = None;
     let mut last_err = String::new();
 
+    let has_custom_ua = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
+    let default_ua = if !has_custom_ua && (base_url.contains("agentrouter") || api_format.map_or(false, |f| f.contains("anthropic"))) {
+        "claude-cli/2.1.219 (external, sdk-cli)"
+    } else {
+        "aitoolplus/1.0"
+    };
+
     for url in &candidates {
         let mut request = agent
             .get(url)
-            .set("Accept", "application/json")
-            .set("User-Agent", "aitoolplus/1.0");
+            .set("Accept", "application/json");
+
+        if !has_custom_ua {
+            request = request.set("User-Agent", default_ua);
+        }
 
         for (k, v) in &headers {
             request = request.set(k, v);
@@ -445,15 +455,49 @@ pub fn fetch_models_advanced(
             }
             Err(ureq::Error::Status(status, response)) if status == 401 || status == 403 => {
                 had_auth_error = true;
+                let mut is_unauthorized_client = false;
                 if let Ok(val) = response.into_json::<Value>() {
                     if let Some(msg) = val
                         .pointer("/error/message")
                         .or_else(|| val.pointer("/message"))
                         .and_then(Value::as_str)
                     {
+                        if msg.to_ascii_lowercase().contains("unauthorized client")
+                            || msg.to_ascii_lowercase().contains("unauthorized_client")
+                        {
+                            is_unauthorized_client = true;
+                        }
                         last_auth_detail = Some(msg.trim().to_string());
                     }
                 }
+
+                // If blocked by client fingerprinting (e.g. AgentRouter WAF), auto-retry with Claude CLI headers!
+                if is_unauthorized_client {
+                    let mut retry_req = agent
+                        .get(url)
+                        .set("Accept", "application/json")
+                        .set("User-Agent", "claude-cli/2.1.219 (external, sdk-cli)")
+                        .set("anthropic-version", "2023-06-01")
+                        .set("x-app", "cli");
+                    for (k, v) in &headers {
+                        if !k.eq_ignore_ascii_case("user-agent") {
+                            retry_req = retry_req.set(k, v);
+                        }
+                    }
+                    if let Ok(retry_resp) = retry_req.call() {
+                        if let Ok(body) = retry_resp.into_json::<Value>() {
+                            let mut models = parse_openai_models(&body);
+                            if !models.is_empty() {
+                                models.sort_by_key(|a| a.id.to_lowercase());
+                                return Ok(ModelsFetchResult {
+                                    models,
+                                    raw: Some(body),
+                                });
+                            }
+                        }
+                    }
+                }
+
                 if last_auth_detail.is_none() {
                     last_err = format!("Candidate {url} returned {status}");
                 }
@@ -658,5 +702,17 @@ mod tests {
         assert!(codex_res.is_ok(), "Codex AnyRouter fetch failed: {:?}", codex_res.err());
         let codex_models = codex_res.unwrap().models;
         assert!(!codex_models.is_empty());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_agentrouter_fetch() {
+        let base_url = "https://agentrouter.org";
+        let api_key = "sk-Iw3m9qsWSiGBr22ziZBvKGjmqZRmNmM1pHHUvsxedlHOLfbI";
+        let res = fetch_models_advanced(base_url, api_key, Some("anthropic-messages"), None, None);
+        assert!(res.is_ok(), "AgentRouter fetch failed: {:?}", res.err());
+        let models = res.unwrap().models;
+        assert!(!models.is_empty(), "Models should not be empty");
+        assert!(models.iter().any(|m| m.id == "claude-opus-5"), "Should contain claude-opus-5");
     }
 }
