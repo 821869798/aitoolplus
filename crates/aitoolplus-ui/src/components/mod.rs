@@ -3,7 +3,7 @@
 //! listeners via `cx.listener`; state lives in the hosting view (GPUI rules
 //! from flyclip's guidelines).
 
-use gpui::{ClickEvent, Context, IntoElement, Rgba, SharedString, Window, div, prelude::*, px};
+use gpui::{Animation, AnimationExt, ClickEvent, Context, IntoElement, Rgba, SharedString, Window, div, prelude::*, px};
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 
 use crate::theme::Theme;
@@ -117,6 +117,7 @@ pub fn button_with_icon_loading_l<V: 'static>(
 ) -> gpui::AnyElement {
     let t = theme.clone();
     let label: SharedString = label.into();
+    let spin_id = SharedString::from(format!("{label}-spin"));
     let id = id.into();
     let on_click = std::rc::Rc::new(on_click);
 
@@ -183,18 +184,37 @@ pub fn button_with_icon_loading_l<V: 'static>(
                     .text_color(icon_fg),
             )
         })
-        .when(loading, |this| {
-            this.child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(icon_fg)
-                    .child("⟳"),
-            )
-        })
+        .when(loading, |this| this.child(spinner(spin_id, icon_fg)))
         .child(label)
-        .on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
-            on_click(view, ev, window, cx);
-        }))
+        .when(!loading, |this| {
+            this.on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
+                on_click(view, ev, window, cx);
+            }))
+        })
+        .into_any_element()
+}
+
+pub(crate) fn spinner(id: SharedString, color: Rgba) -> gpui::AnyElement {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    div()
+        .w(px(14.0))
+        .h(px(14.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(14.0))
+        .text_color(color)
+        .with_animation(
+            id,
+            Animation::new(std::time::Duration::from_millis(700))
+                .repeat()
+                .with_max_fps(12.0),
+            move |this, delta| {
+                let index = ((delta * FRAMES.len() as f32) as usize) % FRAMES.len();
+                this.child(FRAMES[index])
+            },
+        )
         .into_any_element()
 }
 

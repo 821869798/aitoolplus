@@ -465,6 +465,9 @@ impl TextArea {
                 cx.background_executor()
                     .timer(Duration::from_millis(500))
                     .await;
+                if !crate::window_on_screen() {
+                    continue;
+                }
                 let res = this.update(cx, |ta, cx| {
                     ta.cursor_visible = !ta.cursor_visible;
                     cx.notify();

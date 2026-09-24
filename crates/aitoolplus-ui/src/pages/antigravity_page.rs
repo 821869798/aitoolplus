@@ -16,9 +16,9 @@ use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, uniform_list
 use chrono::{DateTime, NaiveDateTime, Utc};
 
 use crate::components::{
-    ButtonVariant, Tooltip, button_l, button_with_icon_l, empty_state_svg,
+    ButtonVariant, Tooltip, button_l, button_with_icon_l, button_with_icon_loading_l, empty_state_svg,
     error_action_link_button, error_banner, error_strip, error_strip_action,
-    icon_button_svg, input_container, parse_generic_error,
+    icon_button_svg, input_container, parse_generic_error, toggle,
 };
 use crate::icons::{
     ALERT_SVG, ARROW_LEFT_SVG, ARROW_RIGHT_LEFT_SVG, CHECK_SVG, CLOCK_SVG, CODE_SVG, COPY_SVG, DATABASE_SVG,
@@ -56,6 +56,14 @@ pub struct AntigravityDialogState {
     pub is_authorizing: bool,
     pub error_message: Option<String>,
     pub session: Option<std::sync::Arc<OAuthServerSession>>,
+}
+
+fn display_email(email: &str, mask: bool) -> String {
+    if mask {
+        mask_email(email)
+    } else {
+        email.to_string()
+    }
 }
 
 /// Mask an email for privacy (e.g. "unifangg@gmail.com" -> "uni***@gmail.com").
@@ -270,22 +278,12 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                                 import_local_account_action(ws, cx);
                             },
                         ))
-                        .child(button_with_icon_l(
-                            "ag-import-manager-btn",
-                            DOWNLOAD_SVG,
-                            i.t("从 Manager 迁移", "Import from Manager"),
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                import_from_manager_action(ws, cx);
-                            },
-                        ))
-                        .child(button_with_icon_l(
+                        .child(button_with_icon_loading_l(
                             "ag-refresh-all-btn",
                             REFRESH_SVG,
                             refresh_all_label,
                             ButtonVariant::Secondary,
+                            ws.ui.antigravity_refreshing_all,
                             &t,
                             cx,
                             |ws, _, _, cx| {
@@ -301,6 +299,30 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                                 .text_size(px(12.0))
                                 .text_color(t.text_secondary)
                                 .child(format!("共 {} 个账号", accounts.len())),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(t.text_secondary)
+                                        .child(i.t("隐藏邮箱", "Mask emails")),
+                                )
+                                .child(toggle(
+                                    "ag-mask-email",
+                                    ws.settings.antigravity_mask_email,
+                                    &t,
+                                    cx,
+                                    |ws, _, _, cx| {
+                                        ws.settings.antigravity_mask_email =
+                                            !ws.settings.antigravity_mask_email;
+                                        (ws.callbacks.save_settings)(&ws.settings);
+                                        cx.notify();
+                                    },
+                                )),
                         )
                         .child({
                             let auto_on = ws.settings.antigravity_auto_refresh;
@@ -1734,9 +1756,26 @@ fn render_action_icon_btn<F>(
 where
     F: Fn(&mut Workspace, &gpui::ClickEvent, &mut gpui::Window, &mut Context<Workspace>) + 'static,
 {
+    render_action_icon_btn_loading(id, svg_data, tooltip, danger, false, t, cx, on_click)
+}
+
+fn render_action_icon_btn_loading<F>(
+    id: impl Into<gpui::ElementId>,
+    svg_data: &'static [u8],
+    tooltip: impl Into<SharedString>,
+    danger: bool,
+    loading: bool,
+    t: &Theme,
+    cx: &mut Context<Workspace>,
+    on_click: F,
+) -> gpui::AnyElement
+where
+    F: Fn(&mut Workspace, &gpui::ClickEvent, &mut gpui::Window, &mut Context<Workspace>) + 'static,
+{
     let tc_danger = t.clone();
     let tc_normal = t.clone();
     let tooltip_str: SharedString = tooltip.into();
+    let spin_id = SharedString::from(format!("{tooltip_str}-spin"));
     let fg = if danger { t.danger } else { t.text_secondary };
     div()
         .id(id.into())
@@ -1760,15 +1799,22 @@ where
             this.hover(move |h| h.bg(tc_normal.card_hover).border_color(tc_normal.card_border).text_color(tc_normal.text_primary))
                 .active(move |a| a.bg(tc_normal.row_hover))
         })
-        .child(
-            gpui::svg()
-                .data(svg_data)
-                .size(px(13.5))
-                .text_color(fg),
-        )
-        .on_click(cx.listener(move |ws, ev, window, cx| {
-            on_click(ws, ev, window, cx);
-        }))
+        .when(!loading, |this| {
+            this.child(
+                gpui::svg()
+                    .data(svg_data)
+                    .size(px(13.5))
+                    .text_color(fg),
+            )
+        })
+        .when(loading, |this| {
+            this.child(crate::components::spinner(spin_id, fg))
+        })
+        .when(!loading, |this| {
+            this.on_click(cx.listener(move |ws, ev, window, cx| {
+                on_click(ws, ev, window, cx);
+            }))
+        })
         .into_any_element()
 }
 
@@ -1870,7 +1916,7 @@ fn render_account_card(
                         .text_size(px(13.0))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(if is_active { t.accent } else if is_disabled { t.text_muted } else { t.text_primary })
-                        .child(mask_email(&account.email)),
+                        .child(display_email(&account.email, ws.settings.antigravity_mask_email)),
                 )
                 .child(render_tier_badge(&t, account.get_tier()))
                 .when(is_active, |s| {
@@ -2045,11 +2091,13 @@ fn render_account_card(
                 ))
                 .child({
                     let ref_id = acc_id.clone();
-                    render_action_icon_btn(
+                    render_action_icon_btn_loading(
                         format!("refresh-{}", ref_id),
                         REFRESH_SVG,
                         i.t("刷新配额", "Refresh Quota"),
                         false,
+                        ws.ui.antigravity_refreshing_all
+                            || ws.ui.antigravity_refreshing_ids.contains(&ref_id),
                         &t,
                         cx,
                         move |ws, _, _, cx| {
@@ -2282,7 +2330,7 @@ pub fn render_account_details_dialog(
                         .text_size(px(13.0))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(t.text_primary)
-                        .child(mask_email(&account.email)),
+                        .child(display_email(&account.email, ws.settings.antigravity_mask_email)),
                 )
                 .child(render_tier_badge(&t, account.get_tier()))
                 .when_some(account.project_id.as_ref(), |s, pid| {
@@ -3073,14 +3121,12 @@ pub fn render_add_account_dialog(
                 )
                 // Action Button: "开始 OAuth 授权"
                 .child(
-                    button_l(
+                    button_with_icon_loading_l(
                         "ag-btn-start-oauth",
-                        if state.is_authorizing {
-                            i.t("正在等待授权…", "Waiting for authorization…")
-                        } else {
-                            i.t("开始 OAuth 授权", "Start OAuth Login")
-                        },
+                        GLOBE_SVG,
+                        i.t("开始 OAuth 授权", "Start OAuth Login"),
                         ButtonVariant::Primary,
+                        state.is_authorizing,
                         &t,
                         cx,
                         |ws, _, _, cx| {
@@ -3427,10 +3473,12 @@ pub fn render_add_account_dialog(
                     },
                 ))
                 .when(is_token, |s| {
-                    s.child(button_l(
+                    s.child(button_with_icon_loading_l(
                         "ag-dlg-submit-token-batch",
+                        CHECK_SVG,
                         i.t("确认添加", "Confirm Add"),
                         ButtonVariant::Primary,
+                        state.is_authorizing,
                         &t,
                         cx,
                         |ws, _, _, cx| {
@@ -3464,6 +3512,9 @@ fn start_browser_oauth_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
         Some(s) => s,
         None => return,
     };
+    if state.is_authorizing {
+        return;
+    }
     state.is_authorizing = true;
     state.auth_status = Some(ws.i18n.t("已在浏览器中打开授权页面，请在浏览器中完成登录…", "Opened browser for authorization…").to_string());
     state.error_message = None;
@@ -3659,6 +3710,9 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
         Some(s) => s,
         None => return,
     };
+    if state.is_authorizing {
+        return;
+    }
     let raw_input = state.refresh_token.read(cx).text().trim().to_string();
     let custom_label = state.custom_label.read(cx).text().trim().to_string();
     let label_opt = if custom_label.is_empty() { None } else { Some(custom_label) };
@@ -3687,22 +3741,26 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
 
     cx.spawn(async move |_this, cx| {
         let total = tokens.len();
-        let mut success_count = 0;
-        let mut fail_count = 0;
-        let mut imported_accounts = Vec::new();
-
-        for token in tokens {
-            match build_account_from_refresh_token(&token, None, label_opt.clone()) {
-                Ok(acc) => {
-                    success_count += 1;
-                    imported_accounts.push(acc);
+        let (success_count, fail_count, imported_accounts) = cx
+            .background_spawn(async move {
+                let mut success_count = 0;
+                let mut fail_count = 0;
+                let mut imported_accounts = Vec::new();
+                for token in tokens {
+                    match build_account_from_refresh_token(&token, None, label_opt.clone()) {
+                        Ok(acc) => {
+                            success_count += 1;
+                            imported_accounts.push(acc);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to import token: {}", e);
+                            fail_count += 1;
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to import token: {}", e);
-                    fail_count += 1;
-                }
-            }
-        }
+                (success_count, fail_count, imported_accounts)
+            })
+            .await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
             if !imported_accounts.is_empty() {
@@ -3949,11 +4007,15 @@ fn import_local_account_action(ws: &mut Workspace, cx: &mut Context<Workspace>) 
 }
 
 /// Import all accounts from Antigravity Manager (~/.antigravity_tools).
-fn import_from_manager_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+pub(super) fn import_from_manager_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.antigravity_manager_importing {
+        return;
+    }
     let home = ws.paths.home.clone();
     let app_data = ws.paths.app_data.clone();
     let weak = cx.entity().downgrade();
 
+    ws.ui.antigravity_manager_importing = true;
     ws.ui.toast(
         ws.i18n.t("正在从 Antigravity Manager 迁移账号…", "Importing accounts from Antigravity Manager…"),
         false,
@@ -3966,6 +4028,7 @@ fn import_from_manager_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
         }).await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+            ws.ui.antigravity_manager_importing = false;
             match result {
                 Ok(imported) => {
                     let count = imported.len();
@@ -3998,6 +4061,9 @@ fn import_from_manager_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 
 /// Refresh quota for a single account.
 fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.antigravity_refreshing_all || ws.ui.antigravity_refreshing_ids.contains(account_id) {
+        return;
+    }
     let account_id = account_id.to_string();
     let app_data = ws.paths.app_data.clone();
     let weak = cx.entity().downgrade();
@@ -4006,6 +4072,9 @@ fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut C
         Some(a) => a.clone(),
         None => return,
     };
+
+    ws.ui.antigravity_refreshing_ids.insert(account_id.clone());
+    cx.notify();
 
     ws.ui.toast(
         ws.i18n.t(&format!("正在刷新 {} 的用量…", account.email), &format!("Refreshing quota for {}…", account.email)),
@@ -4032,6 +4101,7 @@ fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut C
         }).await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+            ws.ui.antigravity_refreshing_ids.remove(&account_id);
             match result {
                 Ok(acc) => {
                     let mut store = ws.ui.antigravity_store.clone().unwrap_or_default();
@@ -4060,9 +4130,12 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
         None => return,
     };
 
-    if store.accounts.is_empty() {
+    if store.accounts.is_empty() || ws.ui.antigravity_refreshing_all {
         return;
     }
+
+    ws.ui.antigravity_refreshing_all = true;
+    cx.notify();
 
     let accounts_to_refresh = store.accounts.clone();
     let app_data = ws.paths.app_data.clone();
@@ -4111,6 +4184,7 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
         }).await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+            ws.ui.antigravity_refreshing_all = false;
             if let Some(s) = &mut ws.ui.antigravity_store {
                 s.accounts = updated_accounts;
                 let _ = save_store(&app_data, s);

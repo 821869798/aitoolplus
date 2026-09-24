@@ -392,6 +392,9 @@ pub struct AppSettings {
     pub antigravity_refresh_interval_minutes: u32,
     #[serde(default = "default_true")]
     pub antigravity_auto_sync: bool,
+    /// Hide part of account emails in the Antigravity list. Off unless the user turns it on.
+    #[serde(default)]
+    pub antigravity_mask_email: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_antigravity_refresh_time: Option<String>,
     /// Remembered window bounds (x, y, w, h). Restored on launch.
@@ -459,6 +462,7 @@ impl Default for AppSettings {
             antigravity_auto_refresh: true,
             antigravity_refresh_interval_minutes: default_antigravity_refresh_interval(),
             antigravity_auto_sync: true,
+            antigravity_mask_email: false,
             last_antigravity_refresh_time: None,
             window_bounds: None,
             usage_auto_scan_sessions: true,

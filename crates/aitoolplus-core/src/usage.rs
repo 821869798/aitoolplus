@@ -213,8 +213,16 @@ impl UsageDb {
     }
 
     /// Connect to the SQLite file.
+    ///
+    /// Reads and the session scan now run on different threads, so a connection
+    /// has to wait out a brief write lock instead of failing immediately.
     pub fn connect(&self) -> Result<Connection, String> {
-        Connection::open(&self.db_path).map_err(|e| format!("打开使用统计数据库失败: {e}"))
+        let conn = Connection::open(&self.db_path)
+            .map_err(|e| format!("打开使用统计数据库失败: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        Ok(conn)
     }
 
     /// Initialize SQLite schema if missing.

@@ -5,7 +5,7 @@ use aitoolplus_core::tools::ToolId;
 use gpui::{Context, IntoElement, div, prelude::*, px, uniform_list};
 
 use crate::components::{
-    BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l, input_container,
+    BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l, button_with_icon_loading_l, input_container,
     section_title, segmented_pill_selector,
 };
 use crate::text_input::TextInput;
@@ -751,11 +751,12 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     ));
 
                     // 2. 更新全部
-                    actions_bar = actions_bar.child(button_with_icon_l(
+                    actions_bar = actions_bar.child(button_with_icon_loading_l(
                         "skills-check-update",
                         crate::icons::REFRESH_SVG,
                         i.t("更新全部", "Update All"),
                         ButtonVariant::Secondary,
+                        ws.ui.skills_busy,
                         &t,
                         cx,
                         |ws, _, _, cx| check_and_update_all_action(ws, cx),
@@ -3787,6 +3788,9 @@ fn import_skill_dir(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 }
 
 fn install_from_zip_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.skills_busy {
+        return;
+    }
     let weak = cx.entity().downgrade();
     let paths = ws.paths.clone();
 
@@ -3796,19 +3800,37 @@ fn install_from_zip_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
             .add_filter("ZIP 压缩包 (*.zip)", &["zip"]);
         if let Some(file_handle) = dialog.pick_file().await {
             let zip_path = file_handle.path().to_path_buf();
+            let store = weak.update(cx, |ws, cx| {
+                if ws.ui.skills_busy {
+                    return None;
+                }
+                ws.ui.skills_busy = true;
+                cx.notify();
+                let skills = ws.store.store().skills.clone();
+                Some((skills.clone(), skills))
+            });
+            let Some((original, mut store)) = store.ok().flatten() else {
+                return;
+            };
+            let result = cx
+                .background_spawn(async move {
+                    skills::install_from_zip(&paths, &mut store, &zip_path)
+                        .map(|installed| (installed, store))
+                })
+                .await;
             let _ = weak.update(cx, |ws, cx| {
-                let mut store = ws.store.store().skills.clone();
-                match skills::install_from_zip(&paths, &mut store, &zip_path) {
-                    Ok(installed) => {
-                        let _ = ws.store.update(|db| db.skills = store);
+                ws.ui.skills_busy = false;
+                match result {
+                    Ok((installed, store)) => {
+                        let _ = ws.store.update(|db| {
+                            merge_skill_snapshot(&mut db.skills, store, &original);
+                        });
                         ws.persist_store();
                         let count = installed.len();
                         let names = installed.join(", ");
                         ws.ui.toast(format!("成功从 ZIP 安装 {count} 个技能: {names}"), false);
                     }
-                    Err(e) => {
-                        ws.ui.toast(format!("ZIP 安装失败: {e}"), true);
-                    }
+                    Err(e) => ws.ui.toast(format!("ZIP 安装失败: {e}"), true),
                 }
                 cx.notify();
             });
@@ -3817,62 +3839,150 @@ fn install_from_zip_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     .detach();
 }
 
-fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
-    let i = ws.i18n;
-    let report = {
-        let mut store = ws.store.store().skills.clone();
-        let report = skills::sync_all(&mut store, &ws.paths);
-        let _ = ws.store.update(|db| db.skills = store);
-        report
-    };
-    ws.persist_store();
+fn take_if_untouched<T: PartialEq + Clone>(current: &mut T, before: &T, after: &T) {
+    if current == before {
+        *current = after.clone();
+    }
+}
 
-    let total_ok: usize = report.iter().map(|(_, ok, _)| ok).sum();
-    let total_failed: usize = report.iter().map(|(_, _, f)| f).sum();
-    let msg = if total_failed > 0 {
-        i.t(
-            &format!("同步完成：成功 {total_ok}，失败 {total_failed}"),
-            &format!("sync done: {total_ok} ok, {total_failed} failed"),
-        )
-    } else {
-        i.t(
-            &format!("同步完成：所有已启用工具同步成功 ({total_ok})"),
-            &format!("sync done: {total_ok} ok"),
-        )
-    };
-    ws.ui.toast(msg.to_string(), total_failed > 0);
+/// Copy fields the background job changed, but keep a field the user edited
+/// after the snapshot was taken.
+fn merge_skill_record(current: &mut skills::Skill, before: &skills::Skill, after: &skills::Skill) {
+    take_if_untouched(&mut current.name, &before.name, &after.name);
+    take_if_untouched(&mut current.source_type, &before.source_type, &after.source_type);
+    take_if_untouched(&mut current.source_ref, &before.source_ref, &after.source_ref);
+    take_if_untouched(&mut current.central_path, &before.central_path, &after.central_path);
+    take_if_untouched(&mut current.content_hash, &before.content_hash, &after.content_hash);
+    take_if_untouched(&mut current.updated_at, &before.updated_at, &after.updated_at);
+    take_if_untouched(&mut current.last_sync_at, &before.last_sync_at, &after.last_sync_at);
+    take_if_untouched(&mut current.status, &before.status, &after.status);
+    take_if_untouched(&mut current.sort_index, &before.sort_index, &after.sort_index);
+    take_if_untouched(&mut current.user_group, &before.user_group, &after.user_group);
+    take_if_untouched(&mut current.user_note, &before.user_note, &after.user_note);
+    take_if_untouched(
+        &mut current.management_enabled,
+        &before.management_enabled,
+        &after.management_enabled,
+    );
+    take_if_untouched(&mut current.tags, &before.tags, &after.tags);
+    take_if_untouched(&mut current.enabled_tools, &before.enabled_tools, &after.enabled_tools);
+    take_if_untouched(&mut current.sync_details, &before.sync_details, &after.sync_details);
+    take_if_untouched(&mut current.description, &before.description, &after.description);
+    take_if_untouched(&mut current.origin_tool, &before.origin_tool, &after.origin_tool);
+}
+
+fn merge_skill_snapshot(
+    current: &mut skills::SkillsStore,
+    result: skills::SkillsStore,
+    before: &skills::SkillsStore,
+) {
+    let before_ids: std::collections::HashSet<&str> =
+        before.skills.iter().map(|skill| skill.id.as_str()).collect();
+    for after in result.skills {
+        if let Some(slot) = current.skills.iter_mut().find(|item| item.id == after.id) {
+            if let Some(original) = before.skills.iter().find(|item| item.id == after.id) {
+                merge_skill_record(slot, original, &after);
+            }
+        } else if !before_ids.contains(after.id.as_str()) {
+            current.skills.push(after);
+        }
+    }
+}
+
+fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.skills_busy {
+        return;
+    }
+    ws.ui.skills_busy = true;
     cx.notify();
+    let paths = ws.paths.clone();
+    let mut store = ws.store.store().skills.clone();
+    let original = store.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let report = cx
+            .background_spawn(async move {
+                let report = skills::sync_all(&mut store, &paths);
+                (report, store)
+            })
+            .await;
+        let _ = weak.update(cx, |ws, cx| {
+            ws.ui.skills_busy = false;
+            let (report, store) = report;
+            let _ = ws.store.update(|db| {
+                merge_skill_snapshot(&mut db.skills, store, &original);
+            });
+            ws.persist_store();
+            let total_ok: usize = report.iter().map(|(_, ok, _)| ok).sum();
+            let total_failed: usize = report.iter().map(|(_, _, f)| f).sum();
+            let msg = if total_failed > 0 {
+                ws.i18n.t(
+                    &format!("同步完成：成功 {total_ok}，失败 {total_failed}"),
+                    &format!("sync done: {total_ok} ok, {total_failed} failed"),
+                )
+            } else {
+                ws.i18n.t(
+                    &format!("同步完成：所有已启用工具同步成功 ({total_ok})"),
+                    &format!("sync done: {total_ok} ok"),
+                )
+            };
+            ws.ui.toast(msg.to_string(), total_failed > 0);
+            cx.notify();
+        });
+    })
+    .detach();
 }
 
 fn check_and_update_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
-    let i = ws.i18n;
-    let (updated, failed) = {
-        let mut store = ws.store.store().skills.clone();
-        let res = skills::update_all_skills(&mut store, &ws.paths);
-        let _ = ws.store.update(|db| db.skills = store);
-        res
-    };
-    ws.persist_store();
-    let msg = if updated > 0 {
-        i.t(
-            &format!("检查完成：已更新 {updated} 个技能"),
-            &format!("Check complete: updated {updated} skills"),
-        )
-        .to_string()
-    } else if failed > 0 {
-        i.t(
-            &format!("检查完成：{failed} 个技能更新失败，请检查网络"),
-            &format!("Check complete: {failed} skills failed to update"),
-        )
-        .to_string()
-    } else {
-        i.t(
-            "检查完成：所有已安装技能均为最新版本",
-            "Check complete: all skills are up to date",
-        )
-        .to_string()
-    };
-    ws.ui.toast(msg, failed > 0);
+    if ws.ui.skills_busy {
+        return;
+    }
+    ws.ui.skills_busy = true;
     cx.notify();
+    let paths = ws.paths.clone();
+    let mut store = ws.store.store().skills.clone();
+    let original = store.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let result = cx
+            .background_spawn(async move {
+                let res = skills::update_all_skills(&mut store, &paths);
+                (res, store)
+            })
+            .await;
+        let _ = weak.update(cx, |ws, cx| {
+            ws.ui.skills_busy = false;
+            let ((updated, failed), store) = result;
+            let _ = ws.store.update(|db| {
+                merge_skill_snapshot(&mut db.skills, store, &original);
+            });
+            ws.persist_store();
+            let msg = if updated > 0 {
+                ws.i18n
+                    .t(
+                        &format!("检查完成：已更新 {updated} 个技能"),
+                        &format!("Check complete: updated {updated} skills"),
+                    )
+                    .to_string()
+            } else if failed > 0 {
+                ws.i18n
+                    .t(
+                        &format!("检查完成：{failed} 个技能更新失败，请检查网络"),
+                        &format!("Check complete: {failed} skills failed to update"),
+                    )
+                    .to_string()
+            } else {
+                ws.i18n
+                    .t(
+                        "检查完成：所有已安装技能均为最新版本",
+                        "Check complete: all skills are up to date",
+                    )
+                    .to_string()
+            };
+            ws.ui.toast(msg, failed > 0);
+            cx.notify();
+        });
+    })
+    .detach();
 }
 
