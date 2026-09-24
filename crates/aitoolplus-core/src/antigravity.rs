@@ -2451,9 +2451,11 @@ pub fn scan_antigravity_sessions(home: &Path, limit: usize) -> Vec<AntigravitySe
         scan_ide_sessions(&ide_dir, &mut sessions);
     }
 
-    // Sort descending by last_active_at
+    // Sort descending by last_active_at. `usize::MAX` keeps every session.
     sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
-    sessions.truncate(limit);
+    if limit != usize::MAX {
+        sessions.truncate(limit);
+    }
     sessions
 }
 

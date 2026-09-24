@@ -1475,6 +1475,7 @@ pub fn fused_combobox<V: 'static>(
     }
 
     let on_open_click = on_open.clone();
+    let on_close_click = on_close.clone();
     let mut trigger_box = div()
         .id(id_str.clone())
         .h(px(34.0))
@@ -1487,8 +1488,10 @@ pub fn fused_combobox<V: 'static>(
         .items_center()
         .justify_between()
         .hover(|h| h.border_color(if is_open { t.accent } else { t.card_border_hover }))
-        .on_click(cx.listener(move |view, _, window, cx| {
-            if !is_open {
+        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |view, _, window, cx| {
+            if is_open {
+                on_close_click(view, cx);
+            } else {
                 on_open_click(view, window, cx);
             }
         }));
@@ -1499,6 +1502,9 @@ pub fn fused_combobox<V: 'static>(
         .h_full()
         .flex()
         .items_center()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
         .child(input_entity.clone());
 
     let mut right_icons = div()

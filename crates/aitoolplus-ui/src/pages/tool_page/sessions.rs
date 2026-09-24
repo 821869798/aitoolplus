@@ -3,12 +3,13 @@ use aitoolplus_core::pi_pages::PiModelSettings;
 use aitoolplus_core::providers::{CATEGORIES, ProviderRecord};
 use aitoolplus_core::session::{self, SessionMeta};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, deferred, div, prelude::*, px, uniform_list};
+use gpui::{Context, IntoElement, ScrollStrategy, deferred, div, prelude::*, px, uniform_list};
 use gpui_kit::base::{Align, ElementExt as _, Placement, Positioner, POPUP_PRIORITY};
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use serde_json::Value;
 
 use crate::components::{
-    self, BadgeKind, ButtonVariant, Tooltip, badge, button_l, button_with_icon_l,
+    self, ButtonVariant, Tooltip, button_l, button_with_icon_l,
     button_with_icon_loading_l, input_container, page_header, section_title, text_area_scroll_container, textarea_container,
 };
 use crate::i18n::I18n;
@@ -26,16 +27,69 @@ pub fn load_agent_sessions(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Wo
         return;
     }
     ws.ui.agent_sessions_loading = true;
+    ws.ui.agent_session_scan = ws.ui.agent_session_scan.wrapping_add(1);
+    let generation = ws.ui.agent_session_scan;
+    ws.ui.agent_sessions = Some((tool, Vec::new()));
+    ws.ui.agent_session_scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
     let paths = ws.paths.clone();
     let weak = cx.entity().downgrade();
     cx.spawn(async move |_this, cx| {
-        let result = cx
-            .background_spawn(async move {
-                session::cached_scan(&paths, tool, session::DEFAULT_SESSION_PATH_LIMIT)
-            })
+        if let Some(hit) = session::cached_all_if_fresh(tool) {
+            let _ = weak.update(cx, |workspace, cx| {
+                if workspace.ui.agent_session_scan != generation {
+                    return;
+                }
+                workspace.ui.agent_sessions = Some((tool, hit));
+                workspace.ui.agent_sessions_loading = false;
+                cx.notify();
+            });
+            return;
+        }
+        let mut scan = cx
+            .background_spawn(async move { session::SessionScan::open(&paths, tool) })
             .await;
+        loop {
+            let (next, batch) = cx
+                .background_spawn(async move {
+                    let batch = scan.next_batch(200);
+                    (scan, batch)
+                })
+                .await;
+            scan = next;
+            let Some(batch) = batch else {
+                break;
+            };
+            if batch.is_empty() {
+                continue;
+            }
+            let keep = weak
+                .update(cx, |workspace, cx| {
+                    if workspace.ui.agent_session_scan != generation {
+                        return false;
+                    }
+                    if let Some((loaded, list)) = &mut workspace.ui.agent_sessions {
+                        if *loaded == tool {
+                            list.extend(batch);
+                        }
+                    }
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+            if !keep {
+                return;
+            }
+        }
         let _ = weak.update(cx, |workspace, cx| {
-            workspace.ui.agent_sessions = Some((tool, result));
+            if workspace.ui.agent_session_scan != generation {
+                return;
+            }
+            if let Some((loaded, list)) = &mut workspace.ui.agent_sessions {
+                if *loaded == tool {
+                    list.sort_by_key(|item| std::cmp::Reverse(item.last_active_at));
+                    session::store_full_list_cache(tool, list.clone());
+                }
+            }
             workspace.ui.agent_sessions_loading = false;
             cx.notify();
         });
@@ -106,9 +160,6 @@ pub(super) fn agent_sessions_section(
             .min_w(px(0.0))
             .child(input_container(&t, ws.ui.agent_session_search.clone())),
     );
-    if ws.ui.agent_sessions_loading {
-        toolbar = toolbar.child(badge(&t, i.t("正在扫描会话…", "Scanning sessions…"), BadgeKind::Neutral));
-    }
     toolbar = toolbar.child(
         div()
             .text_size(px(12.0))
@@ -163,51 +214,83 @@ pub(super) fn agent_sessions_section(
             ),
         );
     } else {
-        let items: std::sync::Arc<Vec<SessionMeta>> = std::sync::Arc::new(filtered);
-        let items_len = items.len();
-        let items_for_list = items.clone();
-        let ws_entity = cx.entity();
-        let t_clone = t.clone();
-        let i_clone = i.clone();
-
-        let v_list = uniform_list(
+        let items = std::sync::Arc::new(filtered);
+        section = section.child(session_list_viewport(
             "agent-sessions-virtual-list",
-            items_len,
-            move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
-                let mut elements = Vec::with_capacity(range.len());
-                for idx in range {
-                    if let Some(s) = items_for_list.get(idx) {
-                        elements.push(render_virtual_agent_session_card(
-                            s,
-                            tool,
-                            &ws_entity,
-                            &t_clone,
-                            &i_clone,
-                        ));
-                    }
-                }
-                elements
-            },
-        )
-        .size_full();
-
-        section = section.child(
-            div()
-                .w_full()
-                .flex_1()
-                .h_full()
-                .min_h(px(0.0))
-                .overflow_hidden()
-                .rounded(px(8.0))
-                .bg(t.sidebar_bg)
-                .border_1()
-                .border_color(t.card_border)
-                .p(px(8.0))
-                .child(v_list),
-        );
+            "agent-sessions-scrollbar",
+            items,
+            tool,
+            ws.ui.agent_session_scroll.clone(),
+            cx.entity(),
+            &t,
+            &i,
+        ));
     }
 
     section.into_any_element()
+}
+
+pub(crate) fn session_list_viewport(
+    list_id: &'static str,
+    bar_id: &'static str,
+    items: std::sync::Arc<Vec<SessionMeta>>,
+    tool: ToolId,
+    scroll: gpui::UniformListScrollHandle,
+    ws_entity: gpui::Entity<Workspace>,
+    t: &Theme,
+    i: &I18n,
+) -> gpui::AnyElement {
+    let items_len = items.len();
+    let items_for_list = items.clone();
+    let t_clone = t.clone();
+    let i_clone = i.clone();
+    let v_list = uniform_list(
+        list_id,
+        items_len,
+        move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| {
+            let mut elements = Vec::with_capacity(range.len());
+            for idx in range {
+                if let Some(item) = items_for_list.get(idx) {
+                    elements.push(render_virtual_agent_session_card(
+                        item,
+                        tool,
+                        &ws_entity,
+                        &t_clone,
+                        &i_clone,
+                    ));
+                }
+            }
+            elements
+        },
+    )
+    .size_full()
+    .track_scroll(&scroll);
+    let scrollbar = Scrollbar::vertical(&scroll)
+        .id(bar_id)
+        .mode(ScrollbarMode::Always)
+        .viewport_from_layout();
+    div()
+        .relative()
+        .w_full()
+        .flex_1()
+        .h_full()
+        .min_h(px(0.0))
+        .overflow_hidden()
+        .rounded(px(8.0))
+        .bg(t.sidebar_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .child(
+            div()
+                .size_full()
+                .pt(px(8.0))
+                .pb(px(8.0))
+                .pl(px(8.0))
+                .pr(px(20.0))
+                .child(v_list),
+        )
+        .child(div().absolute().inset_0().child(scrollbar))
+        .into_any_element()
 }
 
 pub(super) fn fmt_time(ms: Option<i64>) -> String {
@@ -227,7 +310,7 @@ pub(super) fn short_session_id_tool(sid: &str) -> String {
     }
 }
 
-pub(super) fn render_virtual_agent_session_card(
+pub(crate) fn render_virtual_agent_session_card(
     s: &SessionMeta,
     tool: ToolId,
     ws_entity: &gpui::Entity<Workspace>,
@@ -246,6 +329,7 @@ pub(super) fn render_virtual_agent_session_card(
 
     let sid_click = sid.clone();
     let ws_entity_click = ws_entity.clone();
+    let meta_open = meta.clone();
 
     let card = div()
         .id(gpui::SharedString::from(format!("v-sess-{}", s.session_id)))
@@ -270,8 +354,13 @@ pub(super) fn render_virtual_agent_session_card(
         })
         .on_click(move |_ev, _win, cx| {
             let sid_c = sid_click.clone();
+            let opened = meta_open.clone();
             let _ = ws_entity_click.update(cx, |ws, cx| {
-                ws.ui.open_session = Some((tool, sid_c));
+                if opened.provider_id.starts_with("antigravity:") {
+                    ws.ui.antigravity_open_session = Some(antigravity_meta(&opened));
+                } else {
+                    ws.ui.open_session = Some((tool, sid_c));
+                }
                 cx.notify();
             });
         });
@@ -284,17 +373,7 @@ pub(super) fn render_virtual_agent_session_card(
         .min_w(px(0.0))
         .flex_1()
         .overflow_hidden()
-        // Row 1: Title
-        .child(
-            div()
-                .text_size(px(14.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(t.text_primary)
-                .overflow_hidden()
-                .text_ellipsis()
-                .whitespace_nowrap()
-                .child(display_title),
-        )
+        .child(session_title_row(s, &display_title, t))
         // Row 2: Meta (Time, Hash, Directory)
         .child(
             div()
@@ -394,8 +473,7 @@ pub(super) fn render_virtual_agent_session_card(
         );
     }
 
-    // [重命名]
-    {
+    if !s.provider_id.starts_with("antigravity:") {
         let ws_entity = ws_entity.clone();
         let meta_for_rename = meta.clone();
         actions = actions.child(
@@ -462,18 +540,32 @@ pub(super) fn render_virtual_agent_session_card(
                 .on_click(move |_ev, _win, cx| {
                     cx.stop_propagation();
                     let s_id = sid_del.clone();
+                    let deleted = meta.clone();
                     let _ = ws_entity.update(cx, |ws, cx| {
-                        ws.ui.confirm = Some(crate::pages::ConfirmState {
-                            title: ws.i18n.t("删除会话", "Delete Session").to_string(),
-                            message: ws
-                                .i18n
-                                .t("确定要删除这条会话记录吗？此操作无法恢复。", "Delete this session? This action cannot be undone.")
-                                .to_string(),
-                            action: crate::pages::ConfirmAction::DeleteSession {
-                                tool,
-                                id: s_id,
-                            },
-                        });
+                        if deleted.provider_id.starts_with("antigravity:") {
+                            let session = antigravity_meta(&deleted);
+                            let msg = format!(
+                                "确定要删除此会话记录 ({}) 吗？磁盘上的相关数据将被永久移除。",
+                                session.session_id
+                            );
+                            ws.ui.confirm = Some(crate::pages::ConfirmState {
+                                title: ws.i18n.t("删除 Antigravity 会话", "Delete Antigravity Session").to_string(),
+                                message: msg,
+                                action: crate::pages::ConfirmAction::DeleteAntigravitySession { session },
+                            });
+                        } else {
+                            ws.ui.confirm = Some(crate::pages::ConfirmState {
+                                title: ws.i18n.t("删除会话", "Delete Session").to_string(),
+                                message: ws
+                                    .i18n
+                                    .t("确定要删除这条会话记录吗？此操作无法恢复。", "Delete this session? This action cannot be undone.")
+                                    .to_string(),
+                                action: crate::pages::ConfirmAction::DeleteSession {
+                                    tool,
+                                    id: s_id,
+                                },
+                            });
+                        }
                         cx.notify();
                     });
                 })
@@ -487,6 +579,67 @@ pub(super) fn render_virtual_agent_session_card(
         .pb(px(12.0))
         .child(card.child(left).child(actions))
         .into_any_element()
+}
+
+fn session_title_row(s: &SessionMeta, title: &str, t: &Theme) -> gpui::Div {
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .min_w(px(0.0))
+        .overflow_hidden();
+    if let Some(source) = s.provider_id.strip_prefix("antigravity:") {
+        let (label, bg, border, color) = if source == "cli" {
+            ("CLI", t.accent.opacity(0.12), t.accent.opacity(0.3), t.accent)
+        } else {
+            ("App", t.sidebar_bg, t.card_border, t.text_secondary)
+        };
+        row = row.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(18.0))
+                .px(px(6.0))
+                .rounded(px(4.0))
+                .bg(bg)
+                .border_1()
+                .border_color(border)
+                .text_size(px(11.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(color)
+                .flex_shrink_0()
+                .child(label),
+        );
+    }
+    row.child(
+        div()
+            .text_size(px(14.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(t.text_primary)
+            .overflow_hidden()
+            .text_ellipsis()
+            .whitespace_nowrap()
+            .child(title.to_string()),
+    )
+}
+
+fn antigravity_meta(s: &SessionMeta) -> aitoolplus_core::antigravity::AntigravitySessionMeta {
+    aitoolplus_core::antigravity::AntigravitySessionMeta {
+        session_id: s.session_id.clone(),
+        source: s
+            .provider_id
+            .strip_prefix("antigravity:")
+            .unwrap_or("app")
+            .to_string(),
+        title: s.title.clone().unwrap_or_default(),
+        preview: s.summary.clone().unwrap_or_default(),
+        project_dir: s.project_dir.clone(),
+        last_active_at: s.last_active_at,
+        step_count: 0,
+        source_path: s.source_path.clone(),
+        resume_command: s.resume_command.clone(),
+    }
 }
 
 pub(super) fn render_agent_session_detail(

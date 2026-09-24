@@ -253,8 +253,9 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     .border_color(if is_open { t.accent } else { t.card_border })
                                     .cursor_pointer()
                                     .hover(|s| s.border_color(t.accent))
-                                    .on_click(cx.listener(|ws, _, _, cx| {
-                                        ws.ui.update_mirror_dropdown_open = !ws.ui.update_mirror_dropdown_open;
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                                        cx.stop_propagation();
+                                        ws.ui.update_mirror_dropdown_open = !is_open;
                                         cx.notify();
                                     }))
                                     .child(
