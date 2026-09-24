@@ -235,6 +235,8 @@ pub struct WorkspaceState {
     pub antigravity_device_account: Option<(aitoolplus_core::antigravity::AntigravityAccount, aitoolplus_core::antigravity::DeviceProfile)>,
     pub antigravity_editing_label: Option<(String, gpui::Entity<TextInput>)>,
     pub antigravity_refreshing_all: bool,
+    pub antigravity_manager_importing: bool,
+    pub antigravity_refreshing_ids: std::collections::HashSet<String>,
     pub antigravity_search: gpui::Entity<TextInput>,
     pub antigravity_quota_window: AntigravityQuotaWindow,
     pub antigravity_tier_filter: AntigravityTierFilter,
@@ -273,6 +275,20 @@ pub struct WorkspaceState {
     pub usage_status_filter: Option<u16>,
     pub usage_refresh_interval: u32,
     pub usage_syncing: bool,
+    /// Backup, restore, or cloud sync is running. Buttons show a spinner and ignore clicks.
+    pub backup_busy: bool,
+    /// Skill sync, update, or zip install is running.
+    pub skills_busy: bool,
+    /// CC-Switch provider or usage import is running.
+    pub cc_switch_busy: bool,
+    /// A usage-dashboard query is running off the UI thread.
+    pub usage_refreshing: bool,
+    /// First dashboard read failed. Render must not immediately start another one.
+    pub usage_load_failed: bool,
+    /// A newer filter/page click arrived while a query was already running.
+    pub usage_refresh_pending: bool,
+    /// Bumped on every refresh so a slow query cannot overwrite a newer one.
+    pub usage_refresh_gen: u64,
     pub usage_auto_sync: bool,
     pub usage_has_auto_scanned: bool,
     pub usage_summary: Option<aitoolplus_core::usage::UsageSummary>,
@@ -900,6 +916,8 @@ impl WorkspaceState {
             antigravity_device_account: None,
             antigravity_editing_label: None,
             antigravity_refreshing_all: false,
+            antigravity_manager_importing: false,
+            antigravity_refreshing_ids: std::collections::HashSet::new(),
             antigravity_search,
             antigravity_quota_window: if std::env::var("AITOOLPLUS_ANTIGRAVITY_WINDOW").map(|v| v.to_lowercase()).as_deref() == Ok("weekly") {
                 AntigravityQuotaWindow::Weekly
@@ -947,6 +965,13 @@ impl WorkspaceState {
             usage_status_filter: None,
             usage_refresh_interval: 30,
             usage_syncing: false,
+            backup_busy: false,
+            skills_busy: false,
+            cc_switch_busy: false,
+            usage_refreshing: false,
+            usage_load_failed: false,
+            usage_refresh_pending: false,
+            usage_refresh_gen: 0,
             usage_auto_sync: true,
             usage_has_auto_scanned: false,
             usage_summary: None,

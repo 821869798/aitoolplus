@@ -41,6 +41,7 @@ pub fn trim_working_set() {
 pub fn trim_working_set() {}
 
 pub fn hide_window_to_tray(window: &gpui::Window) {
+    aitoolplus_ui::set_window_on_screen(false);
     #[cfg(windows)]
     {
         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
@@ -57,6 +58,7 @@ pub fn hide_window_to_tray(window: &gpui::Window) {
 }
 
 pub fn restore_window_from_tray(window: &gpui::Window) {
+    aitoolplus_ui::set_window_on_screen(true);
     #[cfg(windows)]
     {
         use windows::Win32::UI::WindowsAndMessaging::{
@@ -88,7 +90,7 @@ pub fn settings_path(paths: &Paths) -> std::path::PathBuf {
 pub struct App {
     pub paths: Arc<Paths>,
     pub settings: AppSettings,
-    pub store: StoreHandle,
+    pub store: Option<StoreHandle>,
 }
 
 impl App {
@@ -202,7 +204,7 @@ impl App {
         Ok(Self {
             paths: Arc::new(paths),
             settings,
-            store,
+            store: Some(store),
         })
     }
 }
@@ -214,7 +216,12 @@ pub fn open_main_window(
     cx: &mut GpuiAppContext,
 ) -> anyhow::Result<gpui::WindowHandle<gpui_kit::component::Root>> {
     let paths = application.paths.clone();
-    let store = std::mem::replace(&mut application.store, StoreHandle::open(&paths)?);
+    // Move the store loaded at startup. Re-opening here parsed store.json
+    // again and kept that second copy for the process lifetime.
+    let store = application
+        .store
+        .take()
+        .expect("store already moved into a window");
     let settings = application.settings.clone();
     let settings_file = settings_path(&paths);
 
@@ -315,43 +322,79 @@ pub fn open_main_window(
                     .timer(std::time::Duration::from_secs(60))
                     .await;
                 let check = cx.update(|cx| {
-                    periodic_workspace.update(cx, |ws, cx| {
-                        // 1. Auto Backup if due
-                        let mut settings = ws.settings.clone();
-                        match aitoolplus_core::backup::run_auto_backup_if_due(&ws.paths, &mut settings) {
-                            Ok(Some(report)) => {
+                    periodic_workspace.update(cx, |ws, _cx| {
+                        (
+                            !ws.ui.backup_busy,
+                            ws.paths.clone(),
+                            ws.settings.clone(),
+                            ws.settings.antigravity_auto_refresh,
+                            ws.settings.antigravity_refresh_interval_minutes,
+                            ws.settings.antigravity_auto_sync,
+                            ws.paths.app_data.clone(),
+                            ws.paths.home.clone(),
+                            ws.settings.last_antigravity_refresh_time.clone(),
+                        )
+                    })
+                });
+
+                let Ok((
+                    backup_idle,
+                    paths,
+                    mut settings,
+                    ag_auto_refresh,
+                    ag_interval,
+                    ag_auto_sync,
+                    app_data,
+                    home_dir,
+                    last_refresh,
+                )) = check
+                else {
+                    break;
+                };
+
+                // Skip while a manual backup or restore is already running.
+                if backup_idle {
+                    let _ = cx.update(|cx| {
+                        let _ = periodic_workspace.update(cx, |ws, cx| {
+                            ws.ui.backup_busy = true;
+                            cx.notify();
+                        });
+                    });
+                    let (backup_result, settings) = cx
+                        .background_spawn(async move {
+                            let result = aitoolplus_core::backup::run_auto_backup_if_due(
+                                &paths,
+                                &mut settings,
+                            );
+                            (result, settings)
+                        })
+                        .await;
+                    let _ = cx.update(|cx| {
+                        periodic_workspace.update(cx, |ws, cx| {
+                            ws.ui.backup_busy = false;
+                            if let Ok(Some(report)) = &backup_result {
                                 tracing::info!(
                                     path = %report.output.display(),
                                     files = report.file_count,
                                     "periodic auto backup completed"
                                 );
-                                ws.settings = settings.clone();
+                                ws.settings.last_auto_backup_time =
+                                    settings.last_auto_backup_time.clone();
                                 (ws.callbacks.save_settings)(&ws.settings);
-                                cx.notify();
                             }
-                            Ok(None) => {}
-                            Err(err) => {
+                            if let Err(err) = &backup_result {
                                 tracing::warn!("periodic auto backup failed: {err}");
                             }
-                        }
+                            cx.notify();
+                        })
+                    });
+                }
 
-                        // 2. Check Antigravity background tasks
-                        let ag_auto_refresh = ws.settings.antigravity_auto_refresh;
-                        let ag_interval = ws.settings.antigravity_refresh_interval_minutes;
-                        let ag_auto_sync = ws.settings.antigravity_auto_sync;
-                        let app_data: std::path::PathBuf = ws.paths.app_data.clone();
-                        let home_dir: std::path::PathBuf = ws.paths.home.clone();
-                        let last_refresh = ws.settings.last_antigravity_refresh_time.clone();
-
-                        let is_due = ag_auto_refresh && aitoolplus_core::antigravity::is_auto_refresh_due(last_refresh.as_deref(), ag_interval);
-
-                        (ag_auto_sync, is_due, app_data, home_dir)
-                    })
-                });
-
-                let Ok((ag_auto_sync, is_due, app_data, home_dir)) = check else {
-                    break;
-                };
+                let is_due = ag_auto_refresh
+                    && aitoolplus_core::antigravity::is_auto_refresh_due(
+                        last_refresh.as_deref(),
+                        ag_interval,
+                    );
 
                 if ag_auto_sync || is_due {
                     let weak_ws = periodic_workspace.clone();

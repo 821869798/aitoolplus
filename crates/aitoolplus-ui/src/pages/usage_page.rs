@@ -5,7 +5,7 @@
 
 use gpui::{Context, IntoElement, div, prelude::*, px};
 
-use crate::components::{ButtonVariant, button_l, button_with_icon_l, toggle};
+use crate::components::{ButtonVariant, button_l, button_with_icon_l, button_with_icon_loading_l, toggle};
 use crate::theme::Theme;
 use crate::workspace::Workspace;
 
@@ -14,12 +14,19 @@ use crate::text_input::TextInput;
 
 pub fn render_usage_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     // Lazy initial load if summary hasn't been fetched yet
-    if ws.ui.usage_summary.is_none() {
-        ws.refresh_usage_data();
+    if ws.ui.usage_summary.is_none() && !ws.ui.usage_refreshing && !ws.ui.usage_load_failed {
+        ws.refresh_usage_data(cx);
     }
 
     // Auto-scan local sessions on enter if enabled
-    if ws.settings.usage_auto_scan_sessions && !ws.ui.usage_has_auto_scanned && !ws.ui.usage_syncing {
+    // Wait until the first read has landed. Starting the scan in the same
+    // frame writes usage.db while that read is still open.
+    if ws.settings.usage_auto_scan_sessions
+        && !ws.ui.usage_has_auto_scanned
+        && !ws.ui.usage_syncing
+        && !ws.ui.usage_refreshing
+        && ws.ui.usage_summary.is_some()
+    {
         ws.ui.usage_has_auto_scanned = true;
         ws.trigger_session_sync(cx, false);
     }
@@ -122,7 +129,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                     ws.ui.usage_model_filter = None;
                     ws.ui.usage_page = 0;
                     ws.ui.usage_hovered_bucket = None;
-                    ws.refresh_usage_data();
+                    ws.refresh_usage_data(cx);
                     cx.notify();
                 }))
         }));
@@ -334,7 +341,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                     ws.ui.usage_date_menu_open = false;
                     ws.ui.usage_page = 0;
                     ws.ui.usage_hovered_bucket = None;
-                    ws.refresh_usage_data();
+                    ws.refresh_usage_data(cx);
                     cx.notify();
                 }))
         }).collect();
@@ -362,31 +369,28 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
     };
 
     // Refresh action button
-    let refresh_btn = button_with_icon_l(
+    let refresh_btn = button_with_icon_loading_l(
         "usage-refresh-btn",
         crate::icons::REFRESH_SVG,
         i.t("刷新", "Refresh"),
         ButtonVariant::Secondary,
+        ws.ui.usage_refreshing,
         &t,
         cx,
         |ws, _, _, cx| {
-            ws.refresh_usage_data();
-            ws.ui.toast(ws.i18n.t("已刷新使用统计数据", "Usage statistics refreshed").to_string(), false);
-            cx.notify();
+            ws.ui.usage_load_failed = false;
+            ws.refresh_usage_data(cx);
         },
     );
 
     // Session sync action button
     let is_syncing = ws.ui.usage_syncing;
-    let sync_sessions_btn = button_with_icon_l(
+    let sync_sessions_btn = button_with_icon_loading_l(
         "usage-header-sync-sessions-btn",
         crate::icons::REFRESH_SVG,
-        if is_syncing {
-            i.t("同步中...", "Syncing...")
-        } else {
-            i.t("同步会话", "Sync Sessions")
-        },
-        if is_syncing { ButtonVariant::Ghost } else { ButtonVariant::Secondary },
+        i.t("同步会话", "Sync Sessions"),
+        ButtonVariant::Secondary,
+        is_syncing,
         &t,
         cx,
         |ws, _, _, cx| {
@@ -462,7 +466,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 ws.ui.usage_model_filter = None;
                 ws.ui.usage_provider_menu_open = false;
                 ws.ui.usage_page = 0;
-                ws.refresh_usage_data();
+                ws.refresh_usage_data(cx);
                 cx.notify();
             }))];
 
@@ -487,7 +491,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                         ws.ui.usage_model_filter = None;
                         ws.ui.usage_provider_menu_open = false;
                         ws.ui.usage_page = 0;
-                        ws.refresh_usage_data();
+                        ws.refresh_usage_data(cx);
                         cx.notify();
                     })),
             );
@@ -534,7 +538,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 ws.ui.usage_model_filter = None;
                 ws.ui.usage_model_menu_open = false;
                 ws.ui.usage_page = 0;
-                ws.refresh_usage_data();
+                ws.refresh_usage_data(cx);
                 cx.notify();
             }))];
 
@@ -558,7 +562,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                         ws.ui.usage_model_filter = Some(mname.clone());
                         ws.ui.usage_model_menu_open = false;
                         ws.ui.usage_page = 0;
-                        ws.refresh_usage_data();
+                        ws.refresh_usage_data(cx);
                         cx.notify();
                     })),
             );
@@ -636,13 +640,13 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                             div()
                                 .relative()
                                 .child(provider_btn)
-                                .children(provider_menu),
+                                .children(provider_menu.map(|menu| gpui::deferred(menu.occlude()))),
                         )
                         .child(
                             div()
                                 .relative()
                                 .child(model_btn)
-                                .children(model_menu),
+                                .children(model_menu.map(|menu| gpui::deferred(menu.occlude()))),
                         ),
                 )
                 .child(
@@ -657,7 +661,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                             div()
                                 .relative()
                                 .child(date_range_btn)
-                                .children(date_menu),
+                                .children(date_menu.map(|menu| gpui::deferred(menu.occlude()))),
                         )
                         .child(refresh_btn),
                 ),
@@ -1758,7 +1762,7 @@ fn render_usage_tables(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
         cx,
         |ws, tab, _window, cx| {
             ws.ui.usage_subtab = tab;
-            ws.refresh_usage_data();
+            ws.refresh_usage_data(cx);
             cx.notify();
         },
     );
@@ -1825,7 +1829,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 .on_click(cx.listener(move |ws, _, _, cx| {
                     ws.ui.usage_status_filter = val;
                     ws.ui.usage_page = 0;
-                    ws.refresh_usage_data();
+                    ws.refresh_usage_data(cx);
                     cx.notify();
                 }))
         }));
@@ -1994,7 +1998,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                         move |ws, _, _, cx| {
                             if ws.ui.usage_page > 0 {
                                 ws.ui.usage_page -= 1;
-                                ws.refresh_usage_data();
+                                ws.refresh_usage_data(cx);
                                 cx.notify();
                             }
                         },
@@ -2010,7 +2014,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                         move |ws, _, _, cx| {
                             if (ws.ui.usage_page + 1) < total_pages {
                                 ws.ui.usage_page += 1;
-                                ws.refresh_usage_data();
+                                ws.refresh_usage_data(cx);
                                 cx.notify();
                             }
                         },
@@ -2274,7 +2278,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         .unwrap_or_else(|| "response".to_string());
                     let _ = db.set_app_pricing_config(app, &mult_str, &src);
                 }
-                ws.refresh_usage_data();
+                ws.refresh_usage_data(cx);
                 ws.ui.toast(ws.i18n.t("全局计费默认配置已保存", "Global pricing configuration saved").to_string(), false);
                 cx.notify();
             }
@@ -2589,15 +2593,12 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     let is_syncing = ws.ui.usage_syncing;
     let auto_sync = ws.settings.usage_auto_scan_sessions;
 
-    let sync_btn = button_with_icon_l(
+    let sync_btn = button_with_icon_loading_l(
         "manual-session-sync-btn",
         crate::icons::REFRESH_SVG,
-        if is_syncing {
-            i.t("正在同步中...", "Syncing...")
-        } else {
-            i.t("立即同步", "Sync Now")
-        },
+        i.t("立即同步", "Sync Now"),
         ButtonVariant::Primary,
+        is_syncing,
         &t,
         cx,
         |ws, _, _, cx| {

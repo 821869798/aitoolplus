@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc;
+
 
 #[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
@@ -16,7 +16,7 @@ const IPC_ADDRESS: &str = "127.0.0.1:43827";
 pub struct Claim {
     #[cfg(windows)]
     handle: windows::Win32::Foundation::HANDLE,
-    receiver: Option<mpsc::Receiver<String>>,
+    receiver: Option<async_channel::Receiver<String>>,
 }
 
 /// Returns None if another instance is already running.
@@ -36,7 +36,7 @@ pub fn acquire() -> Option<Claim> {
     };
 
     let listener = TcpListener::bind(IPC_ADDRESS).ok()?;
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = async_channel::unbounded();
     std::thread::Builder::new()
         .name("single-instance-ipc".into())
         .spawn(move || {
@@ -46,7 +46,7 @@ pub fn acquire() -> Option<Claim> {
                 let mut message = String::new();
                 if reader.read_line(&mut message).is_ok() {
                     let message = message.trim().to_string();
-                    if !message.is_empty() && sender.send(message).is_err() {
+                    if !message.is_empty() && sender.send_blocking(message).is_err() {
                         break;
                     }
                 }
@@ -62,7 +62,7 @@ pub fn acquire() -> Option<Claim> {
 }
 
 impl Claim {
-    pub fn take_receiver(&mut self) -> mpsc::Receiver<String> {
+    pub fn take_receiver(&mut self) -> async_channel::Receiver<String> {
         self.receiver
             .take()
             .expect("instance receiver already taken")
@@ -83,15 +83,15 @@ pub fn forward_to_existing(message: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Poll second-instance messages and import recognized deep links.
+/// Import deep links and activation messages from later launches.
 pub fn pump_messages(
-    receiver: mpsc::Receiver<String>,
+    receiver: async_channel::Receiver<String>,
     updater: crate::tray::TrayMenuUpdater,
     cx: &mut gpui::App,
 ) {
+    // The IPC thread blocks in accept/read. This await does not hold a pool thread.
     cx.spawn(async move |cx| {
-        loop {
-            while let Ok(message) = receiver.try_recv() {
+        while let Ok(message) = receiver.recv().await {
                 let handle = cx.update(|cx| {
                     cx.windows()
                         .into_iter()
@@ -139,10 +139,6 @@ pub fn pump_messages(
                         window.activate_window();
                     });
                 }
-            }
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(120))
-                .await;
         }
     })
     .detach();

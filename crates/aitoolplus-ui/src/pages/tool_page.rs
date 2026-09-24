@@ -2686,11 +2686,7 @@ fn extensions_section(
         ws.ui.omp_extensions.as_ref()
     };
 
-    let refresh_label = if is_loading {
-        i.t("刷新中…", "Refreshing…")
-    } else {
-        i.t("刷新", "Refresh")
-    };
+    let refresh_label = i.t("刷新", "Refresh");
 
     let mut section = div().flex().flex_col().gap(px(12.0)).child(
         div()
@@ -2712,10 +2708,12 @@ fn extensions_section(
                     )
                 },
             ))
-            .child(button_l(
+            .child(button_with_icon_loading_l(
                 if is_pi { "pi-ext-refresh-btn" } else { "omp-ext-refresh-btn" },
+                crate::icons::REFRESH_SVG,
                 refresh_label,
                 ButtonVariant::Secondary,
+                is_loading,
                 &t,
                 cx,
                 move |ws, _, _, cx| {
@@ -3527,11 +3525,7 @@ fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspace
     }
 
     let is_loading = ws.ui.grok_plugins_loading;
-    let refresh_label = if is_loading {
-        i.t("刷新中…", "Refreshing…")
-    } else {
-        i.t("刷新", "Refresh")
-    };
+    let refresh_label = i.t("刷新", "Refresh");
 
     let (installed_count, can_enable_all, can_disable_all) =
         if let Some(Ok((installed, _))) = &ws.ui.grok_plugins {
@@ -3877,11 +3871,7 @@ fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     }
 
     let is_loading = ws.ui.grok_plugins_loading;
-    let refresh_label = if is_loading {
-        i.t("刷新中…", "Refreshing…")
-    } else {
-        i.t("刷新", "Refresh")
-    };
+    let refresh_label = i.t("刷新", "Refresh");
 
     let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
 
@@ -4189,7 +4179,9 @@ fn load_codex_plugins(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let paths = ws.paths.clone();
     let weak = cx.entity().downgrade();
     cx.spawn(async move |_this, cx| {
-        let res = aitoolplus_core::codex_plugins::list_all(&paths);
+        let res = cx
+            .background_spawn(async move { aitoolplus_core::codex_plugins::list_all(&paths) })
+            .await;
         let _ = weak.update(cx, |ws, cx| {
             ws.ui.codex_plugins = Some(res);
             ws.ui.codex_plugins_loading = false;
@@ -4208,11 +4200,7 @@ fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspac
     }
 
     let is_loading = ws.ui.codex_plugins_loading;
-    let refresh_label = if is_loading {
-        i.t("刷新中…", "Refreshing…")
-    } else {
-        i.t("刷新", "Refresh")
-    };
+    let refresh_label = i.t("刷新", "Refresh");
 
     let (installed_count, can_enable_all, can_disable_all) =
         if let Some(Ok(data)) = &ws.ui.codex_plugins {
@@ -4565,11 +4553,7 @@ fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) ->
     }
 
     let is_loading = ws.ui.codex_plugins_loading;
-    let refresh_label = if is_loading {
-        i.t("刷新中…", "Refreshing…")
-    } else {
-        i.t("刷新", "Refresh")
-    };
+    let refresh_label = i.t("刷新", "Refresh");
 
     let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
 
@@ -4976,15 +4960,12 @@ fn agent_sessions_section(
                 i.t("个会话", "sessions")
             )),
     );
-    toolbar = toolbar.child(button_with_icon_l(
+    toolbar = toolbar.child(button_with_icon_loading_l(
         "agent-sessions-refresh-btn",
         crate::icons::REFRESH_SVG,
-        if ws.ui.agent_sessions_loading {
-            i.t("刷新中…", "Refreshing…")
-        } else {
-            i.t("刷新", "Refresh")
-        },
+        i.t("刷新", "Refresh"),
         ButtonVariant::Secondary,
+        ws.ui.agent_sessions_loading,
         &t,
         cx,
         move |ws, _, _, cx| {
@@ -5385,11 +5366,7 @@ fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Context<Workspa
     }
 
     let is_loading = ws.ui.claude_plugins_loading;
-    let refresh_label = if is_loading {
-        i.t("刷新中…", "Refreshing…")
-    } else {
-        i.t("刷新", "Refresh")
-    };
+    let refresh_label = i.t("刷新", "Refresh");
 
     let (installed_count, can_enable_all, can_disable_all) =
         if let Some(Ok(data)) = &ws.ui.claude_plugins {
@@ -5844,11 +5821,7 @@ fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Workspace>) -
     }
 
     let is_loading = ws.ui.claude_plugins_loading;
-    let refresh_label = if is_loading {
-        i.t("刷新中…", "Refreshing…")
-    } else {
-        i.t("刷新", "Refresh")
-    };
+    let refresh_label = i.t("刷新", "Refresh");
 
     let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
 

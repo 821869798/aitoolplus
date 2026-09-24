@@ -82,7 +82,7 @@ impl Workspace {
 
         div()
             .id("sidebar")
-            .w(px(220.0))
+            .w(px(200.0))
             .h_full()
             .flex_shrink_0()
             .flex()

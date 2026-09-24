@@ -53,9 +53,16 @@ fn main() {
     let mut application = app::App::load().expect("failed to load app state");
     let config_events = config_watch::spawn(&application.paths);
     if let Some(url) = incoming {
-        match aitoolplus_core::deeplink::import_into_store(&url, application.store.store_mut()) {
+        match aitoolplus_core::deeplink::import_into_store(
+            &url,
+            application
+                .store
+                .as_mut()
+                .expect("store")
+                .store_mut(),
+        ) {
             Ok((tool, name)) => {
-                let _ = application.store.save();
+                let _ = application.store.as_ref().expect("store").save();
                 application.settings.last_page = tool.key().to_string();
                 let _ = application
                     .settings
@@ -84,7 +91,9 @@ fn main() {
         // last window closes; the tray reopens it.
         cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
 
-        let initial_groups = tray::snapshot_from_store(application.store.store());
+        let initial_groups = tray::snapshot_from_store(
+            application.store.as_ref().expect("store").store(),
+        );
         let tray_updater = tray::init_tray(initial_groups, cx);
 
         if let Err(e) = app::open_main_window(&mut application, tray_updater.clone(), cx) {

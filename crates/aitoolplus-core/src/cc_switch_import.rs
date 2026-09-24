@@ -34,44 +34,31 @@ pub fn detect_cc_switch_db(paths: &Paths) -> Option<PathBuf> {
     }
 }
 
-pub fn import_from_cc_switch(
-    paths: &Paths,
-    store: &mut Store,
-    custom_db_path: Option<&Path>,
-) -> Result<CcSwitchImportReport, String> {
-    let db_path = custom_db_path
-        .map(Path::to_path_buf)
-        .or_else(|| detect_cc_switch_db(paths))
-        .ok_or_else(|| "未找到 cc-switch.db 数据库文件 (cc-switch.db not found)".to_string())?;
+#[derive(Clone)]
+pub struct CcSwitchProviderRow {
+    pub id: String,
+    pub app_type: String,
+    pub name: String,
+    pub settings_config: Option<String>,
+    pub website_url: Option<String>,
+    pub category: Option<String>,
+    pub notes: Option<String>,
+    pub meta: Option<String>,
+    pub is_current: Option<i32>,
+}
 
+pub fn read_cc_switch_providers(db_path: &Path) -> Result<Vec<CcSwitchProviderRow>, String> {
     if !db_path.exists() {
         return Err(format!("文件不存在: {}", db_path.display()));
     }
-
-    let conn = Connection::open(&db_path)
+    let conn = Connection::open(db_path)
         .map_err(|e| format!("打开 cc-switch.db 失败: {e}"))?;
-
     let mut stmt = conn
         .prepare("SELECT rowid, id, app_type, name, settings_config, website_url, category, notes, meta, is_current FROM providers ORDER BY rowid ASC")
         .map_err(|e| format!("查询 providers 失败: {e}"))?;
-
-    struct RowData {
-        _rowid: i64,
-        id: String,
-        app_type: String,
-        name: String,
-        settings_config: Option<String>,
-        website_url: Option<String>,
-        category: Option<String>,
-        notes: Option<String>,
-        meta: Option<String>,
-        is_current: Option<i32>,
-    }
-
     let rows = stmt
         .query_map([], |row| {
-            Ok(RowData {
-                _rowid: row.get(0)?,
+            Ok(CcSwitchProviderRow {
                 id: row.get(1)?,
                 app_type: row.get(2)?,
                 name: row.get(3)?,
@@ -84,15 +71,19 @@ pub fn import_from_cc_switch(
             })
         })
         .map_err(|e| format!("读取行失败: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取行失败: {e}"))
+}
 
+/// Apply already-read rows onto the live store. Call this on the UI thread.
+pub fn apply_cc_switch_providers(
+    store: &mut Store,
+    rows: Vec<CcSwitchProviderRow>,
+) -> CcSwitchImportReport {
     let mut report = CcSwitchImportReport::default();
     let mut touched_tools = std::collections::HashSet::new();
 
-    for row in rows {
-        let r = match row {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+    for r in rows {
         report.total_found += 1;
 
         let tool_id = match r.app_type.as_str() {
@@ -230,7 +221,20 @@ pub fn import_from_cc_switch(
         }
     }
 
-    Ok(report)
+    report
+}
+
+pub fn import_from_cc_switch(
+    paths: &Paths,
+    store: &mut Store,
+    custom_db_path: Option<&Path>,
+) -> Result<CcSwitchImportReport, String> {
+    let db_path = custom_db_path
+        .map(Path::to_path_buf)
+        .or_else(|| detect_cc_switch_db(paths))
+        .ok_or_else(|| "未找到 cc-switch.db 数据库文件 (cc-switch.db not found)".to_string())?;
+    let rows = read_cc_switch_providers(&db_path)?;
+    Ok(apply_cc_switch_providers(store, rows))
 }
 
 #[cfg(test)]

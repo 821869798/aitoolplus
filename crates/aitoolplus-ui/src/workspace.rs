@@ -1154,6 +1154,17 @@ impl Render for Workspace {
     }
 }
 
+struct UsageSnapshot {
+    summary: Option<aitoolplus_core::usage::UsageSummary>,
+    apps: Option<Vec<aitoolplus_core::usage::UsageSummaryByApp>>,
+    trends: Option<Vec<aitoolplus_core::usage::DailyStats>>,
+    providers: Option<Vec<aitoolplus_core::usage::ProviderStats>>,
+    models: Option<Vec<aitoolplus_core::usage::ModelStats>>,
+    logs: Option<aitoolplus_core::usage::PaginatedLogs>,
+    pricing: Option<Vec<aitoolplus_core::usage::ModelPricingInfo>>,
+    configs: Option<Vec<aitoolplus_core::usage::AppPricingConfig>>,
+}
+
 impl Workspace {
     pub fn ensure_usage_db(&mut self) -> Option<aitoolplus_core::usage::UsageDb> {
         if self.ui.usage_db.is_none() {
@@ -1170,52 +1181,117 @@ impl Workspace {
         self.ui.usage_db.clone()
     }
 
-    pub fn refresh_usage_data(&mut self) {
-        let db = match self.ensure_usage_db() {
-            Some(d) => d,
-            None => return,
+    pub fn refresh_usage_data(&mut self, cx: &mut Context<Self>) {
+        if self.ui.usage_refreshing {
+            self.ui.usage_refresh_pending = true;
+            return;
+        }
+        self.ui.usage_refresh_pending = false;
+        let Some(db) = self.ensure_usage_db() else {
+            return;
         };
         let cc_switch_db = self.paths.home.join(".cc-switch").join("cc-switch.db");
-        if cc_switch_db.is_file() {
-            let _ = db.import_from_cc_switch(&cc_switch_db);
-        }
         let (start_ts, end_ts) = self.ui.usage_range.timestamps();
-        let app_type = self.ui.usage_app_filter.as_deref();
-        let provider_name = self.ui.usage_provider_filter.as_deref();
-        let model = self.ui.usage_model_filter.as_deref();
-
-        if let Ok(sum) = db.get_usage_summary(start_ts, end_ts, app_type, provider_name, model) {
-            self.ui.usage_summary = Some(sum);
-        }
-        if let Ok(apps) = db.get_usage_summary_by_app(start_ts, end_ts, provider_name, model) {
-            self.ui.usage_apps_summary = apps;
-        }
-        if let Ok(trends) = db.get_daily_trends(start_ts, end_ts, app_type, provider_name, model) {
-            self.ui.usage_trends = trends;
-        }
-        if let Ok(provs) = db.get_provider_stats(start_ts, end_ts, app_type, provider_name, model) {
-            self.ui.usage_provider_stats = provs;
-        }
-        if let Ok(models) = db.get_model_stats(start_ts, end_ts, app_type, provider_name, model) {
-            self.ui.usage_model_stats = models;
-        }
-        let filters = aitoolplus_core::usage::LogFilters {
-            app_type: self.ui.usage_app_filter.clone(),
-            provider_name: self.ui.usage_provider_filter.clone(),
-            model: self.ui.usage_model_filter.clone(),
-            status_code: self.ui.usage_status_filter,
-            start_date: start_ts,
-            end_date: end_ts,
-        };
-        if let Ok(logs) = db.get_request_logs(&filters, self.ui.usage_page, 20) {
-            self.ui.usage_logs = logs;
-        }
-        if let Ok(pricing) = db.get_model_pricing() {
-            self.ui.usage_pricing = pricing;
-        }
-        if let Ok(configs) = db.get_app_pricing_configs() {
-            self.ui.usage_app_pricing_configs = configs;
-        }
+        let app_type = self.ui.usage_app_filter.clone();
+        let provider_name = self.ui.usage_provider_filter.clone();
+        let model = self.ui.usage_model_filter.clone();
+        let status_code = self.ui.usage_status_filter;
+        let page = self.ui.usage_page;
+        self.ui.usage_refresh_gen = self.ui.usage_refresh_gen.wrapping_add(1);
+        let generation = self.ui.usage_refresh_gen;
+        self.ui.usage_refreshing = true;
+        cx.notify();
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            let snap = cx
+                .background_spawn(async move {
+                    if cc_switch_db.is_file() {
+                        let _ = db.import_from_cc_switch(&cc_switch_db);
+                    }
+                    let app = app_type.as_deref();
+                    let provider = provider_name.as_deref();
+                    let model_filter = model.as_deref();
+                    UsageSnapshot {
+                        summary: db
+                            .get_usage_summary(start_ts, end_ts, app, provider, model_filter)
+                            .ok(),
+                        apps: db
+                            .get_usage_summary_by_app(start_ts, end_ts, provider, model_filter)
+                            .ok(),
+                        trends: db
+                            .get_daily_trends(start_ts, end_ts, app, provider, model_filter)
+                            .ok(),
+                        providers: db
+                            .get_provider_stats(start_ts, end_ts, app, provider, model_filter)
+                            .ok(),
+                        models: db
+                            .get_model_stats(start_ts, end_ts, app, provider, model_filter)
+                            .ok(),
+                        logs: db
+                            .get_request_logs(
+                                &aitoolplus_core::usage::LogFilters {
+                                    app_type,
+                                    provider_name,
+                                    model,
+                                    status_code,
+                                    start_date: start_ts,
+                                    end_date: end_ts,
+                                },
+                                page,
+                                20,
+                            )
+                            .ok(),
+                        pricing: db.get_model_pricing().ok(),
+                        configs: db.get_app_pricing_configs().ok(),
+                    }
+                })
+                .await;
+            let _ = weak.update(cx, |ws, cx| {
+                if ws.ui.usage_refresh_gen != generation {
+                    return;
+                }
+                let rerun = ws.ui.usage_refresh_pending;
+                ws.ui.usage_refreshing = false;
+                ws.ui.usage_refresh_pending = false;
+                if rerun {
+                    ws.refresh_usage_data(cx);
+                    return;
+                }
+                if snap.summary.is_none() && ws.ui.usage_summary.is_none() {
+                    ws.ui.usage_load_failed = true;
+                    ws.ui.toast("用量统计查询失败，请稍后重试".to_string(), true);
+                    cx.notify();
+                    return;
+                }
+                ws.ui.usage_load_failed = false;
+                if let Some(summary) = snap.summary {
+                    ws.ui.usage_summary = Some(summary);
+                }
+                if let Some(apps) = snap.apps {
+                    ws.ui.usage_apps_summary = apps;
+                }
+                if let Some(trends) = snap.trends {
+                    ws.ui.usage_trends = trends;
+                }
+                if let Some(provs) = snap.providers {
+                    ws.ui.usage_provider_stats = provs;
+                }
+                if let Some(models) = snap.models {
+                    ws.ui.usage_model_stats = models;
+                }
+                if let Some(logs) = snap.logs {
+                    ws.ui.usage_logs = logs;
+                }
+                if let Some(pricing) = snap.pricing {
+                    ws.ui.usage_pricing = pricing;
+                }
+                if let Some(configs) = snap.configs {
+                    ws.ui.usage_app_pricing_configs = configs;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn persist_settings(&mut self) {
@@ -1234,17 +1310,24 @@ impl Workspace {
 
         let weak = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
-            let res = if let Some(db) = db_opt {
-                db.sync_session_usage(&paths)
-            } else {
-                Err("数据库未初始化".to_string())
-            };
+            // Scanning session logs can take minutes. cx.spawn runs on the UI
+            // thread, so the scan itself has to stay on a background worker
+            // or Windows marks the window "Not Responding".
+            let res = cx
+                .background_spawn(async move {
+                    if let Some(db) = db_opt {
+                        db.sync_session_usage(&paths)
+                    } else {
+                        Err("数据库未初始化".to_string())
+                    }
+                })
+                .await;
 
             let _ = weak.update(cx, |ws: &mut Workspace, cx| {
                 ws.ui.usage_syncing = false;
                 match res {
                     Ok(rep) => {
-                        ws.refresh_usage_data();
+                        ws.refresh_usage_data(cx);
                         if notify_toast || rep.imported > 0 {
                             let msg = format!(
                                 "会话用量同步完成：扫描 {} 个文件，新增入库 {} 条记录",

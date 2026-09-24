@@ -9,8 +9,8 @@ use std::sync::mpsc;
 
 use notify::{RecursiveMode, Watcher};
 
-pub fn spawn(paths: &aitoolplus_core::Paths) -> mpsc::Receiver<Vec<PathBuf>> {
-    let (output_sender, output_receiver) = mpsc::channel();
+pub fn spawn(paths: &aitoolplus_core::Paths) -> async_channel::Receiver<Vec<PathBuf>> {
+    let (output_sender, output_receiver) = async_channel::unbounded();
     let roots: Vec<PathBuf> = aitoolplus_core::ToolId::ALL
         .into_iter()
         .map(|tool| paths.tool_root(tool))
@@ -56,9 +56,13 @@ pub fn spawn(paths: &aitoolplus_core::Paths) -> mpsc::Receiver<Vec<PathBuf>> {
                         paths.extend(next.paths);
                     }
                 }
+                paths.retain(|path| is_runtime_config(path));
                 paths.sort();
                 paths.dedup();
-                if output_sender.send(paths).is_err() {
+                if paths.is_empty() {
+                    continue;
+                }
+                if output_sender.send_blocking(paths).is_err() {
                     break;
                 }
             }
@@ -66,41 +70,65 @@ pub fn spawn(paths: &aitoolplus_core::Paths) -> mpsc::Receiver<Vec<PathBuf>> {
     output_receiver
 }
 
-pub fn pump(receiver: mpsc::Receiver<Vec<PathBuf>>, cx: &mut gpui::App) {
+pub fn pump(receiver: async_channel::Receiver<Vec<PathBuf>>, cx: &mut gpui::App) {
+    // The watcher thread blocks on notify and send_blocking. This await parks
+    // the UI task; it does not hold a thread-pool worker.
     cx.spawn(async move |cx| {
-        loop {
-            while let Ok(changed) = receiver.try_recv() {
-                let handle = cx.update(|cx| {
-                    cx.windows()
-                        .into_iter()
-                        .find_map(|window| window.downcast::<aitoolplus_ui::Workspace>())
-                });
-                if let Some(handle) = handle {
-                    let _ = handle.update(cx, |workspace, _window, cx| {
-                        refresh_runtime(workspace);
-                        workspace.ui.toast(
-                            workspace
-                                .i18n
-                                .t(
-                                    &format!("检测到 {} 个配置文件变化，已刷新", changed.len()),
-                                    &format!(
-                                        "{} config changes detected; refreshed",
-                                        changed.len()
-                                    ),
-                                )
-                                .to_string(),
-                            false,
-                        );
-                        cx.notify();
-                    });
-                }
+        while let Ok(changed) = receiver.recv().await {
+            let handle = cx.update(|cx| {
+                cx.windows()
+                    .into_iter()
+                    .find_map(|window| window.downcast::<aitoolplus_ui::Workspace>())
+            });
+            if aitoolplus_ui::restore_in_flight() {
+                continue;
             }
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(200))
-                .await;
+            if let Some(handle) = handle {
+                let _ = handle.update(cx, |workspace, _window, cx| {
+                    refresh_runtime(workspace);
+                    workspace.ui.toast(
+                        workspace
+                            .i18n
+                            .t(
+                                &format!("检测到 {} 个配置文件变化，已刷新", changed.len()),
+                                &format!(
+                                    "{} config changes detected; refreshed",
+                                    changed.len()
+                                ),
+                            )
+                            .to_string(),
+                        false,
+                    );
+                    cx.notify();
+                });
+            }
         }
     })
     .detach();
+}
+
+/// Session logs and other junk under a tool root must not wake the UI.
+/// `refresh_runtime` only rereads these config filenames.
+fn is_runtime_config(path: &std::path::Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(
+            "settings.json"
+                | "auth.json"
+                | "config.toml"
+                | ".env"
+                | "opencode.json"
+                | "opencode.jsonc"
+                | "openclaw.json"
+                | "models.yml"
+                | "config.yml"
+                | "claude_desktop_config.json"
+                | "config.yaml"
+                | "settings.yaml"
+                | "models.json"
+                | ".claude.json"
+        )
+    )
 }
 
 fn refresh_runtime(workspace: &mut aitoolplus_ui::Workspace) {

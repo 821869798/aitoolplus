@@ -136,6 +136,9 @@ impl TextInput {
                 cx.background_executor()
                     .timer(Duration::from_millis(500))
                     .await;
+                if !crate::window_on_screen() {
+                    continue;
+                }
                 let res = this.update(cx, |input, cx| {
                     input.cursor_visible = !input.cursor_visible;
                     cx.notify();
