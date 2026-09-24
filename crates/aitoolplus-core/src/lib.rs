@@ -19,6 +19,7 @@ pub mod dsh;
 pub mod grok_plugins;
 pub mod hermes;
 pub mod import_current;
+pub mod local_env;
 pub mod mcp;
 pub mod oh_my_pi;
 pub mod omp_extensions;
