@@ -231,8 +231,9 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                 .shadow_xs()
                 .cursor_pointer()
                 .hover(|s| s.border_color(t.card_border_hover))
-                .on_click(cx.listener(|ws, _, _, cx| {
-                    ws.ui.proxy_protocol_dropdown_open = !ws.ui.proxy_protocol_dropdown_open;
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                    cx.stop_propagation();
+                    ws.ui.proxy_protocol_dropdown_open = !is_dropdown_open;
                     cx.notify();
                 }))
                 .child(

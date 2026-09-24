@@ -229,6 +229,9 @@ pub struct WorkspaceState {
     pub agent_session_search: gpui::Entity<TextInput>,
     pub agent_sessions: Option<(ToolId, Vec<aitoolplus_core::session::SessionMeta>)>,
     pub agent_sessions_loading: bool,
+    /// Bumped when a new session scan starts, so a slower older scan stops appending.
+    pub agent_session_scan: u64,
+    pub agent_session_scroll: gpui::UniformListScrollHandle,
     pub antigravity_store: Option<aitoolplus_core::antigravity::AntigravityStore>,
     pub antigravity_loading: bool,
     pub antigravity_dialog: Option<antigravity_page::AntigravityDialogState>,
@@ -301,7 +304,11 @@ pub struct WorkspaceState {
     pub usage_apps_summary: Vec<aitoolplus_core::usage::UsageSummaryByApp>,
     pub usage_trends: Vec<aitoolplus_core::usage::DailyStats>,
     pub usage_provider_stats: Vec<aitoolplus_core::usage::ProviderStats>,
+    /// Every source in the current app and date range. The filter must not shrink this list.
+    pub usage_provider_options: Vec<aitoolplus_core::usage::ProviderStats>,
     pub usage_model_stats: Vec<aitoolplus_core::usage::ModelStats>,
+    /// Every model for the current source. Selecting one model must not hide the others.
+    pub usage_model_options: Vec<aitoolplus_core::usage::ModelStats>,
     pub usage_logs: aitoolplus_core::usage::PaginatedLogs,
     pub usage_pricing: Vec<aitoolplus_core::usage::ModelPricingInfo>,
     pub usage_pricing_search: Option<gpui::Entity<TextInput>>,
@@ -916,6 +923,8 @@ impl WorkspaceState {
             agent_session_search,
             agent_sessions: None,
             agent_sessions_loading: false,
+            agent_session_scan: 0,
+            agent_session_scroll: gpui::UniformListScrollHandle::new(),
             antigravity_store: None,
             antigravity_loading: false,
             antigravity_dialog: None,
@@ -989,7 +998,9 @@ impl WorkspaceState {
             usage_apps_summary: Vec::new(),
             usage_trends: Vec::new(),
             usage_provider_stats: Vec::new(),
+            usage_provider_options: Vec::new(),
             usage_model_stats: Vec::new(),
+            usage_model_options: Vec::new(),
             usage_logs: aitoolplus_core::usage::PaginatedLogs::default(),
             usage_pricing: Vec::new(),
             usage_pricing_search: None,
@@ -1636,9 +1647,19 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
             ws.ui.toast(msg, false);
         }
         ConfirmAction::DeleteSession { tool, id } => {
-            let sessions = aitoolplus_core::session::cached_scan(&ws.paths, tool, 500);
-            if let Some(meta) = sessions.iter().find(|s| s.session_id == id) {
-                let _ = aitoolplus_core::session::delete_session(meta);
+            let from_list = ws
+                .ui
+                .agent_sessions
+                .as_ref()
+                .filter(|(loaded, _)| *loaded == tool)
+                .and_then(|(_, list)| list.iter().find(|s| s.session_id == id).cloned());
+            let meta = from_list.or_else(|| {
+                aitoolplus_core::session::cached_scan(&ws.paths, tool, 500)
+                    .into_iter()
+                    .find(|s| s.session_id == id)
+            });
+            if let Some(meta) = meta {
+                let _ = aitoolplus_core::session::delete_session(&meta);
                 aitoolplus_core::session::invalidate_cache();
                 ws.ui.agent_sessions = None;
                 if ws.ui.open_session.as_ref().map(|(t, sid)| *t == tool && sid == &id).unwrap_or(false) {

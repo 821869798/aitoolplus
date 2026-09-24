@@ -12,7 +12,7 @@ use aitoolplus_core::antigravity::{
     save_store, scan_antigravity_sessions, switch_account_target, toggle_account_disabled,
     update_account_device_profile, update_account_label,
 };
-use gpui::{Context, IntoElement, SharedString, div, prelude::*, px, uniform_list};
+use gpui::{Context, IntoElement, SharedString, div, prelude::*, px};
 use chrono::{DateTime, NaiveDateTime, Utc};
 
 use crate::components::{
@@ -21,7 +21,7 @@ use crate::components::{
     icon_button_svg, input_container, parse_generic_error, toggle,
 };
 use crate::icons::{
-    ALERT_SVG, ARROW_LEFT_SVG, ARROW_RIGHT_LEFT_SVG, CHECK_SVG, CLOCK_SVG, CODE_SVG, COPY_SVG, DATABASE_SVG,
+    ALERT_SVG, ARROW_LEFT_SVG, ARROW_RIGHT_LEFT_SVG, CHECK_SVG, CODE_SVG, COPY_SVG, DATABASE_SVG,
     DOWNLOAD_SVG, FINGERPRINT_SVG, FOLDER_SVG, GEMINI_SVG, GLOBE_SVG, HISTORY_SVG, INFO_SVG, PLUS_SVG,
     REFRESH_SVG, REPEAT_SVG, TAG_SVG, TERMINAL_SVG, TOGGLE_LEFT_SVG, TOGGLE_RIGHT_SVG, TRASH_SVG,
     USER_SVG, WAND_SVG, X_SVG, svg_icon,
@@ -484,14 +484,33 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     section.into_any_element()
 }
 
+fn load_antigravity_sessions(ws: &mut Workspace, cx: &mut Context<Workspace>) {
+    if ws.ui.antigravity_sessions_loading {
+        return;
+    }
+    ws.ui.antigravity_sessions_loading = true;
+    ws.ui.antigravity_sessions = Some(Vec::new());
+    let home = ws.paths.home.clone();
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        let sessions = cx
+            .background_spawn(async move { scan_antigravity_sessions(&home, usize::MAX) })
+            .await;
+        let _ = weak.update(cx, |workspace, cx| {
+            workspace.ui.antigravity_sessions = Some(sessions);
+            workspace.ui.antigravity_sessions_loading = false;
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
 pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    // Lazily scan sessions
-    if ws.ui.antigravity_sessions.is_none() {
-        let sessions = scan_antigravity_sessions(&ws.paths.home, 200);
-        ws.ui.antigravity_sessions = Some(sessions);
+    if ws.ui.antigravity_sessions.is_none() && !ws.ui.antigravity_sessions_loading {
+        load_antigravity_sessions(ws, cx);
     }
 
     let sessions = ws.ui.antigravity_sessions.clone().unwrap_or_default();
@@ -560,8 +579,9 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
         &t,
         cx,
         |ws, _, _, cx| {
-            let s = scan_antigravity_sessions(&ws.paths.home, 200);
-            ws.ui.antigravity_sessions = Some(s);
+            ws.ui.antigravity_sessions = None;
+            ws.ui.antigravity_sessions_loading = false;
+            load_antigravity_sessions(ws, cx);
             ws.ui.toast(ws.i18n.t("已刷新会话列表", "Refreshed session list").to_string(), false);
             cx.notify();
         },
@@ -590,59 +610,46 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
                 .child(format!("{}: {}", i.t("共计", "Total"), total_count))
         );
 
-    // List of sessions
-    if filtered.is_empty() {
-        return div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .gap(px(12.0))
-            .child(toolbar)
-            .child(
-                empty_state_svg(
-                    &t,
-                    HISTORY_SVG,
-                    i.t("暂无 Antigravity 会话记录", "No Antigravity sessions found"),
-                    if query.is_empty() {
-                        i.t("在终端中使用 agy，或在 Antigravity 桌面端中开始对话后，历史会话将自动显示在此处",
-                            "Conversations started in agy CLI or Antigravity IDE will automatically appear here.")
-                    } else {
-                        i.t("没有找到匹配的会话，请尝试更换关键词", "No matching sessions found, try a different keyword.")
-                    }
+    let body = if ws.ui.antigravity_sessions_loading && filtered.is_empty() {
+        empty_state_svg(
+            &t,
+            HISTORY_SVG,
+            i.t("正在加载会话列表…", "Loading sessions…"),
+            i.t(
+                "后台正在扫描 Antigravity 会话，请稍候",
+                "Scanning Antigravity sessions in the background",
+            ),
+        )
+    } else if filtered.is_empty() {
+        empty_state_svg(
+            &t,
+            HISTORY_SVG,
+            i.t("暂无 Antigravity 会话记录", "No Antigravity sessions found"),
+            if query.is_empty() {
+                i.t(
+                    "在终端中使用 agy，或在 Antigravity 桌面端中开始对话后，历史会话将自动显示在此处",
+                    "Conversations started in agy CLI or Antigravity IDE will automatically appear here.",
                 )
-            )
-            .into_any_element();
-    }
-
-    let filtered_arc = std::sync::Arc::new(filtered);
-    let items_len = filtered_arc.len();
-    let ws_entity = cx.entity();
-    let t_clone = t.clone();
-    let i_clone = i;
-    let open_id = ws.ui.antigravity_open_session.as_ref().map(|s| s.session_id.clone());
-
-    let v_list = uniform_list(
-        "antigravity-sessions-vlist",
-        items_len,
-        move |range: std::ops::Range<usize>, _window: &mut gpui::Window, _cx: &mut gpui::App| -> Vec<gpui::AnyElement> {
-            let mut elements = Vec::with_capacity(range.len());
-            for idx in range {
-                if let Some(sess) = filtered_arc.get(idx) {
-                    let is_open = open_id.as_deref() == Some(&sess.session_id);
-                    elements.push(render_virtual_antigravity_session_row(
-                        sess,
-                        is_open,
-                        &ws_entity,
-                        &t_clone,
-                        &i_clone,
-                    ));
-                }
-            }
-            elements
-        },
-    )
-    .track_scroll(&ws.ui.antigravity_session_scroll_handle)
-    .size_full();
+            } else {
+                i.t(
+                    "没有找到匹配的会话，请尝试更换关键词",
+                    "No matching sessions found, try a different keyword.",
+                )
+            },
+        )
+    } else {
+        let items = std::sync::Arc::new(filtered.into_iter().map(Into::into).collect::<Vec<_>>());
+        crate::pages::tool_page::session_list_viewport(
+            "antigravity-sessions-vlist",
+            "antigravity-sessions-scrollbar",
+            items,
+            aitoolplus_core::tools::ToolId::GeminiCli,
+            ws.ui.antigravity_session_scroll_handle.clone(),
+            cx.entity(),
+            &t,
+            &i,
+        )
+    };
 
     div()
         .flex()
@@ -652,286 +659,7 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
         .min_h(px(0.0))
         .gap(px(12.0))
         .child(toolbar)
-        .child(
-            div()
-                .w_full()
-                .flex_1()
-                .h_full()
-                .min_h(px(0.0))
-                .overflow_hidden()
-                .child(v_list),
-        )
-        .into_any_element()
-}
-
-fn short_session_id(sid: &str) -> String {
-    if sid.len() <= 12 {
-        sid.to_string()
-    } else {
-        let prefix: String = sid.chars().take(8).collect();
-        let suffix: String = sid.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-        format!("{prefix}...{suffix}")
-    }
-}
-
-fn render_virtual_antigravity_session_row(
-    session: &AntigravitySessionMeta,
-    is_open: bool,
-    ws_entity: &gpui::Entity<Workspace>,
-    t: &Theme,
-    i: &crate::i18n::I18n,
-) -> gpui::AnyElement {
-    let sid = session.session_id.clone();
-    let display_title = if session.title.trim().is_empty() {
-        if !session.preview.trim().is_empty() {
-            session.preview.clone()
-        } else {
-            session.session_id.clone()
-        }
-    } else {
-        session.title.clone()
-    };
-
-    let display_time = session.last_active_at
-        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
-        .map(|dt| {
-            let local: chrono::DateTime<chrono::Local> = chrono::DateTime::from(dt);
-            local.format("%Y-%m-%d %H:%M").to_string()
-        })
-        .unwrap_or_else(|| "—".into());
-
-    let short_hash = short_session_id(&sid);
-
-    let (badge_text, badge_bg, badge_border, badge_text_color) = if session.source == "cli" {
-        ("CLI", t.accent.opacity(0.12), t.accent.opacity(0.3), t.accent)
-    } else {
-        ("App", t.sidebar_bg, t.card_border, t.text_secondary)
-    };
-
-    let source_badge = div()
-        .flex()
-        .items_center()
-        .justify_center()
-        .h(px(18.0))
-        .px(px(6.0))
-        .rounded(px(4.0))
-        .bg(badge_bg)
-        .border_1()
-        .border_color(badge_border)
-        .text_size(px(11.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(badge_text_color)
-        .flex_shrink_0()
-        .child(badge_text);
-
-    let mut meta_row = div()
-        .flex()
-        .items_center()
-        .gap(px(12.0))
-        .text_size(px(12.0))
-        .text_color(t.text_secondary)
-        .overflow_hidden()
-        .whitespace_nowrap();
-
-    // Time with Clock icon
-    meta_row = meta_row.child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .flex_shrink_0()
-            .child(crate::icons::svg_icon(CLOCK_SVG, px(12.0), t.text_muted))
-            .child(display_time),
-    );
-
-    // Hash (short session id)
-    meta_row = meta_row.child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(2.0))
-            .flex_shrink_0()
-            .text_color(t.text_muted)
-            .child(short_hash),
-    );
-
-    // Project Directory (if available)
-    if let Some(dir) = &session.project_dir {
-        meta_row = meta_row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_color(t.text_muted)
-                .child(crate::icons::svg_icon(FOLDER_SVG, px(12.0), t.text_muted))
-                .child(
-                    div()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(dir.clone()),
-                ),
-        );
-    }
-
-    let left_info = div()
-        .flex()
-        .flex_col()
-        .gap(px(4.0))
-        .flex_1()
-        .min_w(px(0.0))
-        .overflow_hidden()
-        // Row 1: Source badge + Title
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .w_full()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .child(source_badge)
-                .child(
-                    div()
-                        .text_size(px(13.5))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(t.text_primary)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .child(display_title),
-                ),
-        )
-        // Row 2: Meta
-        .child(meta_row);
-
-    // Right actions
-    let mut right_actions = div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .flex_shrink_0();
-
-    if let Some(ref cmd) = session.resume_command {
-        let ws_entity = ws_entity.clone();
-        let cmd_to_copy = cmd.clone();
-        right_actions = right_actions.child(
-            div()
-                .id(gpui::SharedString::from(format!("ag-resume-{}", session.session_id)))
-                .cursor_pointer()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .h(px(28.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .bg(t.sidebar_bg)
-                .border_1()
-                .border_color(t.card_border)
-                .text_size(px(12.0))
-                .text_color(t.text_secondary)
-                .hover({
-                    let bg = t.card_hover;
-                    let border = t.card_border_hover;
-                    let text = t.text_primary;
-                    move |h| h.bg(bg).border_color(border).text_color(text)
-                })
-                .child(crate::icons::svg_icon(TERMINAL_SVG, px(12.0), t.text_muted))
-                .child(i.t("恢复命令", "Resume"))
-                .on_click(move |_ev, _win, cx| {
-                    cx.stop_propagation();
-                    let cmd_str = cmd_to_copy.clone();
-                    let _ = ws_entity.update(cx, |ws, cx| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(cmd_str.clone()));
-                        ws.ui.toast(format!("已复制命令: {}", cmd_str), false);
-                        cx.notify();
-                    });
-                }),
-        );
-    }
-
-    let ws_entity_del = ws_entity.clone();
-    let sess_for_del = session.clone();
-    right_actions = right_actions.child(
-        div()
-            .id(gpui::SharedString::from(format!("ag-del-{}", session.session_id)))
-            .cursor_pointer()
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .h(px(28.0))
-            .px(px(10.0))
-            .rounded(px(6.0))
-            .bg(t.sidebar_bg)
-            .border_1()
-            .border_color(t.card_border)
-            .text_size(px(12.0))
-            .text_color(t.danger)
-            .hover({
-                let bg = t.danger_subtle;
-                let border = t.danger;
-                move |h| h.bg(bg).border_color(border)
-            })
-            .child(crate::icons::svg_icon(TRASH_SVG, px(12.0), t.danger))
-            .child(i.t("删除", "Delete"))
-            .on_click(move |_ev, _win, cx| {
-                cx.stop_propagation();
-                let sess_del = sess_for_del.clone();
-                let _ = ws_entity_del.update(cx, |ws, cx| {
-                    let msg = format!("确定要删除此会话记录 ({}) 吗？磁盘上的相关数据将被永久移除。", sess_del.session_id);
-                    ws.ui.confirm = Some(ConfirmState {
-                        title: ws.i18n.t("删除 Antigravity 会话", "Delete Antigravity Session").to_string(),
-                        message: msg,
-                        action: ConfirmAction::DeleteAntigravitySession { session: sess_del },
-                    });
-                    cx.notify();
-                });
-            }),
-    );
-
-    let sess_to_open = session.clone();
-    let ws_entity_card = ws_entity.clone();
-
-    let card = div()
-        .id(gpui::SharedString::from(format!("ag-v-sess-{}", sid)))
-        .flex()
-        .items_center()
-        .justify_between()
-        .w_full()
-        .h_full()
-        .min_w(px(0.0))
-        .gap(px(12.0))
-        .px(px(16.0))
-        .py(px(8.0))
-        .rounded(px(10.0))
-        .bg(t.card_bg)
-        .border_1()
-        .border_color(if is_open { t.accent } else { t.card_border })
-        .shadow_xs()
-        .cursor_pointer()
-        .hover({
-            let bg = t.card_hover;
-            let border = if is_open { t.accent } else { t.card_border_hover };
-            move |h| h.bg(bg).border_color(border)
-        })
-        .on_click(move |_ev, _win, cx| {
-            let sess = sess_to_open.clone();
-            let _ = ws_entity_card.update(cx, |ws, cx| {
-                ws.ui.antigravity_open_session = Some(sess);
-                cx.notify();
-            });
-        })
-        .child(left_info)
-        .child(right_actions);
-
-    div()
-        .h(px(66.0))
-        .pb(px(6.0))
-        .flex()
-        .w_full()
-        .child(card)
+        .child(body)
         .into_any_element()
 }
 

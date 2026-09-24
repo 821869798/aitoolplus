@@ -254,7 +254,7 @@ impl Workspace {
                 Page::Tool(tool) => ui.open_session = Some((tool, sess_id)),
                 Page::Sessions => ui.open_session = Some((ui.sessions_tool, sess_id)),
                 Page::Antigravity => {
-                    let sessions = aitoolplus_core::antigravity::scan_antigravity_sessions(&paths.home, 200);
+                    let sessions = aitoolplus_core::antigravity::scan_antigravity_sessions(&paths.home, usize::MAX);
                     if let Some(s) = sessions.iter().find(|s| s.session_id == sess_id).cloned() {
                         ui.antigravity_tab = pages::AntigravityPageTab::Sessions;
                         ui.antigravity_open_session = Some(s);
@@ -1159,7 +1159,9 @@ struct UsageSnapshot {
     apps: Option<Vec<aitoolplus_core::usage::UsageSummaryByApp>>,
     trends: Option<Vec<aitoolplus_core::usage::DailyStats>>,
     providers: Option<Vec<aitoolplus_core::usage::ProviderStats>>,
+    provider_options: Option<Vec<aitoolplus_core::usage::ProviderStats>>,
     models: Option<Vec<aitoolplus_core::usage::ModelStats>>,
+    model_options: Option<Vec<aitoolplus_core::usage::ModelStats>>,
     logs: Option<aitoolplus_core::usage::PaginatedLogs>,
     pricing: Option<Vec<aitoolplus_core::usage::ModelPricingInfo>>,
     configs: Option<Vec<aitoolplus_core::usage::AppPricingConfig>>,
@@ -1224,8 +1226,14 @@ impl Workspace {
                         providers: db
                             .get_provider_stats(start_ts, end_ts, app, provider, model_filter)
                             .ok(),
+                        provider_options: db
+                            .get_provider_stats(start_ts, end_ts, app, None, None)
+                            .ok(),
                         models: db
                             .get_model_stats(start_ts, end_ts, app, provider, model_filter)
+                            .ok(),
+                        model_options: db
+                            .get_model_stats(start_ts, end_ts, app, provider, None)
                             .ok(),
                         logs: db
                             .get_request_logs(
@@ -1276,8 +1284,14 @@ impl Workspace {
                 if let Some(provs) = snap.providers {
                     ws.ui.usage_provider_stats = provs;
                 }
+                if let Some(options) = snap.provider_options {
+                    ws.ui.usage_provider_options = options;
+                }
                 if let Some(models) = snap.models {
                     ws.ui.usage_model_stats = models;
+                }
+                if let Some(options) = snap.model_options {
+                    ws.ui.usage_model_options = options;
                 }
                 if let Some(logs) = snap.logs {
                     ws.ui.usage_logs = logs;

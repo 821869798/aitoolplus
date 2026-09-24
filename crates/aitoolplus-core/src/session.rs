@@ -7,7 +7,7 @@
 //!   `<root>/sessions/<encoded-cwd>/<session-id>/`
 //! - Claude Code scans `~/.claude/projects/**/**.jsonl`
 //! - export schema: `ai-toolbox.session-export.v2` with providerId
-//! - list cache with a 15s TTL, max 16 entries, default limit 200 (max 500)
+//! - list cache with a 15s TTL, max 16 entries, default limit 200 (full list has no cap)
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -138,6 +138,135 @@ pub fn scan_sessions(paths: &Paths, tool: ToolId, limit: usize) -> Vec<SessionMe
     sessions
 }
 
+/// Every session on disk for this tool. No count cap. Same metadata-only scan
+/// ai-toolbox uses for its full list.
+pub fn scan_all_sessions(paths: &Paths, tool: ToolId) -> Vec<SessionMeta> {
+    let Some(root) = session_root(paths, tool) else {
+        return vec![];
+    };
+    if !root.is_dir() {
+        return vec![];
+    }
+    let mut sessions = match tool {
+        ToolId::Grok => scan_grok(&root),
+        ToolId::Codex => scan_codex(&root, usize::MAX),
+        ToolId::ClaudeCode => scan_claude_code(&root, usize::MAX),
+        ToolId::Kimi => scan_kimi_dirs(&root, usize::MAX),
+        _ => scan_jsonl_generic(&root, tool, usize::MAX),
+    };
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
+    sessions
+}
+
+/// Directory listing only. Call [`SessionScan::next_batch`] to parse metadata
+/// in chunks so a large history can show up before the last file is read.
+pub struct SessionScan {
+    kind: ScanKind,
+    cursor: usize,
+}
+
+enum ScanKind {
+    Jsonl {
+        files: Vec<PathBuf>,
+        names: HashMap<String, String>,
+        provider: String,
+        tool: ToolId,
+    },
+    Grok {
+        dirs: Vec<PathBuf>,
+    },
+    Empty,
+}
+
+impl SessionScan {
+    pub fn open(paths: &Paths, tool: ToolId) -> Self {
+        let Some(root) = session_root(paths, tool).filter(|root| root.is_dir()) else {
+            return Self { kind: ScanKind::Empty, cursor: 0 };
+        };
+        if tool == ToolId::Grok {
+            return Self { kind: ScanKind::Grok { dirs: collect_grok_dirs(&root) }, cursor: 0 };
+        }
+        let mut files = Vec::new();
+        collect_jsonl(&root, &mut files);
+        files.sort_by_key(|path| std::cmp::Reverse(modified_ms(path)));
+        let names = if tool == ToolId::Codex {
+            read_codex_thread_names(&root)
+        } else {
+            HashMap::new()
+        };
+        Self {
+            kind: ScanKind::Jsonl {
+                files,
+                names,
+                provider: tool.key().to_string(),
+                tool,
+            },
+            cursor: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match &self.kind {
+            ScanKind::Jsonl { files, .. } => files.len(),
+            ScanKind::Grok { dirs } => dirs.len(),
+            ScanKind::Empty => 0,
+        }
+    }
+
+    /// `None` when the listing is exhausted. An empty `Vec` means this chunk
+    /// had no readable sessions; keep calling.
+    pub fn next_batch(&mut self, size: usize) -> Option<Vec<SessionMeta>> {
+        let size = size.max(1);
+        if self.cursor >= self.len() {
+            return None;
+        }
+        let end = (self.cursor + size).min(self.len());
+        let batch = match &self.kind {
+            ScanKind::Empty => Vec::new(),
+            ScanKind::Grok { dirs } => dirs[self.cursor..end]
+                .iter()
+                .filter_map(|dir| parse_grok_summary(dir, &dir.join("summary.json")))
+                .collect(),
+            ScanKind::Jsonl { files, names, provider, tool } => files[self.cursor..end]
+                .iter()
+                .filter_map(|path| {
+                    let mut meta = parse_jsonl_meta(path, provider, *tool)?;
+                    if let Some(name) = names.get(&meta.session_id) {
+                        meta.title = Some(name.clone());
+                    }
+                    Some(meta)
+                })
+                .collect(),
+        };
+        self.cursor = end;
+        Some(batch)
+    }
+}
+
+fn collect_grok_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let Ok(cwd_dirs) = std::fs::read_dir(root) else {
+        return dirs;
+    };
+    for cwd_dir in cwd_dirs.filter_map(|entry| entry.ok()) {
+        let cwd_path = cwd_dir.path();
+        if !cwd_path.is_dir() {
+            continue;
+        }
+        let Ok(session_dirs) = std::fs::read_dir(&cwd_path) else {
+            continue;
+        };
+        for session_dir in session_dirs.filter_map(|entry| entry.ok()) {
+            let dir = session_dir.path();
+            if dir.join("summary.json").is_file() {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs.sort_by_key(|dir| std::cmp::Reverse(modified_ms(&dir.join("summary.json"))));
+    dirs
+}
+
 /// Codex: sessions in `~/.codex/sessions/**/*.jsonl` with optional thread_names
 /// from `~/.codex/session_index.jsonl`.
 fn scan_codex(root: &Path, limit: usize) -> Vec<SessionMeta> {
@@ -266,7 +395,9 @@ fn scan_jsonl_generic(root: &Path, tool: ToolId, limit: usize) -> Vec<SessionMet
     let mut files = vec![];
     collect_jsonl(root, &mut files);
     files.sort_by_key(|p| std::cmp::Reverse(modified_ms(p)));
-    files.truncate(limit.saturating_mul(3));
+    if limit != usize::MAX {
+        files.truncate(limit.saturating_mul(3));
+    }
     let provider = tool.key().to_string();
     files
         .into_iter()
@@ -1545,6 +1676,47 @@ struct CacheEntry {
 
 static CACHE: std::sync::Mutex<Option<HashMap<String, CacheEntry>>> = std::sync::Mutex::new(None);
 
+pub fn cached_all_if_fresh(tool: ToolId) -> Option<Vec<SessionMeta>> {
+    let key = format!("{}:all", tool.key());
+    let guard = CACHE.lock().ok()?;
+    let entry = guard.as_ref()?.get(&key)?;
+    (entry.created.elapsed().as_secs() < 15).then(|| entry.sessions.clone())
+}
+
+pub fn store_full_list_cache(tool: ToolId, sessions: Vec<SessionMeta>) {
+    let Ok(mut guard) = CACHE.lock() else {
+        return;
+    };
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.insert(
+        format!("{}:all", tool.key()),
+        CacheEntry {
+            created: std::time::Instant::now(),
+            sessions,
+        },
+    );
+    while map.len() > 16 {
+        if let Some(oldest) = map
+            .iter()
+            .min_by_key(|(_, entry)| entry.created)
+            .map(|(key, _)| key.clone())
+        {
+            map.remove(&oldest);
+        } else {
+            break;
+        }
+    }
+}
+
+pub fn cached_scan_all(paths: &Paths, tool: ToolId) -> Vec<SessionMeta> {
+    if let Some(hit) = cached_all_if_fresh(tool) {
+        return hit;
+    }
+    let sessions = scan_all_sessions(paths, tool);
+    store_full_list_cache(tool, sessions.clone());
+    sessions
+}
+
 pub fn cached_scan(paths: &Paths, tool: ToolId, limit: usize) -> Vec<SessionMeta> {
     let key = format!("{}:{limit}", tool.key());
     if let Ok(guard) = CACHE.lock()
@@ -1658,6 +1830,10 @@ mod tests {
 
         let sessions = scan_sessions(&paths, ToolId::ClaudeCode, 50);
         assert_eq!(sessions.len(), 1);
+        let mut scan = SessionScan::open(&paths, ToolId::ClaudeCode);
+        let first = scan.next_batch(1).unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(scan.next_batch(1).is_none());
         let s = &sessions[0];
         assert_eq!(s.session_id, "abc");
         assert_eq!(s.title.as_deref(), Some("first question"));

@@ -1628,6 +1628,7 @@ pub fn render_provider_dialog(
                     );
                 } else if has_models {
                     let ts = target_str.clone();
+                    let was_open = is_open;
                     input_row = input_row.child(
                         crate::components::icon_button_svg(
                             format!("btn-drop-{target_id}"),
@@ -1638,7 +1639,7 @@ pub fn render_provider_dialog(
                             cx,
                             move |ws, _ev, _w, cx| {
                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                    if d.active_model_dropdown.as_deref() == Some(&ts) {
+                                    if was_open {
                                         d.active_model_dropdown = None;
                                     } else {
                                         d.model_search.update(cx, |inp, cx| inp.set_text_silent("", cx));

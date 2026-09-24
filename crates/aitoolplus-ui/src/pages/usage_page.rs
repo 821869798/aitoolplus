@@ -138,8 +138,11 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
     let current_provider_label: gpui::SharedString = match &ws.ui.usage_provider_filter {
         Some(p) => {
             // Find readable name from provider stats if available
-            let display = ws.ui.usage_provider_stats
+            let display = ws
+                .ui
+                .usage_provider_options
                 .iter()
+                .chain(ws.ui.usage_provider_stats.iter())
                 .find(|s| &s.provider_id == p)
                 .map(|s| s.provider_name.as_str())
                 .unwrap_or(p.as_str());
@@ -169,9 +172,13 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             .child(crate::icons::svg_icon(crate::icons::DATABASE_SVG, px(13.0), if is_filtered { t.accent } else { t.text_muted }))
             .child(
                 div()
-                    .max_w(px(100.0))
+                    .id(gpui::ElementId::Name(
+                        format!("usage-provider-filter-label-{current_provider_label}").into(),
+                    ))
+                    .max_w(px(140.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(current_provider_label),
             )
             .child(crate::icons::svg_icon(
@@ -179,8 +186,9 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 px(11.0),
                 t.text_muted,
             ))
-            .on_click(cx.listener(|ws, _, _, cx| {
-                ws.ui.usage_provider_menu_open = !ws.ui.usage_provider_menu_open;
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                cx.stop_propagation();
+                ws.ui.usage_provider_menu_open = !is_open;
                 ws.ui.usage_model_menu_open = false;
                 ws.ui.usage_date_menu_open = false;
                 ws.ui.usage_status_menu_open = false;
@@ -215,9 +223,13 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             .child(crate::icons::svg_icon(crate::icons::CPU_SVG, px(13.0), if is_filtered { t.accent } else { t.text_muted }))
             .child(
                 div()
-                    .max_w(px(100.0))
+                    .id(gpui::ElementId::Name(
+                        format!("usage-model-filter-label-{current_model_label}").into(),
+                    ))
+                    .max_w(px(140.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(current_model_label),
             )
             .child(crate::icons::svg_icon(
@@ -225,8 +237,9 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 px(11.0),
                 t.text_muted,
             ))
-            .on_click(cx.listener(|ws, _, _, cx| {
-                ws.ui.usage_model_menu_open = !ws.ui.usage_model_menu_open;
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                cx.stop_propagation();
+                ws.ui.usage_model_menu_open = !is_open;
                 ws.ui.usage_provider_menu_open = false;
                 ws.ui.usage_date_menu_open = false;
                 ws.ui.usage_status_menu_open = false;
@@ -307,8 +320,9 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 px(11.0),
                 t.text_muted,
             ))
-            .on_click(cx.listener(|ws, _, _, cx| {
-                ws.ui.usage_date_menu_open = !ws.ui.usage_date_menu_open;
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                cx.stop_propagation();
+                ws.ui.usage_date_menu_open = !is_open;
                 ws.ui.usage_provider_menu_open = false;
                 ws.ui.usage_model_menu_open = false;
                 cx.notify();
@@ -336,7 +350,8 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 .bg(if is_sel { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
                 .hover(|s| s.bg(t.card_hover))
                 .child(label)
-                .on_click(cx.listener(move |ws, _, _, cx| {
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                    cx.stop_propagation();
                     ws.ui.usage_range = preset;
                     ws.ui.usage_date_menu_open = false;
                     ws.ui.usage_page = 0;
@@ -349,6 +364,10 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         Some(
             div()
                 .id("usage-date-menu-dropdown")
+                .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
+                    ws.ui.usage_date_menu_open = false;
+                    cx.notify();
+                }))
                 .absolute()
                 .top(px(36.0))
                 .right_0()
@@ -461,7 +480,8 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             .bg(if ws.ui.usage_provider_filter.is_none() { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
             .hover(|s| s.bg(t.card_hover))
             .child(i.t("全部来源", "All Sources"))
-            .on_click(cx.listener(|ws, _, _, cx| {
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|ws, _, _, cx| {
+                cx.stop_propagation();
                 ws.ui.usage_provider_filter = None;
                 ws.ui.usage_model_filter = None;
                 ws.ui.usage_provider_menu_open = false;
@@ -470,7 +490,12 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 cx.notify();
             }))];
 
-        for (idx, stat) in ws.ui.usage_provider_stats.iter().enumerate() {
+        let provider_choices = if ws.ui.usage_provider_options.is_empty() {
+            &ws.ui.usage_provider_stats
+        } else {
+            &ws.ui.usage_provider_options
+        };
+        for (idx, stat) in provider_choices.iter().enumerate() {
             let pid = stat.provider_id.clone();
             let pname = stat.provider_name.clone();
             let is_sel = ws.ui.usage_provider_filter.as_deref() == Some(&pid);
@@ -486,7 +511,8 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                     .bg(if is_sel { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
                     .hover(|s| s.bg(t.card_hover))
                     .child(pname)
-                    .on_click(cx.listener(move |ws, _, _, cx| {
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                        cx.stop_propagation();
                         ws.ui.usage_provider_filter = Some(pid.clone());
                         ws.ui.usage_model_filter = None;
                         ws.ui.usage_provider_menu_open = false;
@@ -500,6 +526,10 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         Some(
             div()
                 .id("usage-provider-menu-dropdown")
+                .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
+                    ws.ui.usage_provider_menu_open = false;
+                    cx.notify();
+                }))
                 .absolute()
                 .top(px(42.0))
                 .left_0()
@@ -534,7 +564,8 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             .bg(if ws.ui.usage_model_filter.is_none() { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
             .hover(|s| s.bg(t.card_hover))
             .child(i.t("全部模型", "All Models"))
-            .on_click(cx.listener(|ws, _, _, cx| {
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|ws, _, _, cx| {
+                cx.stop_propagation();
                 ws.ui.usage_model_filter = None;
                 ws.ui.usage_model_menu_open = false;
                 ws.ui.usage_page = 0;
@@ -542,7 +573,12 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 cx.notify();
             }))];
 
-        for (idx, stat) in ws.ui.usage_model_stats.iter().enumerate() {
+        let model_choices = if ws.ui.usage_model_options.is_empty() {
+            &ws.ui.usage_model_stats
+        } else {
+            &ws.ui.usage_model_options
+        };
+        for (idx, stat) in model_choices.iter().enumerate() {
             let mname = stat.model.clone();
             let is_sel = ws.ui.usage_model_filter.as_deref() == Some(&mname);
             list.push(
@@ -558,7 +594,8 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                     .bg(if is_sel { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
                     .hover(|s| s.bg(t.card_hover))
                     .child(mname.clone())
-                    .on_click(cx.listener(move |ws, _, _, cx| {
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                        cx.stop_propagation();
                         ws.ui.usage_model_filter = Some(mname.clone());
                         ws.ui.usage_model_menu_open = false;
                         ws.ui.usage_page = 0;
@@ -571,6 +608,10 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         Some(
             div()
                 .id("usage-model-menu-dropdown")
+                .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
+                    ws.ui.usage_model_menu_open = false;
+                    cx.notify();
+                }))
                 .absolute()
                 .top(px(42.0))
                 .left_0()
