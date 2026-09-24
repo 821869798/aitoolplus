@@ -2,6 +2,7 @@
 //! Sessions, Settings.
 
 pub mod antigravity_page;
+pub mod local_env_page;
 pub mod mcp_page;
 pub mod session_detail;
 pub mod sessions_page;
@@ -236,6 +237,11 @@ pub struct WorkspaceState {
     pub antigravity_editing_label: Option<(String, gpui::Entity<TextInput>)>,
     pub antigravity_refreshing_all: bool,
     pub antigravity_manager_importing: bool,
+    pub local_env_tools: Vec<aitoolplus_core::local_env::ToolStatus>,
+    pub local_env_loading: bool,
+    pub local_env_loaded: bool,
+    /// Tool id currently installing/updating, or "*" for update-all.
+    pub local_env_busy: Option<String>,
     pub antigravity_refreshing_ids: std::collections::HashSet<String>,
     pub antigravity_search: gpui::Entity<TextInput>,
     pub antigravity_quota_window: AntigravityQuotaWindow,
@@ -398,6 +404,7 @@ pub enum SettingsTab {
     Usage,
     Backup,
     Advanced,
+    LocalEnv,
     About,
 }
 
@@ -917,6 +924,10 @@ impl WorkspaceState {
             antigravity_editing_label: None,
             antigravity_refreshing_all: false,
             antigravity_manager_importing: false,
+            local_env_tools: Vec::new(),
+            local_env_loading: false,
+            local_env_loaded: false,
+            local_env_busy: None,
             antigravity_refreshing_ids: std::collections::HashSet::new(),
             antigravity_search,
             antigravity_quota_window: if std::env::var("AITOOLPLUS_ANTIGRAVITY_WINDOW").map(|v| v.to_lowercase()).as_deref() == Ok("weekly") {
