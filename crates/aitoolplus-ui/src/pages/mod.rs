@@ -1,11 +1,10 @@
 //! Feature pages: tool pages (providers/common/prompts), MCP, Skills,
-//! Sessions, Settings.
+//! Settings.
 
 pub mod antigravity_page;
 pub mod local_env_page;
 pub mod mcp_page;
 pub mod session_detail;
-pub mod sessions_page;
 pub mod settings_page;
 pub mod skills_page;
 pub mod tool_page;
@@ -26,7 +25,6 @@ pub enum Page {
     Tool(ToolId),
     Mcp,
     Skills,
-    Sessions,
     Antigravity,
     Settings,
 }
@@ -37,7 +35,6 @@ impl Page {
             Page::Tool(t) => t.key(),
             Page::Mcp => "mcp",
             Page::Skills => "skills",
-            Page::Sessions => "sessions",
             Page::Antigravity => "antigravity",
             Page::Settings => "settings",
         }
@@ -89,8 +86,6 @@ pub struct WorkspaceState {
     /// Settings page: import/export feedback.
     pub settings_tab: SettingsTab,
     pub skills_tool_filter: Option<ToolId>,
-    pub sessions_tool: ToolId,
-    pub session_search: gpui::Entity<TextInput>,
     /// Sticky status message.
     pub toast: Option<Toast>,
     /// Whether MCP discovery has already run this session.
@@ -661,8 +656,6 @@ pub enum ConfirmAction {
 
 impl WorkspaceState {
     pub fn new(cx: &mut Context<Workspace>) -> Self {
-        let session_search =
-            cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
         let skill_git_url = cx.new(|cx| TextInput::new("https://github.com/owner/skill.git", cx));
         let proxy_url_input = cx.new(|cx| TextInput::new("http://127.0.0.1:7890", cx));
         let custom_mirror_input = cx.new(|cx| TextInput::new("https://ghproxy.net/", cx));
@@ -809,11 +802,6 @@ impl WorkspaceState {
             confirm: None,
             settings_tab: SettingsTab::General,
             skills_tool_filter: None,
-            sessions_tool: std::env::var("AITOOLPLUS_SESSIONS_TOOL")
-                .ok()
-                .and_then(|k| ToolId::from_key(&k))
-                .unwrap_or(ToolId::ClaudeCode),
-            session_search,
             toast: None,
             mcp_discovered: false,
             skills_discovered: false,
@@ -1200,9 +1188,6 @@ impl WorkspaceState {
         self.mcp_import_existing_modal = false;
         self.mcp_editing_metadata = None;
         self.mcp_adding_tag = None;
-        if let Page::Sessions = page {
-            self.open_session = None;
-        }
         if let Page::Tool(tool) = page {
             let valid_tab = match self.tool_tab {
                 ToolTab::Providers | ToolTab::Prompts | ToolTab::Runtime | ToolTab::Sessions => true,
@@ -1868,7 +1853,6 @@ pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
         Page::Tool(tool) => tool_page::render_tool_page(tool, ws, cx),
         Page::Mcp => mcp_page::render_mcp_page(ws, cx),
         Page::Skills => skills_page::render_skills_page(ws, cx),
-        Page::Sessions => sessions_page::render_sessions_page(ws, cx),
         Page::Antigravity => antigravity_page::render_antigravity_page(ws, cx),
         Page::Settings => settings_page::render_settings_page(ws, cx),
     }

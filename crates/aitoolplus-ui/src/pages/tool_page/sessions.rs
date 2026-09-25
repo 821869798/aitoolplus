@@ -642,6 +642,67 @@ fn antigravity_meta(s: &SessionMeta) -> aitoolplus_core::antigravity::Antigravit
     }
 }
 
+pub(crate) fn render_rename_dialog(
+    meta: SessionMeta,
+    input: gpui::Entity<TextInput>,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(input_container(&t, input.clone()))
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .gap(px(8.0))
+                .child(button_l(
+                    "rename-cancel",
+                    i.t("取消", "Cancel"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.rename_dialog = None;
+                        cx.notify();
+                    },
+                ))
+                .child(button_l(
+                    "rename-save",
+                    i.t("保存", "Save"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let title: String = input.update(cx, |inp, _| inp.text().to_string());
+                        match session::rename_session(&meta, &title) {
+                            Ok(()) => {
+                                session::invalidate_cache();
+                                ws.ui.toast(ws.i18n.t("已重命名", "renamed").to_string(), false);
+                            }
+                            Err(e) => ws.ui.toast(format!("rename failed: {e}"), true),
+                        }
+                        ws.ui.rename_dialog = None;
+                        cx.notify();
+                    },
+                )),
+        );
+    crate::pages::modal_scaffold(
+        &t,
+        i.t("重命名会话", "Rename Session").as_ref(),
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.rename_dialog = None;
+            cx.notify();
+        },
+    )
+}
+
 pub(super) fn render_agent_session_detail(
     tool: ToolId,
     meta: &SessionMeta,

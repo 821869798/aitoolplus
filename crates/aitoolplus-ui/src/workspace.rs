@@ -204,7 +204,6 @@ impl Workspace {
         let page = match requested_page.as_str() {
             "mcp" => Page::Mcp,
             "skills" => Page::Skills,
-            "sessions" => Page::Sessions,
             "antigravity" => Page::Antigravity,
             "settings" => Page::Settings,
             key => ToolId::from_key(key)
@@ -252,7 +251,6 @@ impl Workspace {
         if let Ok(sess_id) = std::env::var("AITOOLPLUS_START_SESSION") {
             match page {
                 Page::Tool(tool) => ui.open_session = Some((tool, sess_id)),
-                Page::Sessions => ui.open_session = Some((ui.sessions_tool, sess_id)),
                 Page::Antigravity => {
                     let sessions = aitoolplus_core::antigravity::scan_antigravity_sessions(&paths.home, usize::MAX);
                     if let Some(s) = sessions.iter().find(|s| s.session_id == sess_id).cloned() {
@@ -747,7 +745,6 @@ impl Workspace {
         let is_custom_scroll = is_session_open
             || (matches!(self.page, Page::Tool(_))
                 && matches!(self.ui.tool_tab, pages::ToolTab::Marketplace | pages::ToolTab::Sessions))
-            || matches!(self.page, Page::Sessions)
             || matches!(self.page, Page::Skills)
             || matches!(self.page, Page::Mcp)
             || (matches!(self.page, Page::Antigravity)
@@ -1053,7 +1050,7 @@ impl Render for Workspace {
                 out.push(pages::render_confirm_dialog(d, self, cx));
             }
             if let Some((meta, input)) = renames {
-                out.push(pages::sessions_page::render_rename_dialog(
+                out.push(pages::tool_page::render_rename_dialog(
                     meta, input, self, cx,
                 ));
             }
