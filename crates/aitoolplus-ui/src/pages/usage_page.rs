@@ -364,9 +364,15 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         Some(
             div()
                 .id("usage-date-menu-dropdown")
-                .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
-                    ws.ui.usage_date_menu_open = false;
-                    cx.notify();
+                .on_mouse_down_out(cx.listener(|ws, _, window, cx| {
+                    let entity = cx.entity().clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = entity.update(cx, |ws, cx| {
+                            ws.ui.usage_date_menu_open = false;
+                            cx.notify();
+                        });
+                        window.refresh();
+                    });
                 }))
                 .absolute()
                 .top(px(36.0))
@@ -526,9 +532,15 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         Some(
             div()
                 .id("usage-provider-menu-dropdown")
-                .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
-                    ws.ui.usage_provider_menu_open = false;
-                    cx.notify();
+                .on_mouse_down_out(cx.listener(|ws, _, window, cx| {
+                    let entity = cx.entity().clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = entity.update(cx, |ws, cx| {
+                            ws.ui.usage_provider_menu_open = false;
+                            cx.notify();
+                        });
+                        window.refresh();
+                    });
                 }))
                 .absolute()
                 .top(px(42.0))
@@ -608,9 +620,15 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         Some(
             div()
                 .id("usage-model-menu-dropdown")
-                .on_mouse_down_out(cx.listener(|ws, _, _, cx| {
-                    ws.ui.usage_model_menu_open = false;
-                    cx.notify();
+                .on_mouse_down_out(cx.listener(|ws, _, window, cx| {
+                    let entity = cx.entity().clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = entity.update(cx, |ws, cx| {
+                            ws.ui.usage_model_menu_open = false;
+                            cx.notify();
+                        });
+                        window.refresh();
+                    });
                 }))
                 .absolute()
                 .top(px(42.0))

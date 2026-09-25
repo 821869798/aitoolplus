@@ -147,12 +147,12 @@ impl ProxyType {
 
     pub fn all() -> &'static [ProxyType] {
         &[
+            ProxyType::System,
             ProxyType::Direct,
             ProxyType::Http,
             ProxyType::Https,
             ProxyType::Socks5,
             ProxyType::Socks4,
-            ProxyType::System,
         ]
     }
 }
@@ -426,8 +426,8 @@ impl Default for AppSettings {
             start_with_system: false,
             minimize_to_tray_on_close: true,
             start_minimized: false,
-            proxy_mode: ProxyMode::Direct,
-            proxy_type: ProxyType::Direct,
+            proxy_mode: ProxyMode::System,
+            proxy_type: ProxyType::System,
             proxy_host: default_proxy_host(),
             proxy_port: default_proxy_port(),
             proxy_url: String::new(),
@@ -760,8 +760,8 @@ mod tests {
     #[test]
     fn test_proxy_settings_sync_and_normalize() {
         let mut s = AppSettings::default();
-        assert_eq!(s.proxy_type, ProxyType::Direct);
-        assert_eq!(s.proxy_mode, ProxyMode::Direct);
+        assert_eq!(s.proxy_type, ProxyType::System);
+        assert_eq!(s.proxy_mode, ProxyMode::System);
         assert_eq!(s.proxy_host, "127.0.0.1");
         assert_eq!(s.proxy_port, "7890");
 
@@ -778,9 +778,13 @@ mod tests {
         s.sync_proxy();
         assert_eq!(s.proxy_mode, ProxyMode::Direct);
         assert_eq!(s.proxy_url, "");
+        s.normalize_proxy();
+        assert_eq!(s.proxy_type, ProxyType::Direct);
+        assert_eq!(s.proxy_mode, ProxyMode::Direct);
 
         // Legacy proxy_url normalization
         let mut legacy = AppSettings::default();
+        legacy.proxy_type = ProxyType::Direct;
         legacy.proxy_mode = ProxyMode::Custom;
         legacy.proxy_url = "http://myproxy.local:8080".into();
         legacy.normalize_proxy();

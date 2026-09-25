@@ -212,77 +212,11 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
     let proxy_host_input = ws.ui.proxy_host_input.clone();
     let proxy_port_input = ws.ui.proxy_port_input.clone();
 
-    let protocol_dropdown = div()
-        .relative()
-        .w(px(150.0))
-        .child(
-            div()
-                .id("proxy-protocol-dropdown-trigger")
-                .flex()
-                .items_center()
-                .justify_between()
-                .w_full()
-                .h(px(32.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .bg(t.input_bg)
-                .border_1()
-                .border_color(if is_dropdown_open { t.accent } else { t.input_border })
-                .shadow_xs()
-                .cursor_pointer()
-                .hover(|s| s.border_color(t.card_border_hover))
-                .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
-                    cx.stop_propagation();
-                    ws.ui.proxy_protocol_dropdown_open = !is_dropdown_open;
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .text_size(px(12.5))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(t.text_primary)
-                        .child(current_proxy_type.label(is_zh)),
-                )
-                .child(
-                    gpui::svg()
-                        .data(if is_dropdown_open {
-                            crate::icons::CHEVRON_UP_SVG
-                        } else {
-                            crate::icons::CHEVRON_DOWN_SVG
-                        })
-                        .size(px(11.0))
-                        .text_color(t.text_muted),
-                ),
-        )
-        .when(is_dropdown_open, |el| {
-            let t_menu = t.clone();
-            el.child(gpui::deferred(
-                div()
-                    .id("proxy-protocol-dropdown-menu")
-                    .occlude()
-                    .absolute()
-                    .top(px(36.0))
-                    .left_0()
-                    .w(px(160.0))
-                    .bg(t_menu.card_bg)
-                    .border_1()
-                    .border_color(t_menu.card_border)
-                    .rounded(px(6.0))
-                    .shadow_xl()
-                    .p(px(4.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .on_mouse_down_out({
-                        let entity = cx.entity().clone();
-                        move |_ev, _window, cx| {
-                            entity.update(cx, |ws, cx| {
-                                ws.ui.proxy_protocol_dropdown_open = false;
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .children(aitoolplus_core::settings::ProxyType::all().iter().copied().map(|pt| {
+    let t_menu = t.clone();
+    let protocol_options = aitoolplus_core::settings::ProxyType::all()
+        .iter()
+        .copied()
+        .map(|pt| {
                         let is_selected = pt == current_proxy_type;
                         let t_opt = t_menu.clone();
                         div()
@@ -328,9 +262,53 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                                         .text_color(t_opt.accent),
                                 )
                             })
-                    })),
-            ))
-        });
+                    .into_any_element()
+        }).collect::<Vec<_>>();
+    let protocol_dropdown = div().w(px(150.0)).child(
+        crate::components::MenuDrop::new("proxy-protocol-dropdown", is_dropdown_open, &t, cx)
+            .menu_width(160.0)
+            .trigger(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .w_full()
+                    .h(px(32.0))
+                    .px(px(10.0))
+                    .rounded(px(6.0))
+                    .bg(t.input_bg)
+                    .border_1()
+                    .border_color(if is_dropdown_open { t.accent } else { t.input_border })
+                    .shadow_xs()
+                    .hover(|s| s.border_color(t.card_border_hover))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(t.text_primary)
+                            .child(current_proxy_type.label(is_zh)),
+                    )
+                    .child(
+                        gpui::svg()
+                            .data(if is_dropdown_open {
+                                crate::icons::CHEVRON_UP_SVG
+                            } else {
+                                crate::icons::CHEVRON_DOWN_SVG
+                            })
+                            .size(px(11.0))
+                            .text_color(t.text_muted),
+                    ),
+            )
+            .menu(div().flex().flex_col().gap(px(2.0)).children(protocol_options))
+            .render(
+                |ws, was_open, _cx| {
+                    ws.ui.proxy_protocol_dropdown_open = !was_open;
+                },
+                |ws, _cx| {
+                    ws.ui.proxy_protocol_dropdown_open = false;
+                },
+            ),
+    );
 
     let mut columns_row = div()
         .flex()

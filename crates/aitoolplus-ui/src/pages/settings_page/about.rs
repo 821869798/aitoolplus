@@ -194,181 +194,51 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     }
                 };
                 let is_open = ws.ui.update_mirror_dropdown_open;
-                let mirror_options = vec![
-                    (
-                        aitoolplus_core::updater::UpdateMirror::GhProxy,
-                        i.t("GhProxy 镜像加速 (gh-proxy.com)", "GhProxy Mirror (gh-proxy.com)"),
-                        crate::icons::CLOUD_DOWNLOAD_SVG,
-                    ),
-                    (
-                        aitoolplus_core::updater::UpdateMirror::Official,
-                        i.t("GitHub 官方 (直连)", "GitHub Official (Direct)"),
-                        crate::icons::GLOBE_SVG,
-                    ),
+                let mirror_options = [
+                    (aitoolplus_core::updater::UpdateMirror::GhProxy, i.t("GhProxy 镜像加速 (gh-proxy.com)", "GhProxy Mirror (gh-proxy.com)"), crate::icons::CLOUD_DOWNLOAD_SVG),
+                    (aitoolplus_core::updater::UpdateMirror::Official, i.t("GitHub 官方 (直连)", "GitHub Official (Direct)"), crate::icons::GLOBE_SVG),
                 ];
-
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(
-                                div()
-                                    .text_size(px(12.5))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(t.text_primary)
-                                    .child(i.t("下载加速镜像源：", "Download Mirror Source:")),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .text_color(t.text_secondary)
-                                    .child(i.t(
-                                        "国内网络推荐使用 gh-proxy.com 镜像加速，秒速完成下载",
-                                        "GhProxy mirror (gh-proxy.com) recommended for high-speed downloads",
-                                    )),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .relative()
-                            .w(px(260.0))
-                            .child(
-                                div()
-                                    .id("update-mirror-dropdown-trigger")
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .w_full()
-                                    .px(px(10.0))
-                                    .py(px(5.5))
-                                    .rounded(px(6.0))
-                                    .bg(t.input_bg)
-                                    .border_1()
-                                    .border_color(if is_open { t.accent } else { t.card_border })
-                                    .cursor_pointer()
-                                    .hover(|s| s.border_color(t.accent))
-                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
-                                        cx.stop_propagation();
-                                        ws.ui.update_mirror_dropdown_open = !is_open;
-                                        cx.notify();
-                                    }))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(6.0))
-                                            .child(
-                                                gpui::svg()
-                                                    .data(if current_mirror == aitoolplus_core::updater::UpdateMirror::GhProxy {
-                                                        crate::icons::CLOUD_DOWNLOAD_SVG
-                                                    } else {
-                                                        crate::icons::GLOBE_SVG
-                                                    })
-                                                    .size(px(13.0))
-                                                    .text_color(t.accent),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0))
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .text_color(t.text_primary)
-                                                    .child(current_mirror_name.to_string()),
-                                            ),
-                                    )
-                                    .child(
-                                        gpui::svg()
-                                            .data(if is_open {
-                                                crate::icons::CHEVRON_UP_SVG
-                                            } else {
-                                                crate::icons::CHEVRON_DOWN_SVG
-                                            })
-                                            .size(px(11.0))
-                                            .text_color(t.text_muted),
-                                    ),
-                            )
-                            .when(is_open, |el| {
-                                el.child(gpui::deferred(
-                                    div()
-                                        .id("update-mirror-dropdown-menu")
-                                        .occlude()
-                                        .absolute()
-                                        .top(px(34.0))
-                                        .right_0()
-                                        .w(px(260.0))
-                                        .bg(t.card_bg)
-                                        .border_1()
-                                        .border_color(t.card_border)
-                                        .rounded(px(6.0))
-                                        .shadow_xl()
-                                        .p(px(4.0))
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.0))
-                                        .on_mouse_down_out({
-                                            let entity = cx.entity().clone();
-                                            move |_ev, _window, cx| {
-                                                entity.update(cx, |ws, cx| {
-                                                    ws.ui.update_mirror_dropdown_open = false;
-                                                    cx.notify();
-                                                });
-                                            }
-                                        })
-                                        .children(mirror_options.into_iter().map(|(m, label, icon)| {
-                                            let is_selected = m == current_mirror;
-                                            div()
-                                                .id(gpui::SharedString::from(format!("mirror-opt-{:?}", m)))
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
-                                                .px(px(8.0))
-                                                .py(px(5.5))
-                                                .rounded(px(4.0))
-                                                .bg(if is_selected { t.accent_subtle } else { t.card_bg })
-                                                .hover(|s| s.bg(t.card_hover))
-                                                .cursor_pointer()
-                                                .on_click(cx.listener(move |ws, _, _, cx| {
-                                                    ws.settings.update_mirror = m;
-                                                    ws.ui.update_mirror_dropdown_open = false;
-                                                    (ws.callbacks.save_settings)(&ws.settings);
-                                                    cx.notify();
-                                                }))
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .items_center()
-                                                        .gap(px(6.0))
-                                                        .child(
-                                                            gpui::svg()
-                                                                .data(icon)
-                                                                .size(px(12.0))
-                                                                .text_color(if is_selected { t.accent } else { t.text_muted }),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .text_size(px(11.5))
-                                                                .text_color(if is_selected { t.accent } else { t.text_primary })
-                                                                .font_weight(if is_selected { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
-                                                                .child(label.to_string()),
-                                                        ),
-                                                )
-                                                .when(is_selected, |s| {
-                                                    s.child(
-                                                        gpui::svg()
-                                                            .data(crate::icons::CHECK_SVG)
-                                                            .size(px(11.0))
-                                                            .text_color(t.accent),
-                                                    )
-                                                })
-                                        })),
-                                ))
-                            }),
-                    )
+                let mirror_trigger = div()
+                    .flex().items_center().justify_between().w_full()
+                    .px(px(10.0)).py(px(5.5)).rounded(px(6.0))
+                    .bg(t.input_bg).border_1()
+                    .border_color(if is_open { t.accent } else { t.card_border })
+                    .hover(|s| s.border_color(t.accent))
+                    .child(div().flex().items_center().gap(px(6.0))
+                        .child(gpui::svg().data(if current_mirror == aitoolplus_core::updater::UpdateMirror::GhProxy { crate::icons::CLOUD_DOWNLOAD_SVG } else { crate::icons::GLOBE_SVG }).size(px(13.0)).text_color(t.accent))
+                        .child(div().text_size(px(12.0)).font_weight(gpui::FontWeight::MEDIUM).text_color(t.text_primary).child(current_mirror_name.to_string())))
+                    .child(gpui::svg().data(if is_open { crate::icons::CHEVRON_UP_SVG } else { crate::icons::CHEVRON_DOWN_SVG }).size(px(11.0)).text_color(t.text_muted));
+                let mirror_rows = mirror_options.into_iter().map(|(m, label, icon)| {
+                    let is_selected = m == current_mirror;
+                    div().id(gpui::SharedString::from(format!("mirror-opt-{m:?}")))
+                        .flex().items_center().justify_between()
+                        .px(px(8.0)).py(px(5.5)).rounded(px(4.0))
+                        .bg(if is_selected { t.accent_subtle } else { t.card_bg })
+                        .hover(|s| s.bg(t.card_hover)).cursor_pointer()
+                        .on_click(cx.listener(move |ws, _, _, cx| {
+                            ws.settings.update_mirror = m;
+                            ws.ui.update_mirror_dropdown_open = false;
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            cx.notify();
+                        }))
+                        .child(div().flex().items_center().gap(px(6.0))
+                            .child(gpui::svg().data(icon).size(px(12.0)).text_color(if is_selected { t.accent } else { t.text_muted }))
+                            .child(div().text_size(px(11.5)).text_color(if is_selected { t.accent } else { t.text_primary }).child(label.to_string())))
+                        .when(is_selected, |s| s.child(gpui::svg().data(crate::icons::CHECK_SVG).size(px(11.0)).text_color(t.accent)))
+                }).collect::<Vec<_>>();
+                div().flex().items_center().justify_between().w_full()
+                    .child(div().flex().flex_col().gap(px(2.0))
+                        .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::MEDIUM).text_color(t.text_primary).child(i.t("下载加速镜像源：", "Download Mirror Source:")))
+                        .child(div().text_size(px(11.5)).text_color(t.text_secondary).child(i.t("国内网络推荐使用 gh-proxy.com 镜像加速，秒速完成下载", "GhProxy mirror (gh-proxy.com) recommended for high-speed downloads"))))
+                    .child(div().w(px(260.0)).child(
+                        crate::components::MenuDrop::new("update-mirror-dropdown", is_open, &t, cx)
+                            .align_end(true).menu_width(260.0)
+                            .trigger(mirror_trigger)
+                            .menu(div().flex().flex_col().gap(px(2.0)).children(mirror_rows))
+                            .render(
+                                |ws, was_open, _cx| { ws.ui.update_mirror_dropdown_open = !was_open; },
+                                |ws, _cx| { ws.ui.update_mirror_dropdown_open = false; },
+                            )))
             })
             .into_any_element(),
     ];

@@ -1423,6 +1423,126 @@ pub fn text_area_scroll_container(
 }
 
 // ---------------------------------------------------------------------------
+// Menu dropdown. Trigger toggles from the state captured at press time.
+// Clicking outside closes on the next frame, so an item click commits first.
+// ---------------------------------------------------------------------------
+
+pub struct MenuDrop<'a, 'v, V: 'static> {
+    id: SharedString,
+    open: bool,
+    t: &'a Theme,
+    cx: &'a mut Context<'v, V>,
+    trigger: Option<gpui::AnyElement>,
+    menu: Option<gpui::AnyElement>,
+    align_end: bool,
+    menu_w: Option<f32>,
+}
+
+impl<'a, 'v, V: 'static> MenuDrop<'a, 'v, V> {
+    pub fn new(
+        id: impl Into<SharedString>,
+        open: bool,
+        t: &'a Theme,
+        cx: &'a mut Context<'v, V>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            open,
+            t,
+            cx,
+            trigger: None,
+            menu: None,
+            align_end: false,
+            menu_w: None,
+        }
+    }
+
+    pub fn trigger(mut self, trigger: impl IntoElement) -> Self {
+        self.trigger = Some(trigger.into_any_element());
+        self
+    }
+
+    pub fn menu(mut self, menu: impl IntoElement) -> Self {
+        self.menu = Some(menu.into_any_element());
+        self
+    }
+
+    pub fn align_end(mut self, align_end: bool) -> Self {
+        self.align_end = align_end;
+        self
+    }
+
+    pub fn menu_width(mut self, width: f32) -> Self {
+        self.menu_w = Some(width);
+        self
+    }
+
+    pub fn render(
+        self,
+        on_toggle: impl Fn(&mut V, bool, &mut gpui::App) + 'static,
+        on_close: impl Fn(&mut V, &mut gpui::App) + 'static,
+    ) -> gpui::AnyElement {
+        let open = self.open;
+        let id = self.id.clone();
+        let mut root = div().relative().child(
+            div()
+                .id(id)
+                .cursor_pointer()
+                .on_mouse_down(gpui::MouseButton::Left, {
+                    let entity = self.cx.entity().clone();
+                    move |_ev, _, cx| {
+                        cx.stop_propagation();
+                        let _ = entity.update(cx, |view, cx| on_toggle(view, open, cx));
+                        cx.notify(entity.entity_id());
+                    }
+                })
+                .child(self.trigger.unwrap_or_else(|| div().into_any_element())),
+        );
+        if open {
+            if let Some(menu) = self.menu {
+                let entity = self.cx.entity().clone();
+                let on_close = std::rc::Rc::new(on_close);
+                let mut panel = div()
+                    .id(SharedString::from(format!("{}-menu", self.id)))
+                    .occlude()
+                    .absolute()
+                    .top(px(36.0))
+                    .min_w(px(self.menu_w.unwrap_or(160.0)))
+                    .bg(self.t.card_bg)
+                    .border_1()
+                    .border_color(self.t.card_border)
+                    .rounded(px(6.0))
+                    .shadow_xl()
+                    .p(px(4.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .on_mouse_down_out({
+                        let on_close = on_close.clone();
+                        move |_ev, window, cx| {
+                            let entity = entity.clone();
+                            let on_close = on_close.clone();
+                            window.defer(cx, move |window, cx| {
+                                let _ = entity.update(cx, |view, cx| on_close(view, cx));
+                                cx.notify(entity.entity_id());
+                                window.refresh();
+                            });
+                        }
+                    })
+                    .child(menu);
+                panel = if self.align_end {
+                    panel.right_0()
+                } else {
+                    panel.left_0()
+                };
+                root = root.child(gpui::deferred(panel));
+            }
+        }
+        root.into_any_element()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Fused Combobox (Searchable Select / Autocomplete)
 // ---------------------------------------------------------------------------
 
@@ -1489,6 +1609,7 @@ pub fn fused_combobox<V: 'static>(
         .justify_between()
         .hover(|h| h.border_color(if is_open { t.accent } else { t.card_border_hover }))
         .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |view, _, window, cx| {
+            cx.stop_propagation();
             if is_open {
                 on_close_click(view, cx);
             } else {
@@ -1588,9 +1709,14 @@ pub fn fused_combobox<V: 'static>(
             .gap(px(4.0))
             .on_mouse_down_out({
                 let entity = cx.entity().clone();
-                move |_ev, _window, cx| {
-                    entity.update(cx, |view, cx| {
-                        on_close_out(view, cx);
+                move |_ev, window, cx| {
+                    let entity = entity.clone();
+                    let on_close_out = on_close_out.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = entity.update(cx, |view, cx| {
+                            on_close_out(view, cx);
+                        });
+                        window.refresh();
                     });
                 }
             });

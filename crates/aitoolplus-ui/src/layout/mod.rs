@@ -117,7 +117,6 @@ impl Workspace {
             Page::Tool(tool) => (crate::icons::tool_icon(tool), i.t(tool.name_zh(), tool.name_en())),
             Page::Mcp => (crate::icons::MCP_SVG, i.t("MCP 服务器", "MCP Servers")),
             Page::Skills => (crate::icons::SPARKLES_SVG, i.t("Skills 技能", "Skills")),
-            Page::Sessions => (crate::icons::HISTORY_SVG, i.t("会话管理", "Sessions")),
             Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("Antigravity", "Antigravity")),
             Page::Settings => (crate::icons::SETTINGS_SVG, i.t("系统设置", "Settings")),
         };
@@ -212,10 +211,6 @@ impl Workspace {
             Page::Skills => (
                 i.t("Skills 技能", "Skills"),
                 i.t("扩展各 AI 工具的系统 Prompt 与函数技能库", "System prompts & agent tool skills"),
-            ),
-            Page::Sessions => (
-                i.t("会话管理", "Sessions"),
-                i.t("浏览、恢复与导出各 CLI 工具的历史对话会话", "Browse and export CLI chat sessions"),
             ),
             Page::Antigravity => {
                 if self.ui.antigravity_tab == crate::pages::AntigravityPageTab::Sessions {

@@ -35,7 +35,7 @@ pub use provider_dialog::{
 };
 pub use runtime::render_runtime_edit_dialog;
 pub use sessions::load_agent_sessions;
-pub(crate) use sessions::{render_virtual_agent_session_card, session_list_viewport};
+pub(crate) use sessions::{render_rename_dialog, render_virtual_agent_session_card, session_list_viewport};
 
 pub fn render_tool_page(
     tool: ToolId,
