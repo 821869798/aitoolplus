@@ -15,12 +15,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "aitoolplus contributors\0"
             VALUE "FileDescription", "AI ToolPlus - AI workbench on GPUI\0"
-            VALUE "FileVersion", "0.1.2.0\0"
+            VALUE "FileVersion", "0.1.3.0\0"
             VALUE "InternalName", "aitoolplus.exe\0"
             VALUE "LegalCopyright", "GPL-3.0-only\0"
             VALUE "OriginalFilename", "aitoolplus.exe\0"
             VALUE "ProductName", "AI ToolPlus\0"
-            VALUE "ProductVersion", "0.1.2.0\0"
+            VALUE "ProductVersion", "0.1.3.0\0"
         END
     END
     BLOCK "VarFileInfo"
