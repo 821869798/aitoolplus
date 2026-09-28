@@ -98,7 +98,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         .border_color(t.card_border)
         .children(app_options.into_iter().map(|(key, icon, zh, en)| {
             let is_sel = current_app == key;
-            let tooltip_text = i.t(zh, en);
+            let tooltip_text = i.raw(zh, en);
             div()
                 .id(gpui::ElementId::Name(format!("usage-app-tab-{}", key).into()))
                 .cursor_pointer()
@@ -148,7 +148,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 .unwrap_or(p.as_str());
             display.to_string().into()
         }
-        None => i.t("全部来源", "All Sources"),
+        None => i.t("usage.all_sources"),
     };
 
     let provider_btn = {
@@ -199,7 +199,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
     // Model Filter Button & Menu
     let current_model_label: gpui::SharedString = match &ws.ui.usage_model_filter {
         Some(m) => m.clone().into(),
-        None => i.t("全部模型", "All Models"),
+        None => i.t("usage.all_models"),
     };
 
     let model_btn = {
@@ -250,10 +250,10 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
     // Refresh frequency quick toggle: 0s (Off) -> 10s -> 30s -> 60s
     let refresh_interval_sec = ws.ui.usage_refresh_interval;
     let refresh_interval_label: gpui::SharedString = match refresh_interval_sec {
-        0 => i.t("自动: 关", "Auto: Off"),
-        10 => i.t("自动: 10s", "Auto: 10s"),
-        30 => i.t("自动: 30s", "Auto: 30s"),
-        60 => i.t("自动: 60s", "Auto: 60s"),
+        0 => i.t("usage.auto_off"),
+        10 => i.t("usage.auto_10s"),
+        30 => i.t("usage.auto_30s"),
+        60 => i.t("usage.auto_60s"),
         other => format!("Auto: {}s", other).into(),
     };
 
@@ -286,9 +286,9 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 _ => 0,
             };
             let msg = if ws.ui.usage_refresh_interval > 0 {
-                format!("{}: {}s", ws.i18n.t("已设置刷新频率", "Refresh interval set to"), ws.ui.usage_refresh_interval)
+                format!("{}: {}s", ws.i18n.t("usage.refresh_interval_set_to"), ws.ui.usage_refresh_interval)
             } else {
-                ws.i18n.t("已关闭自动刷新", "Auto refresh turned off").to_string()
+                ws.i18n.t("usage.auto_refresh_turned_off").to_string()
             };
             ws.ui.toast(msg, false);
             cx.notify();
@@ -397,7 +397,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
     let refresh_btn = button_with_icon_loading_l(
         "usage-refresh-btn",
         crate::icons::REFRESH_SVG,
-        i.t("刷新", "Refresh"),
+        i.t("usage.refresh"),
         ButtonVariant::Secondary,
         ws.ui.usage_refreshing,
         &t,
@@ -413,7 +413,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
     let sync_sessions_btn = button_with_icon_loading_l(
         "usage-header-sync-sessions-btn",
         crate::icons::REFRESH_SVG,
-        i.t("同步会话", "Sync Sessions"),
+        i.t("usage.sync_sessions"),
         ButtonVariant::Secondary,
         is_syncing,
         &t,
@@ -439,7 +439,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         .gap(px(6.0))
         .tooltip(move |_window, cx| {
             cx.new(|_| crate::components::Tooltip::new(
-                i.t("自动扫描本地会话历史 (Claude Code、Codex、Pi 等) 并统计 Token", "Auto-scan local CLI session logs and token usage").to_string()
+                i.t("usage.auto_scan_local_cli").to_string()
             )).into()
         })
         .on_click(cx.listener(|ws, _, _, cx| {
@@ -447,9 +447,9 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             ws.persist_settings();
             let msg = if ws.settings.usage_auto_scan_sessions {
                 ws.trigger_session_sync(cx, true);
-                ws.i18n.t("已开启本地会话历史自动扫描同步", "Auto-scan session history enabled").to_string()
+                ws.i18n.t("usage.auto_scan_session_history_2").to_string()
             } else {
-                ws.i18n.t("已关闭本地会话历史自动扫描同步", "Auto-scan session history disabled").to_string()
+                ws.i18n.t("usage.auto_scan_session_history").to_string()
             };
             ws.ui.toast(msg, false);
             cx.notify();
@@ -463,7 +463,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             div()
                 .text_size(px(12.0))
                 .text_color(if auto_scan_sessions { t.accent } else { t.text_secondary })
-                .child(i.t("自动扫描", "Auto Scan")),
+                .child(i.t("usage.auto_scan")),
         )
         .child(
             div()
@@ -485,7 +485,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             .text_color(if ws.ui.usage_provider_filter.is_none() { t.accent } else { t.text_primary })
             .bg(if ws.ui.usage_provider_filter.is_none() { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
             .hover(|s| s.bg(t.card_hover))
-            .child(i.t("全部来源", "All Sources"))
+            .child(i.t("usage.all_sources"))
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|ws, _, _, cx| {
                 cx.stop_propagation();
                 ws.ui.usage_provider_filter = None;
@@ -575,7 +575,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             .text_color(if ws.ui.usage_model_filter.is_none() { t.accent } else { t.text_primary })
             .bg(if ws.ui.usage_model_filter.is_none() { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
             .hover(|s| s.bg(t.card_hover))
-            .child(i.t("全部模型", "All Models"))
+            .child(i.t("usage.all_models"))
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|ws, _, _, cx| {
                 cx.stop_propagation();
                 ws.ui.usage_model_filter = None;
@@ -670,16 +670,13 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                                 .text_size(px(20.0))
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t("使用统计", "Usage Statistics")),
+                                .child(i.t("usage.usage_statistics")),
                         )
                         .child(
                             div()
                                 .text_size(px(12.5))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "全面对标 CC-Switch：实时统计各 AI 工具的 Token 消耗、缓存命中与调用成本",
-                                    "Complete parity with CC-Switch: real-time analytics of token consumption, cache hits, and costs",
-                                )),
+                                .child(i.t("usage.complete_parity_with_cc")),
                         ),
                 ),
         )
@@ -748,7 +745,7 @@ fn render_usage_hero(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::AnyE
         Some("grok") => ("Grok".into(), crate::icons::GROK_SVG, crate::rgba_const(0xf43f5eff)),
         Some("opencode") => ("OpenCode".into(), crate::icons::OPENCODE_SVG, crate::rgba_const(0xa855f7ff)),
         Some("pi") => ("Pi".into(), crate::icons::PI_SVG, crate::rgba_const(0xec4899ff)),
-        _ => (i.t("全部工具", "All Tools"), crate::icons::ZAP_SVG, t.accent),
+        _ => (i.t("usage.all_tools"), crate::icons::ZAP_SVG, t.accent),
     };
 
     let formatted_real_total = format_tokens_number(sum.real_total_tokens);
@@ -785,7 +782,7 @@ fn render_usage_hero(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::AnyE
                                 .child(app_title),
                         )
                         .child(div().text_color(t.text_muted).child("•"))
-                        .child(div().child(i.t("真实消耗 Tokens", "Real Consumption Tokens"))),
+                        .child(div().child(i.t("usage.real_consumption_tokens"))),
                 )
                 .child(
                     div()
@@ -835,7 +832,7 @@ fn render_usage_hero(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::AnyE
                         .text_size(px(10.5))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_muted)
-                        .child(i.t("总请求数", "TOTAL REQUESTS")),
+                        .child(i.t("usage.total_requests")),
                 )
                 .child(
                     div()
@@ -860,7 +857,7 @@ fn render_usage_hero(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::AnyE
                         .text_size(px(10.5))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_muted)
-                        .child(i.t("预估总成本", "ESTIMATED COST")),
+                        .child(i.t("usage.estimated_cost")),
                 )
                 .child(
                     div()
@@ -899,7 +896,7 @@ fn render_usage_hero(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::AnyE
                             div()
                                 .text_size(px(11.0))
                                 .text_color(t.text_muted)
-                                .child(i.t("缓存命中率", "Cache Hit Rate")),
+                                .child(i.t("usage.cache_hit_rate")),
                         ),
                 )
                 .child(
@@ -932,28 +929,28 @@ fn render_usage_hero(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::AnyE
         .gap(px(10.0))
         .child(render_mini_stat(
             crate::icons::ARROW_DOWN_SVG,
-            i.t("新增输入", "Fresh Input"),
+            i.t("usage.fresh_input"),
             &format_tokens_short(sum.total_input_tokens, is_zh),
             crate::rgba_const(0x3b82f6ff),
             &t,
         ))
         .child(render_mini_stat(
             crate::icons::ARROW_UP_SVG,
-            i.t("输出 Tokens", "Output"),
+            i.t("usage.output_2"),
             &format_tokens_short(sum.total_output_tokens, is_zh),
             crate::rgba_const(0x22c55eff),
             &t,
         ))
         .child(render_mini_stat(
             crate::icons::DATABASE_SVG,
-            i.t("缓存写入", "Cache Write"),
+            i.t("usage.cache_write_2"),
             &format_tokens_short(sum.total_cache_creation_tokens, is_zh),
             crate::rgba_const(0xf97316ff),
             &t,
         ))
         .child(render_mini_stat(
             crate::icons::SPARKLES_SVG,
-            i.t("缓存命中", "Cache Read"),
+            i.t("usage.cache_read"),
             &format_tokens_short(sum.total_cache_read_tokens, is_zh),
             crate::rgba_const(0xa855f7ff),
             &t,
@@ -1274,17 +1271,17 @@ fn render_trend_chart(ws: &Workspace, cx: &mut Context<Workspace>) -> gpui::AnyE
                 div()
                     .text_size(px(13.0))
                     .text_color(t.text_muted)
-                    .child(i.t("所选时间范围内暂无用量趋势数据", "No trend data available for selected range")),
+                    .child(i.t("usage.no_trend_data_available")),
             )
             .into_any_element();
     }
 
     let is_hourly = ws.ui.usage_range == UsageRangePreset::Today;
     let range_label = match ws.ui.usage_range {
-        UsageRangePreset::Today => i.t("当天", "Today"),
-        UsageRangePreset::Days7 => i.t("近 7 天", "7 Days"),
-        UsageRangePreset::Days30 => i.t("近 30 天", "30 Days"),
-        UsageRangePreset::All => i.t("全部", "All Time"),
+        UsageRangePreset::Today => i.t("usage.today"),
+        UsageRangePreset::Days7 => i.t("usage.k_7_days"),
+        UsageRangePreset::Days30 => i.t("usage.k_30_days"),
+        UsageRangePreset::All => i.t("usage.all_time"),
     };
 
     // Card Layout Constants (matches Recharts h-[350px] in CC-Switch)
@@ -1735,11 +1732,11 @@ fn render_trend_chart(ws: &Workspace, cx: &mut Context<Workspace>) -> gpui::AnyE
         .justify_center()
         .gap(px(20.0))
         .pt(px(4.0))
-        .child(render_legend_item(i.t("成本", "Cost"), crate::rgba_const(0xf43f5eff), true))
-        .child(render_legend_item(i.t("缓存创建", "Cache Write"), crate::rgba_const(0xf97316ff), false))
-        .child(render_legend_item(i.t("缓存命中", "Cache Read"), crate::rgba_const(0xa855f7ff), false))
-        .child(render_legend_item(i.t("输入", "Input"), crate::rgba_const(0x3b82f6ff), false))
-        .child(render_legend_item(i.t("输出", "Output"), crate::rgba_const(0x22c55eff), false));
+        .child(render_legend_item(i.t("usage.cost_2"), crate::rgba_const(0xf43f5eff), true))
+        .child(render_legend_item(i.t("usage.cache_write"), crate::rgba_const(0xf97316ff), false))
+        .child(render_legend_item(i.t("usage.cache_read"), crate::rgba_const(0xa855f7ff), false))
+        .child(render_legend_item(i.t("usage.input"), crate::rgba_const(0x3b82f6ff), false))
+        .child(render_legend_item(i.t("usage.output"), crate::rgba_const(0x22c55eff), false));
 
     div()
         .p(px(20.0))
@@ -1767,7 +1764,7 @@ fn render_trend_chart(ws: &Workspace, cx: &mut Context<Workspace>) -> gpui::AnyE
                         .text_size(px(18.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.text_primary)
-                        .child(i.t("使用趋势", "Usage Trends")),
+                        .child(i.t("usage.usage_trends")),
                 )
                 .child(
                     div()
@@ -1854,7 +1851,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
 
     // Status code filter toolbar above logs table
     let status_options = vec![
-        (None, i.t("全部状态", "All Status")),
+        (None, i.t("usage.all_status")),
         (Some(200), "200 OK".into()),
         (Some(400), "400 Bad Request".into()),
         (Some(401), "401 Unauthorized".into()),
@@ -1904,15 +1901,15 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         .text_size(px(11.5))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(t.text_secondary)
-        .child(div().w(px(110.0)).child(i.t("请求时间", "Time")))
-        .child(div().w(px(130.0)).child(i.t("来源 (Provider)", "Provider")))
-        .child(div().flex_1().child(i.t("计费模型", "Model")))
-        .child(div().w(px(85.0)).text_right().child(i.t("输入", "Input")))
-        .child(div().w(px(80.0)).text_right().child(i.t("输出", "Output")))
-        .child(div().w(px(85.0)).text_right().child(i.t("费用 (USD)", "Cost")))
-        .child(div().w(px(85.0)).text_right().child(i.t("耗时", "Latency")))
-        .child(div().w(px(65.0)).text_center().child(i.t("状态", "Status")))
-        .child(div().w(px(60.0)).text_center().child(i.t("渠道", "Source")));
+        .child(div().w(px(110.0)).child(i.t("usage.time")))
+        .child(div().w(px(130.0)).child(i.t("usage.provider")))
+        .child(div().flex_1().child(i.t("usage.model")))
+        .child(div().w(px(85.0)).text_right().child(i.t("usage.input")))
+        .child(div().w(px(80.0)).text_right().child(i.t("usage.output")))
+        .child(div().w(px(85.0)).text_right().child(i.t("usage.cost")))
+        .child(div().w(px(85.0)).text_right().child(i.t("usage.latency")))
+        .child(div().w(px(65.0)).text_center().child(i.t("usage.status")))
+        .child(div().w(px(60.0)).text_center().child(i.t("usage.source")));
 
     let tbody = if logs.is_empty() {
         div()
@@ -1922,7 +1919,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
             .justify_center()
             .text_size(px(12.5))
             .text_color(t.text_muted)
-            .child(i.t("暂无请求日志记录", "No request logs found"))
+            .child(i.t("usage.no_request_logs_found"))
             .into_any_element()
     } else {
         div()
@@ -2036,7 +2033,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         .child(
             div().child(format!(
                 "{}: {} ({} / {})",
-                i.t("总记录数", "Total records"),
+                i.t("usage.total_records"),
                 total,
                 if total == 0 { 0 } else { page + 1 },
                 total_pages.max(1)
@@ -2050,7 +2047,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 .child(
                     button_l(
                         "logs-prev-page",
-                        i.t("上一页", "Previous"),
+                        i.t("usage.previous"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -2066,7 +2063,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 .child(
                     button_l(
                         "logs-next-page",
-                        i.t("下一页", "Next"),
+                        i.t("usage.next"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -2100,7 +2097,7 @@ fn render_logs_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                     div()
                         .text_size(px(11.5))
                         .text_color(t.text_muted)
-                        .child(format!("{}: {} 条", i.t("当前页展示", "Showing"), logs.len())),
+                        .child(format!("{}: {} 条", i.t("usage.showing"), logs.len())),
                 ),
         )
         .child(thead)
@@ -2125,12 +2122,12 @@ fn render_providers_table(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui:
         .text_size(px(11.5))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(t.text_secondary)
-        .child(div().flex_1().child(i.t("Provider 来源", "Provider Name")))
-        .child(div().w(px(100.0)).text_right().child(i.t("请求次数", "Requests")))
-        .child(div().w(px(120.0)).text_right().child(i.t("消耗 Tokens", "Tokens")))
-        .child(div().w(px(110.0)).text_right().child(i.t("成本 (USD)", "Total Cost")))
-        .child(div().w(px(100.0)).text_right().child(i.t("成功率", "Success Rate")))
-        .child(div().w(px(90.0)).text_right().child(i.t("平均延迟", "Avg Latency")));
+        .child(div().flex_1().child(i.t("usage.provider_name")))
+        .child(div().w(px(100.0)).text_right().child(i.t("usage.requests")))
+        .child(div().w(px(120.0)).text_right().child(i.t("usage.tokens")))
+        .child(div().w(px(110.0)).text_right().child(i.t("usage.total_cost_2")))
+        .child(div().w(px(100.0)).text_right().child(i.t("usage.success_rate")))
+        .child(div().w(px(90.0)).text_right().child(i.t("usage.avg_latency")));
 
     let tbody = if stats.is_empty() {
         div()
@@ -2140,7 +2137,7 @@ fn render_providers_table(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui:
             .justify_center()
             .text_size(px(12.5))
             .text_color(t.text_muted)
-            .child(i.t("暂无 Provider 统计数据", "No provider statistics available"))
+            .child(i.t("usage.no_provider_statistics_availab"))
             .into_any_element()
     } else {
         div()
@@ -2204,11 +2201,11 @@ fn render_models_table(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::An
         .text_size(px(11.5))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(t.text_secondary)
-        .child(div().flex_1().child(i.t("模型名称", "Model Name")))
-        .child(div().w(px(100.0)).text_right().child(i.t("请求次数", "Requests")))
-        .child(div().w(px(130.0)).text_right().child(i.t("消耗 Tokens", "Tokens")))
-        .child(div().w(px(120.0)).text_right().child(i.t("总成本 (USD)", "Total Cost")))
-        .child(div().w(px(120.0)).text_right().child(i.t("每次请求均价", "Avg Cost / Req")));
+        .child(div().flex_1().child(i.t("usage.model_name")))
+        .child(div().w(px(100.0)).text_right().child(i.t("usage.requests")))
+        .child(div().w(px(130.0)).text_right().child(i.t("usage.tokens")))
+        .child(div().w(px(120.0)).text_right().child(i.t("usage.total_cost")))
+        .child(div().w(px(120.0)).text_right().child(i.t("usage.avg_cost_req")));
 
     let tbody = if stats.is_empty() {
         div()
@@ -2218,7 +2215,7 @@ fn render_models_table(ws: &Workspace, _cx: &mut Context<Workspace>) -> gpui::An
             .justify_center()
             .text_size(px(12.5))
             .text_color(t.text_muted)
-            .child(i.t("暂无模型统计数据", "No model statistics available"))
+            .child(i.t("usage.no_model_statistics_available"))
             .into_any_element()
     } else {
         div()
@@ -2306,7 +2303,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
     let save_btn = button_with_icon_l(
         "save-app-pricing-btn",
         crate::icons::CHECK_SVG,
-        i.t("保存全局配置", "Save Configuration"),
+        i.t("usage.save_configuration"),
         ButtonVariant::Primary,
         &t,
         cx,
@@ -2322,7 +2319,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     .map(|ti| ti.read(cx).text().trim().to_string())
                     .unwrap_or_else(|| "1.0".to_string());
                 if mult_str.is_empty() || mult_str.parse::<f64>().is_err() || mult_str.parse::<f64>().unwrap() < 0.0 {
-                    ws.ui.toast(format!("{}: {}", app, ws.i18n.t("倍率必须是非负有效数字", "Multiplier must be a valid non-negative number")), true);
+                    ws.ui.toast(format!("{}: {}", app, ws.i18n.t("usage.multiplier_must_be_a")), true);
                     valid = false;
                     break;
                 }
@@ -2338,7 +2335,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     let _ = db.set_app_pricing_config(app, &mult_str, &src);
                 }
                 ws.refresh_usage_data(cx);
-                ws.ui.toast(ws.i18n.t("全局计费默认配置已保存", "Global pricing configuration saved").to_string(), false);
+                ws.ui.toast(ws.i18n.t("usage.global_pricing_configuration_s").to_string(), false);
                 cx.notify();
             }
         },
@@ -2354,10 +2351,10 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         .text_size(px(11.5))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(t.text_secondary)
-        .child(div().w(px(160.0)).child(i.t("应用名称", "Application")))
-        .child(div().w(px(140.0)).child(i.t("成本倍率", "Cost Multiplier")))
-        .child(div().w(px(220.0)).child(i.t("定价模型来源", "Pricing Model Source")))
-        .child(div().flex_1().child(i.t("计费解析说明", "Billing Behavior")));
+        .child(div().w(px(160.0)).child(i.t("usage.application")))
+        .child(div().w(px(140.0)).child(i.t("usage.cost_multiplier")))
+        .child(div().w(px(220.0)).child(i.t("usage.pricing_model_source")))
+        .child(div().flex_1().child(i.t("usage.billing_behavior")));
 
     let mut global_rows = Vec::new();
     for (app_id, app_name, icon, brand_color) in &apps {
@@ -2389,7 +2386,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         .text_color(if is_resp { t.accent } else { t.text_muted })
                         .bg(if is_resp { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
                         .hover(|s| s.bg(t.card_hover))
-                        .child(i.t("响应模型 (优先)", "Response (Priority)"))
+                        .child(i.t("usage.response_priority"))
                         .on_click(cx.listener(move |ws, _, _, cx| {
                             ws.ui.usage_app_pricing_sources.insert(key1.clone(), "response".to_string());
                             cx.notify();
@@ -2407,7 +2404,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         .text_color(if !is_resp { t.accent } else { t.text_muted })
                         .bg(if !is_resp { t.tab_active_bg } else { crate::rgba_const(0x00000000) })
                         .hover(|s| s.bg(t.card_hover))
-                        .child(i.t("请求模型", "Request Model"))
+                        .child(i.t("usage.request_model"))
                         .on_click(cx.listener(move |ws, _, _, cx| {
                             ws.ui.usage_app_pricing_sources.insert(key2.clone(), "request".to_string());
                             cx.notify();
@@ -2416,9 +2413,9 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         };
 
         let behavior_desc = if is_resp {
-            i.t("优先按服务端响应中实际调用的模型单价 × 倍率计费", "Uses upstream response model price × multiplier")
+            i.t("usage.uses_upstream_response_model")
         } else {
-            i.t("强制按客户端发起请求时填写的模型单价 × 倍率计费", "Uses client request model price × multiplier")
+            i.t("usage.uses_client_request_model")
         };
 
         global_rows.push(
@@ -2518,16 +2515,13 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 .text_size(px(14.0))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t("全局计费默认配置", "Global Pricing Defaults")),
+                                .child(i.t("usage.global_pricing_defaults")),
                         )
                         .child(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "设置各应用的基础计费倍率与模型解析来源 (对标 CC-Switch pricing config)",
-                                    "Configure default cost multipliers and pricing model sources per application (CC-Switch parity)",
-                                )),
+                                .child(i.t("usage.configure_default_cost_multipl")),
                         ),
                 )
                 .child(save_btn),
@@ -2557,11 +2551,11 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         .text_size(px(11.5))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(t.text_secondary)
-        .child(div().flex_1().child(i.t("模型名称", "Model Name")))
-        .child(div().w(px(120.0)).text_right().child(i.t("输入 $/1M", "Input $/1M")))
-        .child(div().w(px(120.0)).text_right().child(i.t("输出 $/1M", "Output $/1M")))
-        .child(div().w(px(120.0)).text_right().child(i.t("缓存读 $/1M", "Cache Read $/1M")))
-        .child(div().w(px(120.0)).text_right().child(i.t("缓存写 $/1M", "Cache Write $/1M")));
+        .child(div().flex_1().child(i.t("usage.model_name")))
+        .child(div().w(px(120.0)).text_right().child(i.t("usage.input_1m")))
+        .child(div().w(px(120.0)).text_right().child(i.t("usage.output_1m")))
+        .child(div().w(px(120.0)).text_right().child(i.t("usage.cache_read_1m")))
+        .child(div().w(px(120.0)).text_right().child(i.t("usage.cache_write_1m")));
 
     let tbody = if pricing.is_empty() {
         div()
@@ -2571,7 +2565,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
             .justify_center()
             .text_size(px(12.5))
             .text_color(t.text_muted)
-            .child(i.t("定价库为空", "No pricing models registered"))
+            .child(i.t("usage.no_pricing_models_registered"))
             .into_any_element()
     } else {
         div()
@@ -2626,7 +2620,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         .text_size(px(13.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.text_primary)
-                        .child(format!("{}: {} 个已配置", i.t("模型定价规则库", "Model Pricing Rules"), pricing.len())),
+                        .child(format!("{}: {} 个已配置", i.t("usage.model_pricing_rules"), pricing.len())),
                 ),
         )
         .child(thead)
@@ -2655,7 +2649,7 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     let sync_btn = button_with_icon_loading_l(
         "manual-session-sync-btn",
         crate::icons::REFRESH_SVG,
-        i.t("立即同步", "Sync Now"),
+        i.t("usage.sync_now"),
         ButtonVariant::Primary,
         is_syncing,
         &t,
@@ -2675,9 +2669,9 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
             ws.persist_settings();
             let msg = if ws.settings.usage_auto_scan_sessions {
                 ws.trigger_session_sync(cx, true);
-                ws.i18n.t("已开启本地会话历史自动扫描同步", "Auto-scan session history enabled").to_string()
+                ws.i18n.t("usage.auto_scan_session_history_2").to_string()
             } else {
-                ws.i18n.t("已关闭本地会话历史自动扫描同步", "Auto-scan session history disabled").to_string()
+                ws.i18n.t("usage.auto_scan_session_history").to_string()
             };
             ws.ui.toast(msg, false);
             cx.notify();
@@ -2716,16 +2710,13 @@ fn render_session_sync_card(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                                 .text_size(px(13.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t("自动扫描会话记录", "Auto-Scan Session Records")),
+                                .child(i.t("usage.auto_scan_session_records")),
                         )
                         .child(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "定期扫描各客户端的本地会话记录以统计用量；关闭后仅在手动同步时扫描",
-                                    "Periodically scan local session logs from CLI clients to aggregate usage; when disabled, scan only on manual sync",
-                                )),
+                                .child(i.t("usage.periodically_scan_local_sessio")),
                         ),
                 ),
         )

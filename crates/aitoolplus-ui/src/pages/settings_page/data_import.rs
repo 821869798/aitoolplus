@@ -54,9 +54,9 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(crate::rgba_const(0x22c55eff))
                     .child(if custom_path.is_some() {
-                        i.t("已指定 CC-Switch 数据库文件", "CC-Switch database file selected")
+                        i.t("settings_import.cc_switch_database_file")
                     } else {
-                        i.t("已检测到 CC-Switch 数据库", "CC-Switch database detected")
+                        i.t("settings_import.cc_switch_database_detected")
                     }),
             )
     } else {
@@ -76,7 +76,7 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
                     .text_size(px(12.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(crate::rgba_const(0xef4444ff))
-                    .child(i.t("未检测到 CC-Switch 数据库", "CC-Switch database not detected")),
+                    .child(i.t("settings_import.cc_switch_database_not")),
             )
     };
 
@@ -97,7 +97,7 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
                     button_with_icon_l(
                         "select-cc-switch-db",
                         crate::icons::FOLDER_SVG,
-                        i.t("选择数据库文件", "Select Database File"),
+                        i.t("settings_import.select_database_file"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -123,7 +123,7 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
                     button_with_icon_loading_l(
                         "import-cc-switch-action",
                         crate::icons::DOWNLOAD_SVG,
-                        i.t("导入供应商配置", "Import Providers"),
+                        i.t("settings_import.import_providers"),
                         ButtonVariant::Primary,
                         ws.ui.cc_switch_busy,
                         &t,
@@ -164,7 +164,7 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
                                             ws.persist_store();
                                             let msg = ws
                                                 .i18n
-                                                .t(
+                                                .raw(
                                                     &format!(
                                                         "CC-Switch 供应商导入完成：发现 {} 个，新增 {} 个，更新 {} 个供应商",
                                                         report.total_found, report.imported_count, report.updated_count
@@ -189,7 +189,7 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
                     button_with_icon_loading_l(
                         "import-cc-switch-usage-action",
                         crate::icons::DATABASE_SVG,
-                        i.t("导入使用统计与定价", "Import Usage & Pricing"),
+                        i.t("settings_import.import_usage_pricing"),
                         ButtonVariant::Secondary,
                         ws.ui.cc_switch_busy,
                         &t,
@@ -251,7 +251,7 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
             div()
                 .text_size(px(12.0))
                 .text_color(t.text_secondary)
-                .child(i.t("数据库文件：", "Database file: ")),
+                .child(i.t("settings_import.database_file")),
         )
         .child(
             div()
@@ -267,26 +267,14 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
         .gap(px(4.0))
         .text_size(px(11.5))
         .text_color(t.text_muted)
-        .child(i.t(
-            "• 支持一键导入 Claude Code、Codex、Pi、OpenCode、Gemini CLI 等所有工具的供应商配置",
-            "• Supports importing provider configurations for Claude Code, Codex, Pi, OpenCode, Gemini CLI, etc.",
-        ))
-        .child(i.t(
-            "• 支持将 CC-Switch 历史请求日志（3万+条）、详细 Token 消耗及模型计费定价完整迁移至 AI ToolPlus",
-            "• Seamlessly migrates CC-Switch historical request logs, token analytics, and model pricing",
-        ))
-        .child(i.t(
-            "• 安全增量合并机制，不会覆盖或删除您在 AI ToolPlus 中现有的自定义改动",
-            "• Safe incremental merge: will not overwrite or delete your existing custom modifications in AI ToolPlus",
-        ));
+        .child(i.t("settings_import.supports_importing_provider_co"))
+        .child(i.t("settings_import.seamlessly_migrates_cc_switch"))
+        .child(i.t("settings_import.safe_incremental_merge_will"));
 
     settings_card(
         &t,
-        i.t("CC-Switch 数据迁移与导入", "CC-Switch Data Migration & Import"),
-        Some(i.t(
-            "从本地 CC-Switch (cc-switch.db) 自动同步迁移模型供应商、使用统计与模型定价配置",
-            "Migrate model providers, usage analytics, and pricing from local CC-Switch (cc-switch.db)",
-        )),
+        i.t("settings_import.cc_switch_data_migration"),
+        Some(i.t("settings_import.migrate_model_providers_usage")),
         vec![
             div()
                 .flex()
@@ -308,26 +296,23 @@ pub(super) fn antigravity_manager_import_card(ws: &mut Workspace, cx: &mut Conte
     let found = manager_dir.is_dir();
     settings_card(
         &t,
-        i.t("Antigravity Manager 迁移", "Antigravity Manager Import"),
-        Some(i.t(
-            "从本机 ~/.antigravity_tools 读取账号，按邮箱合并进 Antigravity 账号列表",
-            "Read accounts from ~/.antigravity_tools and merge them into the Antigravity account list by email",
-        )),
+        i.t("settings_import.antigravity_manager_import"),
+        Some(i.t("settings_import.read_accounts_from_antigravity")),
         vec![settings_row(
             &t,
             if found {
-                i.t("数据目录", "Data folder")
+                i.t("settings_import.data_folder")
             } else {
-                i.t("未找到数据目录", "Data folder not found")
+                i.t("settings_import.data_folder_not_found")
             },
-            Some(i.t(
+            Some(i.raw(
                 &manager_dir.display().to_string(),
                 &manager_dir.display().to_string(),
             )),
             button_with_icon_loading_l(
                 "settings-ag-import-manager",
                 crate::icons::DOWNLOAD_SVG,
-                i.t("从 Manager 迁移", "Import from Manager"),
+                i.t("settings_import.import_from_manager"),
                 ButtonVariant::Secondary,
                 ws.ui.antigravity_manager_importing,
                 &t,
@@ -345,7 +330,7 @@ pub(super) fn json_config_transfer_card(ws: &mut Workspace, cx: &mut Context<Wor
     let export_btn = button_with_icon_l(
         "export-json-config-btn",
         crate::icons::UPLOAD_SVG,
-        i.t("导出配置 (JSON)", "Export Config (JSON)"),
+        i.t("settings_import.export_config_json"),
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -380,7 +365,7 @@ pub(super) fn json_config_transfer_card(ws: &mut Workspace, cx: &mut Context<Wor
     let import_btn = button_with_icon_l(
         "import-json-config-btn",
         crate::icons::DOWNLOAD_SVG,
-        i.t("导入配置 (JSON)", "Import Config (JSON)"),
+        i.t("settings_import.import_config_json"),
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -420,11 +405,8 @@ pub(super) fn json_config_transfer_card(ws: &mut Workspace, cx: &mut Context<Wor
 
     settings_card(
         &t,
-        i.t("配置文件导入与导出", "Config Import & Export"),
-        Some(i.t(
-            "将 AI ToolPlus 的全量供应商配置、模型设置与环境参数导出为 JSON，或从现有 JSON 恢复",
-            "Export all AI ToolPlus providers and settings to JSON, or restore from a JSON file",
-        )),
+        i.t("settings_import.config_import_export"),
+        Some(i.t("settings_import.export_all_ai_toolplus")),
         vec![
             div()
                 .flex()
@@ -441,13 +423,13 @@ pub(super) fn json_config_transfer_card(ws: &mut Workspace, cx: &mut Context<Wor
                                 .text_size(px(13.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
-                                .child(i.t("单文件配置迁移", "Single File Config Transfer")),
+                                .child(i.t("settings_import.single_file_config_transfer")),
                         )
                         .child(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_muted)
-                                .child(i.t("适用于跨机器快速同步或备份配置", "Ideal for quick backup or migrating settings between devices")),
+                                .child(i.t("settings_import.ideal_for_quick_backup")),
                         ),
                 )
                 .child(
@@ -471,19 +453,13 @@ pub(super) fn cli_policies_card(
 ) -> gpui::AnyElement {
     settings_card(
         t,
-        i.t("CLI 运行与认证策略", "CLI Launch & Auth Policies"),
-        Some(i.t(
-            "针对各命令行工具的环境变量与运行时配置写入安全策略",
-            "Security, auth preservation, and runtime policies for CLI tools",
-        )),
+        i.t("settings_import.cli_launch_auth_policies"),
+        Some(i.t("settings_import.security_auth_preservation_and")),
         vec![
             settings_row(
                 t,
-                i.t("Claude 全权限启动 (--dangerously-skip-permissions)", "Claude Full-Access Launch"),
-                Some(i.t(
-                    "启动 Claude Code 时自动附加全权限参数，跳过频繁的危险确认提示",
-                    "Pass --dangerously-skip-permissions on Claude Code startup",
-                )),
+                i.t("settings_import.claude_full_access_launch"),
+                Some(i.t("settings_import.pass_dangerously_skip_permissi")),
                 toggle(
                     "claude-full-access",
                     ws.settings.claude_cli_launch_full_access,
@@ -499,11 +475,8 @@ pub(super) fn cli_policies_card(
             ),
             settings_row(
                 t,
-                i.t("Codex 保留官方登录态", "Preserve Codex Official Auth"),
-                Some(i.t(
-                    "切换第三方供应商时保留 ~/.codex 的官方登录凭据与会话",
-                    "Keep official login session in ~/.codex on provider switch",
-                )),
+                i.t("settings_import.preserve_codex_official_auth"),
+                Some(i.t("settings_import.keep_official_login_session")),
                 toggle(
                     "codex-preserve-auth",
                     ws.settings.codex_preserve_official_auth_on_switch,
@@ -519,11 +492,8 @@ pub(super) fn cli_policies_card(
             ),
             settings_row(
                 t,
-                i.t("OpenAgent 统一 ~/.omo 配置", "OpenAgent Unified ~/.omo Config"),
-                Some(i.t(
-                    "使用现代统一的 ~/.omo 目录而非旧版分散配置文件",
-                    "Write unified config to ~/.omo instead of legacy files",
-                )),
+                i.t("settings_import.openagent_unified_omo_config"),
+                Some(i.t("settings_import.write_unified_config_to")),
                 toggle(
                     "omo-legacy-config",
                     ws.settings.opencode_use_legacy_oh_my_config,
@@ -539,11 +509,8 @@ pub(super) fn cli_policies_card(
             ),
             settings_row(
                 t,
-                i.t("允许清除 OMO/OMOS 运行配置", "Allow Clearing OMO/OMOS Config"),
-                Some(i.t(
-                    "在重置或切换供应商时允许清空已应用的运行时配置",
-                    "Allow wiping runtime config when resetting or switching",
-                )),
+                i.t("settings_import.allow_clearing_omo_omos"),
+                Some(i.t("settings_import.allow_wiping_runtime_config")),
                 toggle(
                     "omo-clear-policy",
                     ws.settings.opencode_allow_clear_applied_oh_my_config,
@@ -559,11 +526,8 @@ pub(super) fn cli_policies_card(
             ),
             settings_row(
                 t,
-                i.t("双写 reasoning/variant 兼容模式", "Dual Reasoning/Variant Write"),
-                Some(i.t(
-                    "同时写入推理模型参数以兼容旧版 OpenCode 插件",
-                    "Write dual parameters for compatibility with older OpenCode",
-                )),
+                i.t("settings_import.dual_reasoning_variant_write"),
+                Some(i.t("settings_import.write_dual_parameters_for")),
                 toggle(
                     "omo-dual-reasoning",
                     ws.settings.opencode_dual_write_reasoning_variant,
@@ -590,12 +554,12 @@ pub(super) fn storage_card(
     let data_dir = ws.paths.app_data.display().to_string();
     let storage_row = settings_row(
         t,
-        i.t("应用数据存储目录", "Application Data Directory"),
+        i.t("settings_import.application_data_directory"),
         Some(gpui::SharedString::from(data_dir)),
         button_with_icon_l(
             "open-data-dir",
             crate::icons::FOLDER_SVG,
-            i.t("打开数据目录", "Open Folder"),
+            i.t("settings_import.open_folder"),
             ButtonVariant::Secondary,
             t,
             cx,
@@ -656,7 +620,7 @@ pub(super) fn storage_card(
                 .child(input)
                 .child(button_l(
                     gpui::SharedString::from(format!("save-root-{}", tool.key())),
-                    i.t("保存根目录覆盖", "Save Root Override"),
+                    i.t("settings_import.save_root_override"),
                     ButtonVariant::Secondary,
                     t,
                     cx,
@@ -673,7 +637,7 @@ pub(super) fn storage_card(
                         (ws.callbacks.save_settings)(&ws.settings);
                         ws.ui.toast(
                             ws.i18n
-                                .t("已保存；重启后生效", "saved; applies after restart")
+                                .t("settings_import.saved_applies_after_restart")
                                 .to_string(),
                             false,
                         );
@@ -689,7 +653,7 @@ pub(super) fn storage_card(
                 .child(cli_input)
                 .child(button_l(
                     gpui::SharedString::from(format!("save-cli-{command}")),
-                    i.t("保存 CLI 执行路径", "Save CLI Path"),
+                    i.t("settings_import.save_cli_path"),
                     ButtonVariant::Secondary,
                     t,
                     cx,
@@ -704,7 +668,7 @@ pub(super) fn storage_card(
                         (ws.callbacks.save_settings)(&ws.settings);
                         ws.ui.toast(
                             ws.i18n
-                                .t("已保存；重启后生效", "saved; applies after restart")
+                                .t("settings_import.saved_applies_after_restart")
                                 .to_string(),
                             false,
                         );
@@ -716,11 +680,8 @@ pub(super) fn storage_card(
 
     settings_card(
         t,
-        i.t("数据存储与 CLI 路径覆盖", "Storage & CLI Paths"),
-        Some(i.t(
-            "查看核心配置存储路径，或自定义特定工具的配置文件与命令行程序位置",
-            "Inspect data directory or override config roots and CLI binary paths",
-        )),
+        i.t("settings_import.storage_cli_paths"),
+        Some(i.t("settings_import.inspect_data_directory_or")),
         vec![
             storage_row,
             roots_rows.into_any_element(),

@@ -79,7 +79,7 @@ pub fn render_session_detail(
     left_info = left_info.child(button_with_icon_l(
         "session-detail-back-btn",
         crate::icons::ARROW_LEFT_SVG,
-        i.t("返回", "Back"),
+        i.t("session_detail.back"),
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -101,7 +101,7 @@ pub fn render_session_detail(
             .child(display_title),
     );
 
-    left_info = left_info.child(badge(&t, i.t(tool.name_zh(), tool.name_en()), BadgeKind::Accent));
+    left_info = left_info.child(badge(&t, i.raw(tool.name_zh(), tool.name_en()), BadgeKind::Accent));
     left_info = left_info.child(badge(&t, fmt_time(meta.last_active_at), BadgeKind::Neutral));
     if let Some(ref dir) = meta.project_dir {
         left_info = left_info.child(badge(&t, dir.clone(), BadgeKind::Neutral));
@@ -115,13 +115,13 @@ pub fn render_session_detail(
         right_actions = right_actions.child(button_with_icon_l(
             "sess-copy-resume-btn",
             crate::icons::TERMINAL_SVG,
-            i.t("恢复命令", "Resume"),
+            i.t("session_detail.resume"),
             ButtonVariant::Secondary,
             &t,
             cx,
             move |ws, _, _, cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(cmd_clone.clone()));
-                ws.ui.toast(ws.i18n.t("已复制恢复命令", "Copied resume command").to_string(), false);
+                ws.ui.toast(ws.i18n.t("session_detail.copied_resume_command").to_string(), false);
                 cx.notify();
             },
         ));
@@ -158,7 +158,7 @@ pub fn render_session_detail(
                 }
                 cx.notify();
             }))
-            .child(i.t("操作", "Actions"))
+            .child(i.t("session_detail.actions"))
             .child(crate::icons::svg_icon(
                 if is_actions_menu_open {
                     crate::icons::CHEVRON_UP_SVG
@@ -220,9 +220,9 @@ pub fn render_session_detail(
     let stats_label = format!(
         "{} {} ({} {})",
         visible_count,
-        i.t("条消息", "msgs"),
+        i.t("session_detail.msgs"),
         total_count,
-        i.t("总计", "total")
+        i.t("session_detail.total")
     );
     filter_row = filter_row.child(
         div()
@@ -233,12 +233,12 @@ pub fn render_session_detail(
     );
 
     let filter_keys = [
-        ("user", i.t("用户", "User"), filters.user, crate::icons::USER_SVG),
-        ("assistant", i.t("助手", "Assistant"), filters.assistant, crate::icons::BOT_SVG),
-        ("text", i.t("对话", "Text"), filters.text, crate::icons::FILE_TEXT_SVG),
-        ("thinking", i.t("思考", "Thinking"), filters.thinking, crate::icons::SPARKLES_SVG),
-        ("tool_call", i.t("工具", "Tool"), filters.tool_call, crate::icons::WAND_SVG),
-        ("command", i.t("命令", "Bash"), filters.command, crate::icons::TERMINAL_SVG),
+        ("user", i.t("session_detail.user"), filters.user, crate::icons::USER_SVG),
+        ("assistant", i.t("session_detail.assistant"), filters.assistant, crate::icons::BOT_SVG),
+        ("text", i.t("session_detail.text"), filters.text, crate::icons::FILE_TEXT_SVG),
+        ("thinking", i.t("session_detail.thinking"), filters.thinking, crate::icons::SPARKLES_SVG),
+        ("tool_call", i.t("session_detail.tool_2"), filters.tool_call, crate::icons::WAND_SVG),
+        ("command", i.t("session_detail.bash"), filters.command, crate::icons::TERMINAL_SVG),
     ];
 
     let mut filter_chips = div().flex().items_center().gap(px(4.0)).flex_wrap();
@@ -343,8 +343,8 @@ pub fn render_session_detail(
                     crate::components::empty_state_svg(
                         &t,
                         crate::icons::FILE_TEXT_SVG,
-                        i.t("暂无匹配消息", "No matching messages"),
-                        i.t("可尝试调整上方的角色或内容筛选条件", "Try adjusting the filter chips above"),
+                        i.t("session_detail.no_matching_messages"),
+                        i.t("session_detail.try_adjusting_the_filter"),
                     ),
                 ),
         );
@@ -461,7 +461,7 @@ pub fn render_session_detail(
                     cx.notify();
                 }))
                 .child(crate::icons::svg_icon(crate::icons::PENCIL_SVG, px(12.0), t.text_secondary))
-                .child(i.t("重命名会话", "Rename Session")),
+                .child(i.t("session_detail.rename_session")),
         );
 
         // 2. Export JSON
@@ -486,7 +486,7 @@ pub fn render_session_detail(
                             let out = ws.paths.app_data.join(format!("session-{}.json", meta_for_json.session_id));
                             match std::fs::write(&out, json) {
                                 Ok(()) => {
-                                    let msg = ws.i18n.t(
+                                    let msg = ws.i18n.raw(
                                         &format!("已导出 JSON 到 {}", out.display()),
                                         &format!("exported JSON to {}", out.display()),
                                     ).to_string();
@@ -500,7 +500,7 @@ pub fn render_session_detail(
                     cx.notify();
                 }))
                 .child(crate::icons::svg_icon(crate::icons::DOWNLOAD_SVG, px(12.0), t.text_secondary))
-                .child(i.t("导出 JSON", "Export JSON")),
+                .child(i.t("session_detail.export_json")),
         );
 
         // 3. Export Markdown
@@ -525,7 +525,7 @@ pub fn render_session_detail(
                             let out = ws.paths.app_data.join(format!("session-{}.md", meta_for_md.session_id));
                             match std::fs::write(&out, md) {
                                 Ok(()) => {
-                                    let msg = ws.i18n.t(
+                                    let msg = ws.i18n.raw(
                                         &format!("已导出 Markdown 到 {}", out.display()),
                                         &format!("exported Markdown to {}", out.display()),
                                     ).to_string();
@@ -539,7 +539,7 @@ pub fn render_session_detail(
                     cx.notify();
                 }))
                 .child(crate::icons::svg_icon(crate::icons::FILE_TEXT_SVG, px(12.0), t.text_secondary))
-                .child(i.t("导出 Markdown", "Export Markdown")),
+                .child(i.t("session_detail.export_markdown")),
         );
 
         // 4. Reveal in explorer
@@ -563,12 +563,12 @@ pub fn render_session_detail(
                     if path.exists() {
                         reveal_in_explorer(&path);
                     } else {
-                        ws.ui.toast(ws.i18n.t("源文件路径不存在", "source file not found").to_string(), true);
+                        ws.ui.toast(ws.i18n.t("session_detail.source_file_not_found").to_string(), true);
                     }
                     cx.notify();
                 }))
                 .child(crate::icons::svg_icon(crate::icons::FOLDER_SVG, px(12.0), t.text_secondary))
-                .child(i.t("定位文件", "Reveal in Explorer")),
+                .child(i.t("session_detail.reveal_in_explorer")),
         );
 
         // Separator
@@ -594,14 +594,14 @@ pub fn render_session_detail(
                 .on_click(cx.listener(move |ws, _, _, cx| {
                     ws.ui.session_actions_menu_open = false;
                     ws.ui.confirm = Some(super::ConfirmState {
-                        title: ws.i18n.t("删除会话", "Delete Session").to_string(),
-                        message: ws.i18n.t("确定要删除这条会话记录吗？此操作无法恢复。", "Delete this session? This action cannot be undone.").to_string(),
+                        title: ws.i18n.t("session_detail.delete_session").to_string(),
+                        message: ws.i18n.t("session_detail.delete_this_session_this").to_string(),
                         action: super::ConfirmAction::DeleteSession { tool, id: sid_del.clone() },
                     });
                     cx.notify();
                 }))
                 .child(crate::icons::svg_icon(crate::icons::TRASH_SVG, px(12.0), t.danger))
-                .child(i.t("删除会话", "Delete Session")),
+                .child(i.t("session_detail.delete_session")),
         );
 
         section = section.child(menu);
@@ -651,9 +651,9 @@ fn render_session_message_card(
 ) -> gpui::AnyElement {
     let is_user = m.role == "user";
     let role_display = if is_user {
-        i.t("用户", "User")
+        i.t("session_detail.user")
     } else {
-        i.t(tool.name_zh(), tool.name_en())
+        i.raw(tool.name_zh(), tool.name_en())
     };
 
     let mut msg_card = div()
@@ -702,7 +702,7 @@ fn render_session_message_card(
                         let _ = ws_entity_c.update(cx, |ws, cx| {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                             ws.ui.toast(
-                                ws.i18n.t("已复制消息内容", "Copied message content").to_string(),
+                                ws.i18n.t("session_detail.copied_message_content").to_string(),
                                 false,
                             );
                             cx.notify();
@@ -764,7 +764,7 @@ fn render_session_message_card(
                         let _ = ws_entity_c.update(cx, |ws, cx| {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                             ws.ui.toast(
-                                ws.i18n.t("已复制消息内容", "Copied message content").to_string(),
+                                ws.i18n.t("session_detail.copied_message_content").to_string(),
                                 false,
                             );
                             cx.notify();
@@ -892,18 +892,18 @@ fn render_message_block(
                                 .text_size(px(12.0))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(crate::rgba_const(0xa855f7ff))
-                                .child(i.t("🧠 思考过程 (Thinking)", "🧠 Thinking Process")),
+                                .child(i.t("session_detail.thinking_process")),
                         )
-                        .child(badge(t, format!("{char_count} {}", i.t("字", "chars")), BadgeKind::Neutral)),
+                        .child(badge(t, format!("{char_count} {}", i.t("session_detail.chars")), BadgeKind::Neutral)),
                 )
                 .child(
                     div()
                         .text_size(px(11.5))
                         .text_color(t.text_muted)
                         .child(if is_expanded {
-                            i.t("收起 ▲", "Collapse ▲")
+                            i.t("session_detail.collapse")
                         } else {
-                            i.t("展开 ▼", "Expand ▼")
+                            i.t("session_detail.expand")
                         }),
                 );
 
@@ -1001,9 +1001,9 @@ fn render_message_block(
                                     .child("Bash"),
                             )
                             .child(if is_error {
-                                badge(t, i.t("失败", "Failed"), BadgeKind::Danger)
+                                badge(t, i.t("session_detail.failed_2"), BadgeKind::Danger)
                             } else {
-                                badge(t, i.t("已执行", "Done"), BadgeKind::Success)
+                                badge(t, i.t("session_detail.done"), BadgeKind::Success)
                             })
                             .child(
                                 div()
@@ -1024,12 +1024,12 @@ fn render_message_block(
                             .child(inline_action_btn(
                                 gpui::SharedString::from(format!("cmd-cp-{}", key)),
                                 crate::icons::COPY_SVG,
-                                i.t("复制", "Copy"),
+                                i.t("session_detail.copy_2"),
                                 t,
                                 {
                                     let ws_entity_c = ws_entity.clone();
                                     let copy_val = cmd_copy.clone();
-                                    let toast_msg = i.t("已复制命令", "Copied command").to_string();
+                                    let toast_msg = i.t("session_detail.copied_command").to_string();
                                     move |_ev, _win, cx| {
                                         let _ = ws_entity_c.update(cx, |ws, cx| {
                                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val.clone()));
@@ -1043,7 +1043,7 @@ fn render_message_block(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(t.accent)
-                                    .child(i.t("展开 ▼", "Expand ▼")),
+                                    .child(i.t("session_detail.expand")),
                             ),
                     )
                     .into_any_element()
@@ -1099,12 +1099,12 @@ fn render_message_block(
                                     .text_size(px(12.0))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(if is_error { t.danger } else { t.accent })
-                                    .child(i.t(">_ 终端命令 (Bash)", ">_ Bash Command")),
+                                    .child(i.t("session_detail.__bash_command")),
                             )
                             .child(if is_error {
-                                badge(t, i.t("执行失败", "Failed"), BadgeKind::Danger)
+                                badge(t, i.t("session_detail.failed"), BadgeKind::Danger)
                             } else {
-                                badge(t, i.t("已执行", "Completed"), BadgeKind::Success)
+                                badge(t, i.t("session_detail.completed"), BadgeKind::Success)
                             }),
                     )
                     .child(
@@ -1115,12 +1115,12 @@ fn render_message_block(
                             .child(inline_action_btn(
                                 gpui::SharedString::from(format!("cmd-copy-{}", key)),
                                 crate::icons::COPY_SVG,
-                                i.t("复制命令", "Copy Cmd"),
+                                i.t("session_detail.copy_cmd"),
                                 t,
                                 {
                                     let ws_entity_c = ws_entity.clone();
                                     let copy_val = cmd_copy.clone();
-                                    let toast_msg = i.t("已复制命令", "Copied command").to_string();
+                                    let toast_msg = i.t("session_detail.copied_command").to_string();
                                     move |_ev, _win, cx| {
                                         let _ = ws_entity_c.update(cx, |ws, cx| {
                                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val.clone()));
@@ -1134,7 +1134,7 @@ fn render_message_block(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(t.accent)
-                                    .child(i.t("收起 ▲", "Collapse ▲")),
+                                    .child(i.t("session_detail.collapse")),
                             ),
                     );
 
@@ -1145,7 +1145,7 @@ fn render_message_block(
                         div()
                             .text_size(px(11.5))
                             .text_color(t.text_muted)
-                            .child(format!("{}: {}", i.t("说明", "Desc"), desc)),
+                            .child(format!("{}: {}", i.t("session_detail.desc"), desc)),
                     );
                 }
 
@@ -1185,7 +1185,7 @@ fn render_message_block(
                                 .text_size(px(11.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_secondary)
-                                .child(format!("{}: ({} {})", i.t("输出", "Output"), total_lines, i.t("行", "lines"))),
+                                .child(format!("{}: ({} {})", i.t("session_detail.output"), total_lines, i.t("session_detail.lines"))),
                         )
                         .child(
                             div()
@@ -1211,21 +1211,21 @@ fn render_message_block(
                                                 list_state_c.remeasure_items(item_idx..item_idx + 1);
                                             })
                                             .child(if is_out_expanded {
-                                                i.t("收起 ▲", "Collapse ▲")
+                                                i.t("session_detail.collapse")
                                             } else {
-                                                i.t("展开全部 ▼", "Expand All ▼")
+                                                i.t("session_detail.expand_all")
                                             }),
                                     )
                                 })
                                 .child(inline_action_btn(
                                     gpui::SharedString::from(format!("out-copy-{}", key)),
                                     crate::icons::COPY_SVG,
-                                    i.t("复制输出", "Copy Output"),
+                                    i.t("session_detail.copy_output"),
                                     t,
                                     {
                                         let ws_entity_c = ws_entity.clone();
                                         let copy_val = out_copy.clone();
-                                        let toast_msg = i.t("已复制命令输出", "Copied output").to_string();
+                                        let toast_msg = i.t("session_detail.copied_output").to_string();
                                         move |_ev, _win, cx| {
                                             let _ = ws_entity_c.update(cx, |ws, cx| {
                                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val.clone()));
@@ -1238,7 +1238,7 @@ fn render_message_block(
                         );
 
                     let display_out = if needs_fold && !is_out_expanded {
-                        format!("{}\n… ({} {})", out_lines.iter().take(10).cloned().collect::<Vec<_>>().join("\n"), total_lines - 10, i.t("行已折叠", "lines collapsed"))
+                        format!("{}\n… ({} {})", out_lines.iter().take(10).cloned().collect::<Vec<_>>().join("\n"), total_lines - 10, i.t("session_detail.lines_collapsed"))
                     } else {
                         out_str
                     };
@@ -1351,12 +1351,12 @@ fn render_message_block(
                             .child(inline_action_btn(
                                 gpui::SharedString::from(format!("tool-cp-{}", key)),
                                 crate::icons::COPY_SVG,
-                                i.t("复制", "Copy"),
+                                i.t("session_detail.copy_2"),
                                 t,
                                 {
                                     let ws_entity_c = ws_entity.clone();
                                     let copy_val = copy_txt.clone();
-                                    let toast_msg = i.t("已复制工具参数", "Copied params").to_string();
+                                    let toast_msg = i.t("session_detail.copied_params").to_string();
                                     move |_ev, _win, cx| {
                                         let _ = ws_entity_c.update(cx, |ws, cx| {
                                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val.clone()));
@@ -1370,7 +1370,7 @@ fn render_message_block(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(crate::rgba_const(0x06b6d4ff))
-                                    .child(i.t("展开 ▼", "Expand ▼")),
+                                    .child(i.t("session_detail.expand")),
                             ),
                     )
                     .into_any_element()
@@ -1418,7 +1418,7 @@ fn render_message_block(
                                     .text_size(px(12.0))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(crate::rgba_const(0x06b6d4ff))
-                                    .child(format!("🔧 {} ({})", i.t("工具调用", "Tool"), tool_name)),
+                                    .child(format!("🔧 {} ({})", i.t("session_detail.tool"), tool_name)),
                             ),
                     )
                     .child(
@@ -1429,12 +1429,12 @@ fn render_message_block(
                             .child(inline_action_btn(
                                 gpui::SharedString::from(format!("tool-copy-{}", key)),
                                 crate::icons::COPY_SVG,
-                                i.t("复制参数", "Copy"),
+                                i.t("session_detail.copy"),
                                 t,
                                 {
                                     let ws_entity_c = ws_entity.clone();
                                     let copy_val = copy_txt.clone();
-                                    let toast_msg = i.t("已复制工具参数", "Copied params").to_string();
+                                    let toast_msg = i.t("session_detail.copied_params").to_string();
                                     move |_ev, _win, cx| {
                                         let _ = ws_entity_c.update(cx, |ws, cx| {
                                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val.clone()));
@@ -1448,7 +1448,7 @@ fn render_message_block(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(crate::rgba_const(0x06b6d4ff))
-                                    .child(i.t("收起 ▲", "Collapse ▲")),
+                                    .child(i.t("session_detail.collapse")),
                             ),
                     );
 

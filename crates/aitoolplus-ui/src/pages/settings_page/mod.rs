@@ -30,13 +30,13 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         .unwrap_or(false);
 
     let tabs = vec![
-        (SettingsTab::General, i.t("通用", "General"), false),
-        (SettingsTab::DataImport, i.t("数据导入", "Data Import"), false),
-        (SettingsTab::Usage, i.t("使用统计", "Usage Statistics"), false),
-        (SettingsTab::Backup, i.t("备份", "Backup"), false),
-        (SettingsTab::Advanced, i.t("高级选项", "Advanced"), false),
-        (SettingsTab::LocalEnv, i.t("本地环境", "Local Environment"), false),
-        (SettingsTab::About, i.t("关于", "About"), has_update),
+        (SettingsTab::General, i.t("settings_tab.general"), false),
+        (SettingsTab::DataImport, i.t("settings_tab.data_import"), false),
+        (SettingsTab::Usage, i.t("settings_tab.usage_statistics"), false),
+        (SettingsTab::Backup, i.t("settings_tab.backup"), false),
+        (SettingsTab::Advanced, i.t("settings_tab.advanced"), false),
+        (SettingsTab::LocalEnv, i.t("settings_tab.local_environment"), false),
+        (SettingsTab::About, i.t("settings_tab.about"), has_update),
     ];
 
     let current_tab = ws.ui.settings_tab;

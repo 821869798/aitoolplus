@@ -54,18 +54,18 @@ fn format_relative_time(updated_at: i64, i18n: &crate::i18n::I18n) -> String {
     let now = aitoolplus_core::mcp::now_ms();
     let diff = (now - updated_at).max(0);
     if diff < 60_000 {
-        i18n.t("刚刚", "just now").to_string()
+        i18n.t("mcp.just_now").to_string()
     } else if diff < 3_600_000 {
         let mins = diff / 60_000;
-        i18n.t(&format!("{} 分钟前", mins), &format!("{}m ago", mins))
+        i18n.raw(&format!("{} 分钟前", mins), &format!("{}m ago", mins))
             .to_string()
     } else if diff < 86_400_000 {
         let hours = diff / 3_600_000;
-        i18n.t(&format!("{} 小时前", hours), &format!("{}h ago", hours))
+        i18n.raw(&format!("{} 小时前", hours), &format!("{}h ago", hours))
             .to_string()
     } else {
         let days = diff / 86_400_000;
-        i18n.t(&format!("{} 天前", days), &format!("{}d ago", days))
+        i18n.raw(&format!("{} 天前", days), &format!("{}d ago", days))
             .to_string()
     }
 }
@@ -88,7 +88,7 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
                 .map(|(tool, name)| format!("{name} ({})", tool.name_en()))
                 .collect();
             let msg = i
-                .t(
+                .raw(
                     &format!(
                         "发现并导入 {} 个 MCP 服务器：{}",
                         imported,
@@ -145,7 +145,7 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
                         .text_size(px(18.0))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(t.text_primary)
-                        .child(i.t("MCP 服务器", "MCP Servers")),
+                        .child(i.t("mcp.mcp_servers")),
                 )
                 .child(
                     div()
@@ -163,7 +163,7 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
                                 .size(px(13.0))
                                 .text_color(t.accent),
                         )
-                        .child(i.t("查看官方文档", "View Official Docs"))
+                        .child(i.t("mcp.view_official_docs"))
                         .on_click(cx.listener(|_, _, _, cx| {
                             cx.open_url("https://code.claude.com/docs/en/mcp#installing-mcp-servers");
                         })),
@@ -173,10 +173,7 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
             div()
                 .text_size(px(12.5))
                 .text_color(t.text_secondary)
-                .child(i.t(
-                    "管理跨工具的 MCP 服务器配置，一键同步到各 AI 编程工具",
-                    "Manage cross-tool MCP server configurations, sync with one click",
-                )),
+                .child(i.t("mcp.manage_cross_tool_mcp")),
         );
 
     // 2. Toolbar: Search input, Count pill, Import existing, Import JSON, Add server, Sync all
@@ -202,7 +199,7 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
                 .child(button_with_icon_l(
                     "mcp-import-existing-btn",
                     icons::DOWNLOAD_SVG,
-                    i.t("导入已有", "Import Existing"),
+                    i.t("mcp.import_existing"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -214,7 +211,7 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
                 .child(button_with_icon_l(
                     "mcp-import-json-btn",
                     icons::FILE_TEXT_SVG,
-                    i.t("导入 JSON", "Import JSON"),
+                    i.t("mcp.import_json"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -233,7 +230,7 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
                 .child(button_with_icon_l(
                     "mcp-add-server-btn",
                     icons::PLUS_SVG,
-                    i.t("新增服务器", "Add Server"),
+                    i.t("mcp.add_server"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -255,17 +252,14 @@ pub fn render_mcp_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui:
             &t,
             icons::MCP_SVG,
             if query.is_empty() {
-                i.t("还没有 MCP 服务器", "No MCP servers yet")
+                i.t("mcp.no_mcp_servers_yet")
             } else {
-                i.t("没有找到匹配的 MCP 服务器", "No matching MCP servers")
+                i.t("mcp.no_matching_mcp_servers")
             },
             if query.is_empty() {
-                i.t(
-                    "点击“+ 新增服务器”或“导入”开始添加，或等待已安装工具的配置自动导入",
-                    "Click '+ Add Server' or 'Import' to add a server, or import from installed tools",
-                )
+                i.t("mcp.click_add_server_or")
             } else {
-                i.t("尝试更换搜索关键词", "Try a different search keyword")
+                i.t("mcp.try_a_different_search")
             },
         )
     } else {
@@ -502,7 +496,7 @@ fn render_virtual_mcp_card(
             cx.stop_propagation();
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_content.clone()));
             let _ = ws_entity_copy.update(cx, |ws, cx| {
-                ws.ui.toast(ws.i18n.t("已复制配置到剪贴板", "Copied config to clipboard").to_string(), false);
+                ws.ui.toast(ws.i18n.t("mcp.copied_config_to_clipboard").to_string(), false);
                 cx.notify();
             });
         });
@@ -537,14 +531,14 @@ fn render_virtual_mcp_card(
                     .find(|x| x.id == sid)
                     .cloned();
                 let group_input = cx.new(|cx| {
-                    let mut inp = TextInput::new(ws.i18n.t("分组", "Group"), cx);
+                    let mut inp = TextInput::new(ws.i18n.t("mcp.group"), cx);
                     if let Some(g) = existing.as_ref().and_then(|x| x.user_group.clone()) {
                         inp.set_text_silent(g, cx);
                     }
                     inp
                 });
                 let note_input = cx.new(|cx| {
-                    let mut inp = TextInput::new(ws.i18n.t("备注", "Note"), cx);
+                    let mut inp = TextInput::new(ws.i18n.t("mcp.note_2"), cx);
                     if let Some(n) = existing.as_ref().and_then(|x| x.user_note.clone()) {
                         inp.set_text_silent(n, cx);
                     }
@@ -610,10 +604,10 @@ fn render_virtual_mcp_card(
             let sname = s_name_for_del.clone();
             let _ = ws_entity_del.update(cx, |ws, cx| {
                 ws.ui.confirm = Some(super::ConfirmState {
-                    title: ws.i18n.t("删除 MCP 服务器", "Delete MCP Server").to_string(),
+                    title: ws.i18n.t("mcp.delete_mcp_server").to_string(),
                     message: ws
                         .i18n
-                        .t(
+                        .raw(
                             &format!("确定要删除 MCP 服务器“{}”吗？", sname),
                             &format!("Are you sure you want to delete MCP server '{}'?", sname),
                         )
@@ -1064,7 +1058,7 @@ pub fn render_mcp_detail_drawer(
                 .text_size(px(12.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
-                .child(i.t("配置信息", "Configuration")),
+                .child(i.t("mcp.configuration")),
         );
 
         match srv.server_type {
@@ -1102,7 +1096,7 @@ pub fn render_mcp_detail_drawer(
                                 .child(icon_button_svg(
                                     "copy-cmd",
                                     icons::COPY_SVG,
-                                    i.t("复制", "Copy"),
+                                    i.t("mcp.copy"),
                                     false,
                                     &t,
                                     cx,
@@ -1111,7 +1105,7 @@ pub fn render_mcp_detail_drawer(
                                             cmd_copy.clone(),
                                         ));
                                         ws.ui.toast(
-                                            ws.i18n.t("已复制", "Copied").to_string(),
+                                            ws.i18n.t("mcp.copied").to_string(),
                                             false,
                                         );
                                         cx.notify();
@@ -1191,7 +1185,7 @@ pub fn render_mcp_detail_drawer(
                                         .child(icon_button_svg(
                                             gpui::SharedString::from(format!("copy-env-{k}")),
                                             icons::COPY_SVG,
-                                            i.t("复制", "Copy"),
+                                            i.t("mcp.copy"),
                                             false,
                                             &t,
                                             cx,
@@ -1200,7 +1194,7 @@ pub fn render_mcp_detail_drawer(
                                                     gpui::ClipboardItem::new_string(v_copy.clone()),
                                                 );
                                                 ws.ui.toast(
-                                                    ws.i18n.t("已复制", "Copied").to_string(),
+                                                    ws.i18n.t("mcp.copied").to_string(),
                                                     false,
                                                 );
                                                 cx.notify();
@@ -1258,7 +1252,7 @@ pub fn render_mcp_detail_drawer(
                                 .child(icon_button_svg(
                                     "copy-url",
                                     icons::COPY_SVG,
-                                    i.t("复制", "Copy"),
+                                    i.t("mcp.copy"),
                                     false,
                                     &t,
                                     cx,
@@ -1267,7 +1261,7 @@ pub fn render_mcp_detail_drawer(
                                             url_copy.clone(),
                                         ));
                                         ws.ui.toast(
-                                            ws.i18n.t("已复制", "Copied").to_string(),
+                                            ws.i18n.t("mcp.copied").to_string(),
                                             false,
                                         );
                                         cx.notify();
@@ -1302,7 +1296,7 @@ pub fn render_mcp_detail_drawer(
                         .text_size(px(12.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.text_primary)
-                        .child(i.t("元数据", "Metadata")),
+                        .child(i.t("mcp.metadata")),
                 )
                 .child(
                     div()
@@ -1311,7 +1305,7 @@ pub fn render_mcp_detail_drawer(
                         .text_size(px(11.5))
                         .text_color(t.accent)
                         .hover(|h| h.underline())
-                        .child(i.t("编辑", "Edit"))
+                        .child(i.t("mcp.edit"))
                         .on_click(cx.listener(move |ws, _, _, cx| {
                             let existing = ws
                                 .store
@@ -1322,7 +1316,7 @@ pub fn render_mcp_detail_drawer(
                                 .find(|x| x.id == sid_for_meta_edit)
                                 .cloned();
                             let group_input = cx.new(|cx| {
-                                let mut inp = TextInput::new(ws.i18n.t("分组", "Group"), cx);
+                                let mut inp = TextInput::new(ws.i18n.t("mcp.group"), cx);
                                 if let Some(g) =
                                     existing.as_ref().and_then(|x| x.user_group.clone())
                                 {
@@ -1331,7 +1325,7 @@ pub fn render_mcp_detail_drawer(
                                 inp
                             });
                             let note_input = cx.new(|cx| {
-                                let mut inp = TextInput::new(ws.i18n.t("备注", "Note"), cx);
+                                let mut inp = TextInput::new(ws.i18n.t("mcp.note_2"), cx);
                                 if let Some(n) = existing.as_ref().and_then(|x| x.user_note.clone())
                                 {
                                     inp.set_text_silent(n, cx);
@@ -1353,7 +1347,7 @@ pub fn render_mcp_detail_drawer(
                     div()
                         .text_size(px(11.5))
                         .text_color(t.text_secondary)
-                        .child(i.t("分组：", "Group:")),
+                        .child(i.t("mcp.group_3")),
                 )
                 .child(
                     div()
@@ -1366,7 +1360,7 @@ pub fn render_mcp_detail_drawer(
                         .child(
                             srv.user_group
                                 .clone()
-                                .unwrap_or_else(|| i.t("未分组", "Ungrouped").to_string()),
+                                .unwrap_or_else(|| i.t("mcp.ungrouped").to_string()),
                         ),
                 ),
         )
@@ -1379,7 +1373,7 @@ pub fn render_mcp_detail_drawer(
                     div()
                         .text_size(px(11.5))
                         .text_color(t.text_secondary)
-                        .child(i.t("备注：", "Note:")),
+                        .child(i.t("mcp.note_3")),
                 )
                 .child(
                     div()
@@ -1392,7 +1386,7 @@ pub fn render_mcp_detail_drawer(
                         .child(
                             srv.user_note
                                 .clone()
-                                .unwrap_or_else(|| i.t("无备注", "No notes").to_string()),
+                                .unwrap_or_else(|| i.t("mcp.no_notes").to_string()),
                         ),
                 ),
         );
@@ -1414,7 +1408,7 @@ pub fn render_mcp_detail_drawer(
                         .text_size(px(12.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.text_primary)
-                        .child(i.t("标签", "Tags")),
+                        .child(i.t("mcp.tags")),
                 )
                 .child(
                     div()
@@ -1423,10 +1417,10 @@ pub fn render_mcp_detail_drawer(
                         .text_size(px(11.5))
                         .text_color(t.accent)
                         .hover(|h| h.underline())
-                        .child(i.t("+ 添加标签", "+ Add Tag"))
+                        .child(i.t("mcp.add_tag_2"))
                         .on_click(cx.listener(move |ws, _, _, cx| {
                             let tag_input =
-                                cx.new(|cx| TextInput::new(ws.i18n.t("标签名", "Tag Name"), cx));
+                                cx.new(|cx| TextInput::new(ws.i18n.t("mcp.tag_name_2"), cx));
                             ws.ui.mcp_adding_tag = Some((sid_for_tag.clone(), tag_input));
                             cx.notify();
                         })),
@@ -1438,7 +1432,7 @@ pub fn render_mcp_detail_drawer(
             div()
                 .text_size(px(11.5))
                 .text_color(t.text_muted)
-                .child(i.t("暂无标签", "No tags yet")),
+                .child(i.t("mcp.no_tags_yet")),
         );
     } else {
         let mut tag_list = div().flex().items_center().gap(px(6.0)).flex_wrap();
@@ -1518,7 +1512,7 @@ pub fn render_mcp_detail_drawer(
                 .text_size(px(12.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
-                .child(i.t("支持工具同步", "Supported Tools Sync")),
+                .child(i.t("mcp.supported_tools_sync")),
         );
 
     let mut grid_items = div().flex().gap(px(8.0)).flex_wrap().w_full();
@@ -1573,7 +1567,7 @@ pub fn render_mcp_detail_drawer(
                         } else {
                             t.text_secondary
                         })
-                        .child(i.t(tool.name_zh(), tool.name_en())),
+                        .child(i.raw(tool.name_zh(), tool.name_en())),
                 )
                 .on_click(cx.listener(move |ws, _, _, cx| {
                     let _ = ws.store.update(|db| {
@@ -1609,7 +1603,7 @@ pub fn render_mcp_detail_drawer(
                 .child(button_with_icon_l(
                     "mcp-drawer-footer-edit",
                     icons::PENCIL_SVG,
-                    i.t("编辑", "Edit"),
+                    i.t("mcp.edit"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1626,7 +1620,7 @@ pub fn render_mcp_detail_drawer(
                 .child(button_with_icon_l(
                     "mcp-drawer-footer-meta",
                     icons::TAG_SVG,
-                    i.t("元数据", "Metadata"),
+                    i.t("mcp.metadata"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1640,14 +1634,14 @@ pub fn render_mcp_detail_drawer(
                             .find(|x| x.id == sid_footer_meta)
                             .cloned();
                         let group_input = cx.new(|cx| {
-                            let mut inp = TextInput::new(ws.i18n.t("分组", "Group"), cx);
+                            let mut inp = TextInput::new(ws.i18n.t("mcp.group"), cx);
                             if let Some(g) = existing.as_ref().and_then(|x| x.user_group.clone()) {
                                 inp.set_text_silent(g, cx);
                             }
                             inp
                         });
                         let note_input = cx.new(|cx| {
-                            let mut inp = TextInput::new(ws.i18n.t("备注", "Note"), cx);
+                            let mut inp = TextInput::new(ws.i18n.t("mcp.note_2"), cx);
                             if let Some(n) = existing.as_ref().and_then(|x| x.user_note.clone()) {
                                 inp.set_text_silent(n, cx);
                             }
@@ -1666,9 +1660,9 @@ pub fn render_mcp_detail_drawer(
                         icons::POWER_SVG
                     },
                     if management_enabled {
-                        i.t("停用", "Disable")
+                        i.t("mcp.disable")
                     } else {
-                        i.t("启用", "Enable")
+                        i.t("mcp.enable")
                     },
                     ButtonVariant::Secondary,
                     &t,
@@ -1689,16 +1683,16 @@ pub fn render_mcp_detail_drawer(
         .child(button_with_icon_l(
             "mcp-drawer-footer-del",
             icons::TRASH_SVG,
-            i.t("删除", "Delete"),
+            i.t("mcp.delete"),
             ButtonVariant::Danger,
             &t,
             cx,
             move |ws, _, _, cx| {
                 ws.ui.confirm = Some(super::ConfirmState {
-                    title: ws.i18n.t("删除 MCP 服务器", "Delete MCP Server").to_string(),
+                    title: ws.i18n.t("mcp.delete_mcp_server").to_string(),
                     message: ws
                         .i18n
-                        .t(
+                        .raw(
                             &format!("确定要删除 MCP 服务器“{}”吗？", name_footer_del),
                             &format!(
                                 "Are you sure you want to delete MCP server '{}'?",
@@ -1802,7 +1796,7 @@ pub fn render_mcp_import_json_modal(
                     div()
                         .text_size(px(12.0))
                         .text_color(t.danger)
-                        .child(i.t(
+                        .child(i.raw(
                             &format!(
                                 "JSON 语法错误 (第 {} 行，第 {} 列): {}",
                                 err.line(),
@@ -1845,7 +1839,7 @@ pub fn render_mcp_import_json_modal(
                             div()
                                 .text_size(px(12.0))
                                 .text_color(crate::rgba_const(0x10b981ff))
-                                .child(i.t(
+                                .child(i.raw(
                                     &format!(
                                         "JSON 格式正确，已识别到 {} 个 MCP 服务: {}",
                                         servers.len(),
@@ -1877,10 +1871,7 @@ pub fn render_mcp_import_json_modal(
                         div()
                             .text_size(px(12.0))
                             .text_color(crate::rgba_const(0xf59e0bff))
-                            .child(i.t(
-                                "JSON 格式正确，但未识别到 mcpServers 配置（需包含 \"mcpServers\": { ... } 结构）",
-                                "Valid JSON, but no mcpServers configuration recognized (expected '\"mcpServers\": { ... }')",
-                            )),
+                            .child(i.t("mcp.valid_json_but_no")),
                     ),
             }
         }
@@ -1895,10 +1886,7 @@ pub fn render_mcp_import_json_modal(
             div()
                 .text_size(px(12.5))
                 .text_color(t.text_secondary)
-                .child(i.t(
-                    "支持从 Claude Desktop、Cursor、VSCode 或标准 MCP JSON 配置片段直接粘贴并导入：",
-                    "Supports pasting MCP JSON configuration from Claude Desktop, Cursor, VSCode, etc.:",
-                )),
+                .child(i.t("mcp.supports_pasting_mcp_json")),
         )
         .child({
             let scroll_handle = json_editor.read(cx).scroll_handle.clone();
@@ -1927,7 +1915,7 @@ pub fn render_mcp_import_json_modal(
                 .gap(px(8.0))
                 .child(button_l(
                     "mcp-import-json-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("mcp.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1938,7 +1926,7 @@ pub fn render_mcp_import_json_modal(
                 ))
                 .child(button_l(
                     "mcp-import-json-submit",
-                    i.t("解析并导入", "Parse & Import"),
+                    i.t("mcp.parse_import"),
                     if is_json_valid {
                         ButtonVariant::Primary
                     } else {
@@ -1952,7 +1940,7 @@ pub fn render_mcp_import_json_modal(
                         if let Err(err) = serde_json::from_str::<Value>(&json_text) {
                             ws.ui.toast(
                                 ws.i18n
-                                    .t(
+                                    .raw(
                                         &format!(
                                             "JSON 语法错误 (第 {} 行，第 {} 列): {}",
                                             err.line(),
@@ -1995,7 +1983,7 @@ pub fn render_mcp_import_json_modal(
                                 ws.ui.mcp_import_json_modal = None;
                                 let msg = ws
                                     .i18n
-                                    .t(
+                                    .raw(
                                         &format!("成功导入 {} 个 MCP 服务器", count),
                                         &format!("Successfully imported {count} MCP servers"),
                                     )
@@ -2006,10 +1994,7 @@ pub fn render_mcp_import_json_modal(
                             Ok(_) => {
                                 ws.ui.toast(
                                     ws.i18n
-                                        .t(
-                                            "未能从 JSON 中解析出任何 MCP 服务器",
-                                            "No MCP servers found in JSON",
-                                        )
+                                        .t("mcp.no_mcp_servers_found")
                                         .to_string(),
                                     true,
                                 );
@@ -2018,7 +2003,7 @@ pub fn render_mcp_import_json_modal(
                             Err(e) => {
                                 ws.ui.toast(
                                     ws.i18n
-                                        .t(
+                                        .raw(
                                             &format!("JSON 解析失败: {}", e),
                                             &format!("JSON parse error: {e}"),
                                         )
@@ -2034,7 +2019,7 @@ pub fn render_mcp_import_json_modal(
 
     super::modal_scaffold_sized(
         &t,
-        i.t("导入 MCP 配置 (JSON)", "Import MCP (JSON)").as_ref(),
+        i.t("mcp.import_mcp_json").as_ref(),
         px(780.0),
         None,
         body.into_any_element(),
@@ -2061,10 +2046,7 @@ pub fn render_mcp_import_existing_modal(
             div()
                 .text_size(px(12.5))
                 .text_color(t.text_secondary)
-                .child(i.t(
-                    "扫描本地所有已安装的 AI 编程工具（Claude Desktop、Cursor、VSCode 等），导入已有的 MCP 服务器配置。",
-                    "Scan all installed AI coding tools (Claude Desktop, Cursor, VSCode, etc.) and import existing MCP configs.",
-                )),
+                .child(i.t("mcp.scan_all_installed_ai")),
         )
         .child(
             div()
@@ -2073,7 +2055,7 @@ pub fn render_mcp_import_existing_modal(
                 .gap(px(8.0))
                 .child(button_l(
                     "mcp-import-exist-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("mcp.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2084,7 +2066,7 @@ pub fn render_mcp_import_existing_modal(
                 ))
                 .child(button_l(
                     "mcp-import-exist-submit",
-                    i.t("立即扫描并导入", "Scan & Import Now"),
+                    i.t("mcp.scan_import_now"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2101,7 +2083,7 @@ pub fn render_mcp_import_existing_modal(
                                 .collect();
                             let msg = ws
                                 .i18n
-                                .t(
+                                .raw(
                                     &format!(
                                         "成功导入 {} 个 MCP 服务器：{}",
                                         imported,
@@ -2117,7 +2099,7 @@ pub fn render_mcp_import_existing_modal(
                         } else {
                             let msg = ws
                                 .i18n
-                                .t("未发现新的 MCP 服务器", "No new MCP servers discovered")
+                                .t("mcp.no_new_mcp_servers")
                                 .to_string();
                             ws.ui.toast(msg, false);
                         }
@@ -2129,7 +2111,7 @@ pub fn render_mcp_import_existing_modal(
 
     modal_scaffold(
         &t,
-        i.t("导入已有 MCP 配置", "Import Existing MCP").as_ref(),
+        i.t("mcp.import_existing_mcp").as_ref(),
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {
@@ -2167,7 +2149,7 @@ pub fn render_mcp_metadata_modal(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("分组 (Group)", "Group")))
+                .child(field_label(i.t("mcp.group_2")))
                 .child(input_container(&t, group_input.clone())),
         )
         .child(
@@ -2175,7 +2157,7 @@ pub fn render_mcp_metadata_modal(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("备注 (Note)", "Note")))
+                .child(field_label(i.t("mcp.note")))
                 .child(input_container(&t, note_input.clone())),
         )
         .child(
@@ -2185,7 +2167,7 @@ pub fn render_mcp_metadata_modal(
                 .gap(px(8.0))
                 .child(button_l(
                     "mcp-meta-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("mcp.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2196,7 +2178,7 @@ pub fn render_mcp_metadata_modal(
                 ))
                 .child(button_l(
                     "mcp-meta-save",
-                    i.t("保存", "Save"),
+                    i.t("mcp.save"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2223,7 +2205,7 @@ pub fn render_mcp_metadata_modal(
                         ws.ui.mcp_editing_metadata = None;
                         let msg = ws
                             .i18n
-                            .t("元数据已更新", "Metadata updated")
+                            .t("mcp.metadata_updated")
                             .to_string();
                         ws.ui.toast(msg, false);
                         cx.notify();
@@ -2233,7 +2215,7 @@ pub fn render_mcp_metadata_modal(
 
     modal_scaffold(
         &t,
-        i.t("编辑元数据", "Edit Metadata").as_ref(),
+        i.t("mcp.edit_metadata").as_ref(),
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {
@@ -2266,7 +2248,7 @@ pub fn render_mcp_add_tag_modal(
                         .text_size(px(12.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_secondary)
-                        .child(i.t("标签名称", "Tag Name")),
+                        .child(i.t("mcp.tag_name")),
                 )
                 .child(input_container(&t, tag_input.clone())),
         )
@@ -2277,7 +2259,7 @@ pub fn render_mcp_add_tag_modal(
                 .gap(px(8.0))
                 .child(button_l(
                     "mcp-tag-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("mcp.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2288,7 +2270,7 @@ pub fn render_mcp_add_tag_modal(
                 ))
                 .child(button_l(
                     "mcp-tag-submit",
-                    i.t("添加", "Add"),
+                    i.t("mcp.add"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2324,7 +2306,7 @@ pub fn render_mcp_add_tag_modal(
 
     modal_scaffold(
         &t,
-        i.t("添加标签", "Add Tag").as_ref(),
+        i.t("mcp.add_tag").as_ref(),
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {
@@ -2348,7 +2330,7 @@ fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let total_failed: usize = report.iter().map(|(_, _, f)| f).sum();
     if total_failed > 0 {
         let msg = i
-            .t(
+            .raw(
                 &format!("同步完成：成功 {}，失败 {}", total_ok, total_failed),
                 &format!("sync done: {total_ok} ok, {total_failed} failed"),
             )
@@ -2356,14 +2338,14 @@ fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
         ws.ui.toast(msg, true);
     } else if total_ok > 0 {
         let msg = i
-            .t(
+            .raw(
                 &format!("已同步 {} 项", total_ok),
                 &format!("synced {total_ok} entries"),
             )
             .to_string();
         ws.ui.toast(msg, false);
     } else {
-        let msg = i.t("没有启用的服务器", "no servers enabled").to_string();
+        let msg = i.t("mcp.no_servers_enabled").to_string();
         ws.ui.toast(msg, false);
     }
     cx.notify();
@@ -2390,7 +2372,7 @@ pub fn open_mcp_dialog(
         .map(|s| s.name.clone())
         .unwrap_or_default();
     let name = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("名称", "Name"), cx);
+        let mut input = TextInput::new(i.t("mcp.name"), cx);
         input.set_text_silent(default_name, cx);
         input
     });
@@ -2405,7 +2387,7 @@ pub fn open_mcp_dialog(
         })
         .unwrap_or_default();
     let command = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("命令（stdio）", "Command (stdio)"), cx);
+        let mut input = TextInput::new(i.t("mcp.command_stdio"), cx);
         input.set_text_silent(default_cmd, cx);
         input
     });
@@ -2425,7 +2407,7 @@ pub fn open_mcp_dialog(
         })
         .unwrap_or_default();
     let args = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("参数（空格分隔）", "Args (space separated)"), cx);
+        let mut input = TextInput::new(i.t("mcp.args_space_separated"), cx);
         input.set_text_silent(default_args, cx);
         input
     });
@@ -2440,7 +2422,7 @@ pub fn open_mcp_dialog(
         .unwrap_or_default();
     let environment = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t("环境变量 JSON，如 {\"KEY\":\"value\"}", "Environment JSON"),
+            i.t("mcp.environment_json"),
             cx,
         );
         input.set_text_silent(default_env, cx);
@@ -2457,17 +2439,14 @@ pub fn open_mcp_dialog(
         })
         .unwrap_or_default();
     let url = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("URL（http/sse）", "URL (http/sse)"), cx);
+        let mut input = TextInput::new(i.t("mcp.url_http_sse"), cx);
         input.set_text_silent(default_url, cx);
         input
     });
 
     let headers = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t(
-                "Headers JSON，如 {\"Authorization\":\"Bearer ...\"}",
-                "Headers JSON",
-            ),
+            i.t("mcp.headers_json"),
             cx,
         );
         if let Some(server) = &existing
@@ -2480,7 +2459,7 @@ pub fn open_mcp_dialog(
 
     let timeout_seconds = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t("工具超时秒数（可选）", "Tool timeout seconds (optional)"),
+            i.t("mcp.tool_timeout_seconds_optional"),
             cx,
         );
         if let Some(server) = &existing
@@ -2492,7 +2471,7 @@ pub fn open_mcp_dialog(
     });
 
     let group = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("分组（可选）", "Group (optional)"), cx);
+        let mut input = TextInput::new(i.t("mcp.group_optional"), cx);
         if let Some(s) = &existing {
             input.set_text_silent(s.user_group.clone().unwrap_or_default(), cx);
         }
@@ -2552,9 +2531,9 @@ pub fn render_mcp_dialog(
     } = state;
 
     let title = if editing_id.is_some() {
-        i.t("编辑 MCP 服务器", "Edit MCP Server")
+        i.t("mcp.edit_mcp_server")
     } else {
-        i.t("新增 MCP 服务器", "Add MCP Server")
+        i.t("mcp.add_mcp_server")
     };
 
     let field_label = |label: gpui::SharedString| -> gpui::AnyElement {
@@ -2570,12 +2549,12 @@ pub fn render_mcp_dialog(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .child(field_label(i.t("应用到目标工具", "Target Tools")))
+        .child(field_label(i.t("mcp.target_tools")))
         .child({
             let mut row = div().flex().gap(px(6.0)).flex_wrap();
             for tool in mcp_tools() {
                 let is_on = enabled_tools.contains(&tool);
-                let label = i.t(tool.name_zh(), tool.name_en());
+                let label = i.raw(tool.name_zh(), tool.name_en());
                 row = row.child(button_l(
                     gpui::SharedString::from(format!("dlg-tool-{}", tool.key())),
                     label,
@@ -2610,7 +2589,7 @@ pub fn render_mcp_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("名称", "Name")))
+                .child(field_label(i.t("mcp.name")))
                 .child(input_container(&t, name.clone())),
         )
         .child(tools_picker)
@@ -2622,13 +2601,13 @@ pub fn render_mcp_dialog(
                     .gap(px(6.0))
                     .text_size(px(12.0))
                     .text_color(t.text_secondary)
-                    .child(i.t("类型：", "Type:"))
+                    .child(i.t("mcp.type"))
                     .child({
                         let mut row = div().flex().gap(px(6.0));
                         for (ty, label) in [
-                            (McpServerType::Stdio, i.t("Stdio", "Stdio")),
-                            (McpServerType::Http, i.t("HTTP", "HTTP")),
-                            (McpServerType::Sse, i.t("SSE", "SSE")),
+                            (McpServerType::Stdio, i.t("mcp.stdio")),
+                            (McpServerType::Http, i.t("mcp.http")),
+                            (McpServerType::Sse, i.t("mcp.sse")),
                         ] {
                             let is_on = ty == server_type;
                             row = row.child(button_l(
@@ -2658,7 +2637,7 @@ pub fn render_mcp_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("命令与参数", "Command & Args")))
+                .child(field_label(i.t("mcp.command_args")))
                 .child(
                     div()
                         .flex()
@@ -2676,7 +2655,7 @@ pub fn render_mcp_dialog(
                                 .child(input_container(&t, args.clone())),
                         ),
                 )
-                .child(field_label(i.t("环境变量", "Environment")))
+                .child(field_label(i.t("mcp.environment")))
                 .child(input_container(&t, environment.clone()))
                 .into_any_element()
         } else {
@@ -2684,9 +2663,9 @@ pub fn render_mcp_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("服务器 URL", "Server URL")))
+                .child(field_label(i.t("mcp.server_url")))
                 .child(input_container(&t, url.clone()))
-                .child(field_label(i.t("请求头", "Headers")))
+                .child(field_label(i.t("mcp.headers")))
                 .child(input_container(&t, headers.clone()))
                 .into_any_element()
         })
@@ -2695,7 +2674,7 @@ pub fn render_mcp_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("工具超时（秒）", "Tool timeout (seconds)")))
+                .child(field_label(i.t("mcp.tool_timeout_seconds")))
                 .child(input_container(&t, timeout_seconds.clone())),
         )
         .child(
@@ -2703,7 +2682,7 @@ pub fn render_mcp_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("分组", "Group")))
+                .child(field_label(i.t("mcp.group")))
                 .child(input_container(&t, group.clone())),
         )
         .child(
@@ -2713,7 +2692,7 @@ pub fn render_mcp_dialog(
                 .gap(px(8.0))
                 .child(button_l(
                     "mcp-dlg-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("mcp.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2724,7 +2703,7 @@ pub fn render_mcp_dialog(
                 ))
                 .child(button_l(
                     "mcp-dlg-save",
-                    i.t("保存并同步", "Save & Sync"),
+                    i.t("mcp.save_sync"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2747,10 +2726,7 @@ pub fn render_mcp_dialog(
                                         _ => {
                                             ws.ui.toast(
                                                 ws.i18n
-                                                    .t(
-                                                        "环境变量必须是 JSON 对象",
-                                                        "environment must be a JSON object",
-                                                    )
+                                                    .t("mcp.environment_must_be_a")
                                                     .to_string(),
                                                 true,
                                             );
@@ -2780,10 +2756,7 @@ pub fn render_mcp_dialog(
                                         _ => {
                                             ws.ui.toast(
                                                 ws.i18n
-                                                    .t(
-                                                        "请求头必须是 JSON 对象",
-                                                        "headers must be a JSON object",
-                                                    )
+                                                    .t("mcp.headers_must_be_a")
                                                     .to_string(),
                                                 true,
                                             );
@@ -2805,10 +2778,7 @@ pub fn render_mcp_dialog(
                                 _ => {
                                     ws.ui.toast(
                                         ws.i18n
-                                            .t(
-                                                "超时必须是正整数",
-                                                "timeout must be a positive integer",
-                                            )
+                                            .t("mcp.timeout_must_be_a")
                                             .to_string(),
                                         true,
                                     );
@@ -2819,7 +2789,7 @@ pub fn render_mcp_dialog(
                         }
 
                         if name_txt.trim().is_empty() {
-                            let msg = ws.i18n.t("名称不能为空", "name is required").to_string();
+                            let msg = ws.i18n.t("mcp.name_is_required").to_string();
                             ws.ui.toast(msg, true);
                             cx.notify();
                             return;
@@ -2890,7 +2860,7 @@ pub fn render_mcp_dialog(
 
                         ws.ui.mcp_dialog = None;
                         if errors.is_empty() {
-                            let msg = ws.i18n.t("已保存并同步", "saved and synced").to_string();
+                            let msg = ws.i18n.t("mcp.saved_and_synced").to_string();
                             ws.ui.toast(msg, false);
                         } else {
                             let msg = format!("sync failed: {}", errors.join("; "));

@@ -89,7 +89,7 @@ pub fn pump(receiver: async_channel::Receiver<Vec<PathBuf>>, cx: &mut gpui::App)
                     workspace.ui.toast(
                         workspace
                             .i18n
-                            .t(
+                            .raw(
                                 &format!("检测到 {} 个配置文件变化，已刷新", changed.len()),
                                 &format!(
                                     "{} config changes detected; refreshed",

@@ -30,7 +30,7 @@ pub(super) fn providers_section(
     let i = ws.i18n;
     let providers = ws.tool_providers(tool);
 
-    let add_label = i.t("新增供应商", "Add Provider");
+    let add_label = i.t("tool_providers.add_provider");
 
     let mut actions = div().flex().items_center().gap(px(8.0));
     if let ToolId::Hermes = tool {
@@ -47,7 +47,7 @@ pub(super) fn providers_section(
                     div()
                         .text_size(px(12.0))
                         .text_color(t.text_secondary)
-                        .child(i.t("记忆系统", "Memory")),
+                        .child(i.t("tool_providers.memory")),
                 )
                 .child(components::toggle(
                     "hermes-memory-toggle",
@@ -61,9 +61,9 @@ pub(super) fn providers_section(
                         match aitoolplus_core::hermes::set_memory_enabled(&h, target) {
                             Ok(()) => {
                                 let msg = if target {
-                                    i.t("记忆已启用", "memory enabled").to_string()
+                                    i.t("tool_providers.memory_enabled").to_string()
                                 } else {
-                                    i.t("记忆已停用", "memory disabled").to_string()
+                                    i.t("tool_providers.memory_disabled").to_string()
                                 };
                                 ws.ui.toast(msg, false);
                             }
@@ -81,7 +81,7 @@ pub(super) fn providers_section(
         .child(button_with_icon_l(
             "prov-test-all",
             crate::icons::REFRESH_SVG,
-            i.t("批量测试", "Test All"),
+            i.t("tool_providers.test_all"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -118,7 +118,7 @@ pub(super) fn providers_section(
                 .child(format!(
                     "{} {}",
                     providers.len(),
-                    i.t("个供应商配置", "providers configured")
+                    i.t("tool_providers.providers_configured")
                 )),
         )
         .child(actions);
@@ -129,11 +129,8 @@ pub(super) fn providers_section(
         section = section.child(crate::components::empty_state_svg(
             &t,
             crate::icons::PACKAGE_SVG,
-            i.t("还没有供应商", "No providers yet"),
-            i.t(
-                "点击右上角「新增供应商」创建第一条配置",
-                "Click \"Add Provider\" to create your first config",
-            ),
+            i.t("tool_providers.no_providers_yet"),
+            i.t("tool_providers.click_add_provider_to"),
         ));
     } else {
         let mut list = div().flex().flex_col().gap(px(10.0));
@@ -255,7 +252,7 @@ pub(super) fn provider_row(
             let parsed = crate::components::parse_generic_error(&err_msg);
             crate::components::error_badge_tooltip(
                 format!("provider-test-fail-{pid}"),
-                i.t("连通失败", "Failed"),
+                i.t("tool_providers.failed"),
                 parsed.detail,
                 &t,
             )
@@ -346,10 +343,10 @@ pub(super) fn provider_row(
                                 .child(p.name.clone()),
                         )
                         .children(is_official.then(|| {
-                            crate::components::badge(&t, i.t("官方直连", "Official"), crate::components::BadgeKind::Neutral)
+                            crate::components::badge(&t, i.t("tool_providers.official"), crate::components::BadgeKind::Neutral)
                         }))
                         .children(p.is_disabled.then(|| {
-                            crate::components::badge(&t, i.t("已停用", "Disabled"), crate::components::BadgeKind::Danger)
+                            crate::components::badge(&t, i.t("tool_providers.disabled_2"), crate::components::BadgeKind::Danger)
                         }))
                         .children(p.website_url.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(|web_url| {
                             let web_url_for_click = web_url.to_string();
@@ -384,7 +381,7 @@ pub(super) fn provider_row(
                                         .text_size(px(11.0))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(t.accent)
-                                        .child(i.t("官网", "Website")),
+                                        .child(i.t("tool_providers.website")),
                                 )
                         })),
                 )
@@ -451,7 +448,7 @@ pub(super) fn provider_row(
                 .child(
                     badge(
                         &t,
-                        if is_enabled { i.t("已启用", "Enabled") } else { i.t("未启用", "Disabled") },
+                        if is_enabled { i.t("tool_providers.enabled") } else { i.t("tool_providers.disabled") },
                         if is_enabled { BadgeKind::Success } else { BadgeKind::Neutral },
                     )
                 )
@@ -486,7 +483,7 @@ pub(super) fn provider_row(
                         .text_color(crate::rgba_const(0xffffffff))
                         .flex_none(),
                 )
-                .child(i.t("使用中", "In Use")),
+                .child(i.t("tool_providers.in_use")),
         );
     } else {
         actions = actions.child(
@@ -514,14 +511,14 @@ pub(super) fn provider_row(
                         .text_color(t.text_muted)
                         .flex_none(),
                 )
-                .child(i.t("启用", "Enable")),
+                .child(i.t("tool_providers.enable")),
         );
     }
 
     actions = actions.child(card_icon_btn(
         format!("prov-edit-{pid2}"),
         crate::icons::PENCIL_SVG,
-        i.t("编辑供应商", "Edit Provider"),
+        i.t("tool_providers.edit_provider"),
         false,
         &t,
         cx,
@@ -539,7 +536,7 @@ pub(super) fn provider_row(
     actions = actions.child(card_icon_btn(
         format!("prov-test-{pid_test}"),
         crate::icons::ZAP_SVG,
-        i.t("连通测试", "Test Connection"),
+        i.t("tool_providers.test_connection"),
         false,
         &t,
         cx,
@@ -551,7 +548,7 @@ pub(super) fn provider_row(
     actions = actions.child(card_icon_btn(
         format!("prov-models-{pid_models}"),
         crate::icons::BAR_CHART_SVG,
-        i.t("拉取可用模型", "Fetch Models"),
+        i.t("tool_providers.fetch_models"),
         false,
         &t,
         cx,
@@ -565,7 +562,7 @@ pub(super) fn provider_row(
         actions = actions.child(card_icon_btn(
             format!("prov-launch-{launch_id}"),
             crate::icons::TERMINAL_SVG,
-            i.t("启动 CLI 终端", "Launch CLI"),
+            i.t("tool_providers.launch_cli"),
             false,
             &t,
             cx,
@@ -588,7 +585,7 @@ pub(super) fn provider_row(
                 ) {
                     Ok(_) => ws
                         .ui
-                        .toast(ws.i18n.t("CLI 已启动", "CLI launched").to_string(), false),
+                        .toast(ws.i18n.t("tool_providers.cli_launched").to_string(), false),
                     Err(error) => ws.ui.toast(error, true),
                 }
                 cx.notify();
@@ -601,7 +598,7 @@ pub(super) fn provider_row(
             actions = actions.child(card_icon_btn(
                 format!("prov-up-{pid_up}"),
                 crate::icons::CHEVRON_UP_SVG,
-                i.t("上移", "Move Up"),
+                i.t("tool_providers.move_up"),
                 false,
                 &t,
                 cx,
@@ -621,7 +618,7 @@ pub(super) fn provider_row(
             actions = actions.child(card_icon_btn(
                 format!("prov-down-{pid_down}"),
                 crate::icons::CHEVRON_DOWN_SVG,
-                i.t("下移", "Move Down"),
+                i.t("tool_providers.move_down"),
                 false,
                 &t,
                 cx,
@@ -643,16 +640,16 @@ pub(super) fn provider_row(
         actions = actions.child(card_icon_btn(
             format!("prov-del-{pid4}"),
             crate::icons::TRASH_SVG,
-            i.t("删除供应商", "Delete Provider"),
+            i.t("tool_providers.delete_provider"),
             true,
             &t,
             cx,
             move |ws, _ev, _w, cx| {
                 ws.ui.confirm = Some(crate::pages::ConfirmState {
-                    title: ws.i18n.t("删除供应商", "Delete Provider").to_string(),
+                    title: ws.i18n.t("tool_providers.delete_provider").to_string(),
                     message: ws
                         .i18n
-                        .t("确定要删除这条供应商配置吗？", "Delete this provider?")
+                        .t("tool_providers.delete_this_provider")
                         .to_string(),
                     action: crate::pages::ConfirmAction::DeleteProvider {
                         tool,
@@ -771,7 +768,7 @@ pub(super) fn import_providers(tool: ToolId, _ws: &mut Workspace, cx: &mut Conte
                                 ws.persist_store();
                                 ws.ui.toast(
                                     ws.i18n
-                                        .t(
+                                        .raw(
                                             &format!("已导入 {imported} 条供应商"),
                                             &format!("imported {imported} providers"),
                                         )
@@ -799,7 +796,7 @@ pub(super) fn export_providers(tool: ToolId, ws: &mut Workspace, cx: &mut Contex
             Ok(()) => {
                 let i = ws.i18n;
                 let msg = i
-                    .t(&format!("已导出到 {path}"), &format!("exported to {path}"))
+                    .raw(&format!("已导出到 {path}"), &format!("exported to {path}"))
                     .to_string();
                 ws.ui.toast(msg, false);
             }
@@ -872,7 +869,7 @@ pub(super) fn batch_test_providers(tool: ToolId, ws: &mut Workspace, cx: &mut Co
     if providers.is_empty() {
         ws.ui.toast(
             ws.i18n
-                .t("没有可测试的供应商", "no providers to test")
+                .t("tool_providers.no_providers_to_test")
                 .to_string(),
             true,
         );
@@ -899,7 +896,7 @@ pub(super) fn batch_test_providers(tool: ToolId, ws: &mut Workspace, cx: &mut Co
             }
             ws.ui.toast(
                 ws.i18n
-                    .t(
+                    .raw(
                         &format!("测试完成：{passed}/{total} 通过"),
                         &format!("test complete: {passed}/{total} passed"),
                     )
@@ -941,7 +938,7 @@ pub(super) fn fetch_models_action(
     let Some((base_url, api_key)) = aitoolplus_core::api_hub::provider_endpoint(&settings) else {
         let msg = ws
             .i18n
-            .t("供应商配置缺少 baseUrl", "provider config lacks baseUrl")
+            .t("tool_providers.provider_config_lacks_baseurl")
             .to_string();
         ws.ui.toast(msg, true);
         cx.notify();
@@ -980,7 +977,7 @@ pub(super) fn fetch_models_action(
                         names.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
                     let suffix = if names.len() > 8 { " …" } else { "" };
                     let msg = i
-                        .t(
+                        .raw(
                             &format!("获取到 {} 个模型：{shown}{suffix}", res.models.len()),
                             &format!("fetched {} models: {shown}{suffix}", res.models.len()),
                         )
@@ -990,7 +987,7 @@ pub(super) fn fetch_models_action(
                 Err(e) => {
                     let msg = match e {
                         aitoolplus_core::api_hub::ModelsFetchError::Auth => i
-                            .t("认证失败（401/403）", "auth failed (401/403)")
+                            .t("tool_providers.auth_failed_401_403")
                             .to_string(),
                         aitoolplus_core::api_hub::ModelsFetchError::Network(d) => {
                             format!("network error: {d}")

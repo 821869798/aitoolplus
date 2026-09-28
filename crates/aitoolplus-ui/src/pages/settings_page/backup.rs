@@ -210,17 +210,17 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             (
                 aitoolplus_core::settings::BackupType::Local,
                 Some(crate::icons::FOLDER_SVG),
-                i.t("本地快照", "Local"),
+                i.t("settings_backup.local"),
             ),
             (
                 aitoolplus_core::settings::BackupType::Webdav,
                 Some(crate::icons::GLOBE_SVG),
-                i.t("WebDAV 云端", "WebDAV"),
+                i.t("settings_backup.webdav"),
             ),
             (
                 aitoolplus_core::settings::BackupType::S3,
                 Some(crate::icons::DOWNLOAD_SVG),
-                i.t("S3 兼容存储", "S3 Storage"),
+                i.t("settings_backup.s3_storage"),
             ),
         ],
         backup_type,
@@ -241,12 +241,12 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         let interval_selector = segmented_pill_selector(
             "backup-interval",
             vec![
-                (0u32, None, i.t("禁用", "Disabled")),
-                (1u32, None, i.t("1小时", "1h")),
-                (6u32, None, i.t("6小时", "6h")),
-                (12u32, None, i.t("12小时", "12h")),
-                (24u32, None, i.t("24小时", "24h")),
-                (168u32, None, i.t("7天", "7d")),
+                (0u32, None, i.t("settings_backup.disabled")),
+                (1u32, None, i.t("settings_backup.k_1h")),
+                (6u32, None, i.t("settings_backup.k_6h")),
+                (12u32, None, i.t("settings_backup.k_12h")),
+                (24u32, None, i.t("settings_backup.k_24h")),
+                (168u32, None, i.t("settings_backup.k_7d")),
             ],
             interval_val,
             &t,
@@ -263,10 +263,10 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         let retain_selector = segmented_pill_selector(
             "backup-retain",
             vec![
-                (5usize, None, i.t("5个", "5")),
-                (10usize, None, i.t("10个", "10")),
-                (20usize, None, i.t("20个", "20")),
-                (50usize, None, i.t("50个", "50")),
+                (5usize, None, i.t("settings_backup.k_5")),
+                (10usize, None, i.t("settings_backup.k_10")),
+                (20usize, None, i.t("settings_backup.k_20")),
+                (50usize, None, i.t("settings_backup.k_50")),
             ],
             retain_val,
             &t,
@@ -285,20 +285,14 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             .gap(px(8.0))
             .child(settings_row(
                 &t,
-                i.t("自动备份间隔", "Auto-backup Interval"),
-                Some(i.t(
-                    "定时自动在本地创建快照的时间间隔（设为禁用则关闭自动备份）",
-                    "Time interval for auto backup (Disabled to turn off)",
-                )),
+                i.t("settings_backup.auto_backup_interval"),
+                Some(i.t("settings_backup.time_interval_for_auto")),
                 interval_selector,
             ))
             .child(settings_row(
                 &t,
-                i.t("备份保留数量", "Backup Retention"),
-                Some(i.t(
-                    "本地自动与手动快照最多保留的数量，超出将自动清理最旧快照",
-                    "Maximum number of backup snapshots to keep before pruning oldest",
-                )),
+                i.t("settings_backup.backup_retention"),
+                Some(i.t("settings_backup.maximum_number_of_backup")),
                 retain_selector,
             ));
 
@@ -310,7 +304,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             .child(button_with_icon_loading_l(
                 "backup-create-now",
                 crate::icons::DOWNLOAD_SVG,
-                i.t("立即备份", "Backup Now"),
+                i.t("settings_backup.backup_now"),
                 ButtonVariant::Primary,
                 ws.ui.backup_busy,
                 &t,
@@ -350,7 +344,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                             match result {
                                 Ok(report) => ws.ui.toast(
                                     ws.i18n
-                                        .t(
+                                        .raw(
                                             &format!(
                                                 "备份创建成功：已保存至 {}（{} 个文件）",
                                                 file_name, report.file_count
@@ -373,7 +367,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             .child(button_with_icon_loading_l(
                 "backup-restore-zip",
                 crate::icons::UPLOAD_SVG,
-                i.t("从zip恢复备份", "Restore from ZIP Backup"),
+                i.t("settings_backup.restore_from_zip_backup"),
                 ButtonVariant::Secondary,
                 ws.ui.backup_busy,
                 &t,
@@ -420,7 +414,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                         apply_restored(ws, reloaded);
                                         ws.ui.toast(
                                             ws.i18n
-                                                .t(
+                                                .raw(
                                                     &format!(
                                                         "从 ZIP 恢复完成：已恢复 {} 个文件 (覆盖 {}, 副本 {})",
                                                         report.restored,
@@ -453,7 +447,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             .child(button_with_icon_l(
                 "backup-open-folder",
                 crate::icons::FOLDER_SVG,
-                i.t("打开备份目录", "Open Backup Directory"),
+                i.t("settings_backup.open_backup_directory"),
                 ButtonVariant::Secondary,
                 &t,
                 cx,
@@ -475,13 +469,13 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                         .text_size(px(12.5))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_primary)
-                        .child(i.t("本地备份列表", "Local Backup List")),
+                        .child(i.t("settings_backup.local_backup_list")),
                 )
                 .child(
                     div()
                         .text_size(px(11.0))
                         .text_color(t.text_muted)
-                        .child(format!("{} {}", local_backups.len(), i.t("个快照", "snapshots"))),
+                        .child(format!("{} {}", local_backups.len(), i.t("settings_backup.snapshots"))),
                 ),
         );
 
@@ -491,10 +485,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .text_size(px(11.5))
                     .text_color(t.text_muted)
                     .p(px(8.0))
-                    .child(i.t(
-                        "暂无本地备份文件，点击上方【立即备份】即可创建首个快照",
-                        "No local backups found. Click 'Backup Now' to create one.",
-                    )),
+                    .child(i.t("settings_backup.no_local_backups_found")),
             );
         } else {
             for b in local_backups {
@@ -550,7 +541,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                 .child(button_with_icon_loading_l(
                                     gpui::SharedString::from(format!("local-restore-{}", file_name_for_restore_id)),
                                     crate::icons::REFRESH_SVG,
-                                    i.t("恢复", "Restore"),
+                                    i.t("settings_backup.restore"),
                                     ButtonVariant::Secondary,
                                     ws.ui.backup_busy,
                                     &t,
@@ -588,7 +579,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                                         apply_restored(ws, reloaded);
                                                         ws.ui.toast(
                                                             ws.i18n
-                                                                .t(
+                                                                .raw(
                                                                     &format!(
                                                                         "恢复完成：{} 个文件",
                                                                         report.restored
@@ -615,7 +606,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                 .child(button_with_icon_l(
                                     gpui::SharedString::from(format!("local-rename-{}", file_name_for_rename_id)),
                                     crate::icons::PENCIL_SVG,
-                                    i.t("重命名", "Rename"),
+                                    i.t("settings_backup.rename"),
                                     ButtonVariant::Secondary,
                                     &t,
                                     cx,
@@ -629,7 +620,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                 .child(button_with_icon_l(
                                     gpui::SharedString::from(format!("local-save-as-{}", file_name_for_save_as_id)),
                                     crate::icons::DOWNLOAD_SVG,
-                                    i.t("另存为", "Save As"),
+                                    i.t("settings_backup.save_as"),
                                     ButtonVariant::Secondary,
                                     &t,
                                     cx,
@@ -645,7 +636,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                                 let _ = std::fs::copy(&src, &dst);
                                                 let _ = weak.update(cx, |ws, cx| {
                                                     ws.ui.toast(
-                                                        ws.i18n.t("文件已另存为指定位置", "Saved as specified").to_string(),
+                                                        ws.i18n.t("settings_backup.saved_as_specified").to_string(),
                                                         false,
                                                     );
                                                     cx.notify();
@@ -657,14 +648,14 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                 .child(button_with_icon_l(
                                     gpui::SharedString::from(format!("local-delete-{}", file_name_for_delete_id)),
                                     crate::icons::TRASH_SVG,
-                                    i.t("删除", "Delete"),
+                                    i.t("settings_backup.delete"),
                                     ButtonVariant::Danger,
                                     &t,
                                     cx,
                                     move |ws, _, _, cx| {
                                         let _ = std::fs::remove_file(&file_path_for_delete);
                                         ws.ui.toast(
-                                            ws.i18n.t("本地备份文件已删除", "Backup file deleted").to_string(),
+                                            ws.i18n.t("settings_backup.backup_file_deleted").to_string(),
                                             false,
                                         );
                                         cx.notify();
@@ -686,11 +677,8 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
             .border_color(t.card_border)
             .child(section_title(
                 &t,
-                i.t("本地快照", "Local Snapshots"),
-                Some(i.t(
-                    "配置自动备份策略，创建本地快照与从 ZIP 恢复数据",
-                    "Configure auto-backup policy, create snapshot and restore",
-                )),
+                i.t("settings_backup.local_snapshots"),
+                Some(i.t("settings_backup.configure_auto_backup_policy")),
             ))
             .child(policy_section)
             .child(buttons_row)
@@ -740,7 +728,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .child(button_with_icon_l(
                         "webdav-test",
                         crate::icons::GLOBE_SVG,
-                        i.t("测试连接", "Test Connection"),
+                        i.t("settings_backup.test_connection"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -753,7 +741,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                             };
                             match aitoolplus_core::webdav::test_connection(&config) {
                                 Ok(()) => ws.ui.toast(
-                                    ws.i18n.t("WebDAV 连接成功", "WebDAV connection succeeded").to_string(),
+                                    ws.i18n.t("settings_backup.webdav_connection_succeeded").to_string(),
                                     false,
                                 ),
                                 Err(error) => ws.ui.toast(format!("WebDAV 连接失败: {error}"), true),
@@ -764,7 +752,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .child(button_with_icon_l(
                         "webdav-save",
                         crate::icons::CHECK_SVG,
-                        i.t("保存设置", "Save Settings"),
+                        i.t("settings_backup.save_settings"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -774,14 +762,14 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                             ws.settings.webdav.password = save_password.update(cx, |input, _| input.text().to_string());
                             ws.settings.webdav.remote_directory = save_directory.update(cx, |input, _| input.text().trim().to_string());
                             (ws.callbacks.save_settings)(&ws.settings);
-                            ws.ui.toast(ws.i18n.t("已保存", "saved").to_string(), false);
+                            ws.ui.toast(ws.i18n.t("settings_backup.saved").to_string(), false);
                             cx.notify();
                         },
                     ))
                     .child(button_with_icon_loading_l(
                         "webdav-upload",
                         crate::icons::CLOUD_UPLOAD_SVG,
-                        i.t("上传云端", "Upload to Cloud"),
+                        i.t("settings_backup.upload_to_cloud"),
                         ButtonVariant::Primary,
                         ws.ui.backup_busy,
                         &t,
@@ -817,10 +805,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                     match result {
                                         Ok(_) => ws.ui.toast(
                                             ws.i18n
-                                                .t(
-                                                    "上传成功！已同步至 WebDAV 云端",
-                                                    "Upload succeeded: Synced to WebDAV cloud",
-                                                )
+                                                .t("settings_backup.upload_succeeded_synced_to_2")
                                                 .to_string(),
                                             false,
                                         ),
@@ -834,7 +819,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .child(button_with_icon_loading_l(
                         "webdav-download",
                         crate::icons::CLOUD_DOWNLOAD_SVG,
-                        i.t("从云端下载并恢复", "Download & Restore"),
+                        i.t("settings_backup.download_restore"),
                         ButtonVariant::Secondary,
                         ws.ui.backup_busy,
                         &t,
@@ -896,10 +881,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                             crate::set_restore_in_flight(false);
                                             ws.ui.toast(
                                                 ws.i18n
-                                                    .t(
-                                                        "云端暂无备份数据，请先上传",
-                                                        "No backup found in cloud, please upload first",
-                                                    )
+                                                    .t("settings_backup.no_backup_found_in")
                                                     .to_string(),
                                                 true,
                                             );
@@ -916,7 +898,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                             apply_restored(ws, reloaded);
                                             ws.ui.toast(
                                                 ws.i18n
-                                                    .t(
+                                                    .raw(
                                                         &format!(
                                                             "云端恢复完成：已恢复 {} 个文件",
                                                             report.restored
@@ -1008,7 +990,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                 div()
                                     .text_size(px(12.5))
                                     .text_color(t.text_secondary)
-                                    .child(i.t("路径模式 (Path-Style)", "Path-Style")),
+                                    .child(i.t("settings_backup.path_style")),
                             )
                             .child(toggle(
                                 "s3-path-style-toggle",
@@ -1031,7 +1013,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .child(button_with_icon_l(
                         "s3-test",
                         crate::icons::GLOBE_SVG,
-                        i.t("测试连接", "Test Connection"),
+                        i.t("settings_backup.test_connection"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -1047,7 +1029,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                             };
                             match aitoolplus_core::s3::test_connection(&config) {
                                 Ok(()) => ws.ui.toast(
-                                    ws.i18n.t("S3 连接成功", "S3 connection succeeded").to_string(),
+                                    ws.i18n.t("settings_backup.s3_connection_succeeded").to_string(),
                                     false,
                                 ),
                                 Err(error) => ws.ui.toast(format!("S3 连接失败: {error}"), true),
@@ -1058,7 +1040,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .child(button_with_icon_l(
                         "s3-save",
                         crate::icons::CHECK_SVG,
-                        i.t("保存设置", "Save Settings"),
+                        i.t("settings_backup.save_settings"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -1070,14 +1052,14 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                             ws.settings.s3.secret_access_key = save_secret_key.update(cx, |input, _| input.text().to_string());
                             ws.settings.s3.prefix = save_prefix.update(cx, |input, _| input.text().trim().to_string());
                             (ws.callbacks.save_settings)(&ws.settings);
-                            ws.ui.toast(ws.i18n.t("已保存", "saved").to_string(), false);
+                            ws.ui.toast(ws.i18n.t("settings_backup.saved").to_string(), false);
                             cx.notify();
                         },
                     ))
                     .child(button_with_icon_loading_l(
                         "s3-upload",
                         crate::icons::CLOUD_UPLOAD_SVG,
-                        i.t("上传云端", "Upload to Cloud"),
+                        i.t("settings_backup.upload_to_cloud"),
                         ButtonVariant::Primary,
                         ws.ui.backup_busy,
                         &t,
@@ -1115,10 +1097,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                     match result {
                                         Ok(_) => ws.ui.toast(
                                             ws.i18n
-                                                .t(
-                                                    "上传成功！已同步至 S3 云端",
-                                                    "Upload succeeded: Synced to S3 cloud",
-                                                )
+                                                .t("settings_backup.upload_succeeded_synced_to")
                                                 .to_string(),
                                             false,
                                         ),
@@ -1132,7 +1111,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                     .child(button_with_icon_loading_l(
                         "s3-download",
                         crate::icons::CLOUD_DOWNLOAD_SVG,
-                        i.t("从云端下载并恢复", "Download & Restore"),
+                        i.t("settings_backup.download_restore"),
                         ButtonVariant::Secondary,
                         ws.ui.backup_busy,
                         &t,
@@ -1196,10 +1175,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                             crate::set_restore_in_flight(false);
                                             ws.ui.toast(
                                                 ws.i18n
-                                                    .t(
-                                                        "云端暂无备份数据，请先上传",
-                                                        "No backup found in cloud, please upload first",
-                                                    )
+                                                    .t("settings_backup.no_backup_found_in")
                                                     .to_string(),
                                                 true,
                                             );
@@ -1216,7 +1192,7 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                             apply_restored(ws, reloaded);
                                             ws.ui.toast(
                                                 ws.i18n
-                                                    .t(
+                                                    .raw(
                                                         &format!(
                                                             "云端恢复完成：已恢复 {} 个文件",
                                                             report.restored
@@ -1245,11 +1221,8 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         vec![
             section_title(
                 &t,
-                i.t("备份与恢复", "Backup & Restore"),
-                Some(i.t(
-                    "ZIP 备份包含应用数据、CLI 配置与中央 Skills 仓库",
-                    "ZIP bundles include app data, CLI configs and the central Skills repo",
-                )),
+                i.t("settings_backup.backup_restore"),
+                Some(i.t("settings_backup.zip_bundles_include_app")),
             ),
             transport_row,
             local_panel.unwrap_or_else(|| div().into_any_element()),
@@ -1294,7 +1267,7 @@ pub fn render_backup_rename_dialog(
                 .gap(px(8.0))
                 .child(button_l(
                     "backup-rename-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("settings_backup.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1305,7 +1278,7 @@ pub fn render_backup_rename_dialog(
                 ))
                 .child(button_l(
                     "backup-rename-save",
-                    i.t("保存", "Save"),
+                    i.t("settings_backup.save"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -1321,14 +1294,14 @@ pub fn render_backup_rename_dialog(
                                 let new_path = parent.join(&filename);
                                 if new_path.exists() && new_path != path {
                                     ws.ui.toast(
-                                        ws.i18n.t("同名备份文件已存在", "Backup with this name already exists").to_string(),
+                                        ws.i18n.t("settings_backup.backup_with_this_name").to_string(),
                                         true,
                                     );
                                 } else {
                                     match std::fs::rename(&path, &new_path) {
                                         Ok(()) => {
                                             ws.ui.toast(
-                                                ws.i18n.t("备份已重命名", "Backup renamed").to_string(),
+                                                ws.i18n.t("settings_backup.backup_renamed").to_string(),
                                                 false,
                                             );
                                         }
@@ -1347,7 +1320,7 @@ pub fn render_backup_rename_dialog(
 
     crate::pages::modal_scaffold(
         &t,
-        i.t("重命名备份快照", "Rename Backup Snapshot").as_ref(),
+        i.t("settings_backup.rename_backup_snapshot").as_ref(),
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {

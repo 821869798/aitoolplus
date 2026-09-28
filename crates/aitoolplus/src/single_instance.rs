@@ -122,7 +122,7 @@ pub fn pump_messages(
                                             workspace.ui.toast(
                                                 workspace
                                                     .i18n
-                                                    .t(
+                                                    .raw(
                                                         &format!("已导入供应商 {name}"),
                                                         &format!("imported provider {name}"),
                                                     )

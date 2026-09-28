@@ -30,7 +30,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
     let about_card = card(
         &t,
         vec![
-            section_title(&t, i.t("关于 AI ToolPlus", "About AI ToolPlus"), None),
+            section_title(&t, i.t("settings_about.about_ai_toolplus"), None),
             div()
                 .flex()
                 .flex_col()
@@ -59,10 +59,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     div()
                         .text_size(px(12.0))
                         .text_color(t.text_secondary)
-                        .child(i.t(
-                            "Rust + GPUI 原生多端 AI 辅助开发工具箱，全面对标 cc-switch 与 ai-toolbox",
-                            "Native Rust + GPUI developer toolkit, matching cc-switch and ai-toolbox",
-                        )),
+                        .child(i.t("settings_about.native_rust_gpui_developer")),
                 )
                 .into_any_element(),
             div()
@@ -84,14 +81,11 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 .text_size(px(12.5))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
-                                .child(i.t("数据存储目录：", "Data Storage Directory:")),
+                                .child(i.t("settings_about.data_storage_directory")),
                         )
                         .child(crate::components::badge(
                             &t,
-                            i.t(
-                                "~/.aitoolplus（统一用户数据目录，对标 CC-Switch）",
-                                "~/.aitoolplus (User Profile, CC-Switch Parity)",
-                            ),
+                            i.t("settings_about.aitoolplus_user_profile_cc"),
                             crate::components::BadgeKind::Success,
                         )),
                 )
@@ -103,7 +97,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         .flex_wrap()
                         .child(button_l(
                             "open-app-data-dir",
-                            i.t("打开应用数据目录", "Open AppData Dir"),
+                            i.t("settings_about.open_appdata_dir"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -115,7 +109,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         ))
                         .child(button_l(
                             "open-backups-dir",
-                            i.t("打开备份存储目录", "Open Backups Dir"),
+                            i.t("settings_about.open_backups_dir"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -127,7 +121,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         ))
                         .child(button_l(
                             "open-user-home-dir",
-                            i.t("打开配置根目录", "Open Config Root"),
+                            i.t("settings_about.open_config_root"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -144,11 +138,8 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
     let mut update_items = vec![
         section_title(
             &t,
-            i.t("软件更新与 CDN 镜像加速", "Software Updates & CDN Mirrors"),
-            Some(i.t(
-                "全面对标 cc-switch / ai-toolbox 更新机制，支持 GitHub 官方直连、国内高速镜像代理与自定义 CDN",
-                "Update engine matching cc-switch and ai-toolbox, supporting GitHub official, China mirrors, and custom CDNs",
-            )),
+            i.t("settings_about.software_updates_cdn_mirrors"),
+            Some(i.t("settings_about.update_engine_matching_cc")),
         ),
         // Row 1: Auto check toggle
         div()
@@ -159,11 +150,8 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
             .gap(px(16.0))
             .child(section_title(
                 &t,
-                i.t("启动时自动检查更新", "Check for Updates on Startup"),
-                Some(i.t(
-                    "应用启动 2.5 秒后在后台静默检查；绝不静默强制安装",
-                    "Checks releases quietly 2.5s after launch; never forces silent installation",
-                )),
+                i.t("settings_about.check_for_updates_on"),
+                Some(i.t("settings_about.checks_releases_quietly_2")),
             ))
             .child(toggle(
                 "auto-update-check-toggle",
@@ -187,16 +175,16 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 let current_mirror = ws.settings.update_mirror;
                 let current_mirror_name = match current_mirror {
                     aitoolplus_core::updater::UpdateMirror::GhProxy => {
-                        i.t("GhProxy 镜像加速 (gh-proxy.com)", "GhProxy Mirror (gh-proxy.com)")
+                        i.t("settings_about.ghproxy_mirror_gh_proxy_2")
                     }
                     aitoolplus_core::updater::UpdateMirror::Official => {
-                        i.t("GitHub 官方 (直连)", "GitHub Official (Direct)")
+                        i.t("settings_about.github_official_direct")
                     }
                 };
                 let is_open = ws.ui.update_mirror_dropdown_open;
                 let mirror_options = [
-                    (aitoolplus_core::updater::UpdateMirror::GhProxy, i.t("GhProxy 镜像加速 (gh-proxy.com)", "GhProxy Mirror (gh-proxy.com)"), crate::icons::CLOUD_DOWNLOAD_SVG),
-                    (aitoolplus_core::updater::UpdateMirror::Official, i.t("GitHub 官方 (直连)", "GitHub Official (Direct)"), crate::icons::GLOBE_SVG),
+                    (aitoolplus_core::updater::UpdateMirror::GhProxy, i.t("settings_about.ghproxy_mirror_gh_proxy_2"), crate::icons::CLOUD_DOWNLOAD_SVG),
+                    (aitoolplus_core::updater::UpdateMirror::Official, i.t("settings_about.github_official_direct"), crate::icons::GLOBE_SVG),
                 ];
                 let mirror_trigger = div()
                     .flex().items_center().justify_between().w_full()
@@ -228,8 +216,8 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 }).collect::<Vec<_>>();
                 div().flex().items_center().justify_between().w_full()
                     .child(div().flex().flex_col().gap(px(2.0))
-                        .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::MEDIUM).text_color(t.text_primary).child(i.t("下载加速镜像源：", "Download Mirror Source:")))
-                        .child(div().text_size(px(11.5)).text_color(t.text_secondary).child(i.t("国内网络推荐使用 gh-proxy.com 镜像加速，秒速完成下载", "GhProxy mirror (gh-proxy.com) recommended for high-speed downloads"))))
+                        .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::MEDIUM).text_color(t.text_primary).child(i.t("settings_about.download_mirror_source")))
+                        .child(div().text_size(px(11.5)).text_color(t.text_secondary).child(i.t("settings_about.ghproxy_mirror_gh_proxy"))))
                     .child(div().w(px(260.0)).child(
                         crate::components::MenuDrop::new("update-mirror-dropdown", is_open, &t, cx)
                             .align_end(true).menu_width(260.0)
@@ -279,7 +267,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     .text_color(t.text_primary)
                                     .child(format!(
                                         "{} v{}",
-                                        i.t("当前版本：", "Current:"),
+                                        i.t("settings_about.current"),
                                         version
                                     )),
                             )
@@ -287,20 +275,20 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 if inf.update_available {
                                     crate::components::badge(
                                         &t,
-                                        i.t("发现新版本", "Update Available"),
+                                        i.t("settings_about.update_available_2"),
                                         crate::components::BadgeKind::Warning,
                                     )
                                 } else {
                                     crate::components::badge(
                                         &t,
-                                        i.t("最新版本", "Latest"),
+                                        i.t("settings_about.latest"),
                                         crate::components::BadgeKind::Success,
                                     )
                                 }
                             } else {
                                 crate::components::badge(
                                     &t,
-                                    i.t("已就绪", "Ready"),
+                                    i.t("settings_about.ready"),
                                     crate::components::BadgeKind::Neutral,
                                 )
                             }),
@@ -312,20 +300,20 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             .child(if let Some(t_str) = last_check_text {
                                 format!(
                                     "{} {}",
-                                    i.t("上次检查时间：", "Last checked:"),
+                                    i.t("settings_about.last_checked"),
                                     t_str
                                 )
                             } else {
-                                i.t("尚未检查过更新", "Never checked").to_string()
+                                i.t("settings_about.never_checked").to_string()
                             }),
                     ),
             )
             .child(button_l(
                 "check-for-updates",
                 if is_checking {
-                    i.t("正在检查中…", "Checking…")
+                    i.t("settings_about.checking")
                 } else {
-                    i.t("检查更新", "Check for Updates")
+                    i.t("settings_about.check_for_updates")
                 },
                 if is_checking {
                     ButtonVariant::Secondary
@@ -368,7 +356,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     let message = if inf.update_available {
                                         if !aitoolplus_core::updater::is_installer_installed() {
                                             ws.i18n
-                                                .t(
+                                                .raw(
                                                     &format!(
                                                         "发现新版本 v{}（免安装版请前往 Release 页面下载）",
                                                         inf.latest_version
@@ -381,7 +369,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                                 .to_string()
                                         } else {
                                             ws.i18n
-                                                .t(
+                                                .raw(
                                                     &format!(
                                                         "发现新版本 v{}",
                                                         inf.latest_version
@@ -395,7 +383,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                         }
                                     } else {
                                         ws.i18n
-                                            .t("当前已是最新版", "Already up to date")
+                                            .t("settings_about.already_up_to_date")
                                             .to_string()
                                     };
                                     ws.ui.update_info = Some(inf);
@@ -436,7 +424,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         .text_color(t.danger)
                         .child(format!(
                             "{} {}",
-                            i.t("更新提示：", "Notice:"),
+                            i.t("settings_about.notice"),
                             err
                         )),
                 )
@@ -477,17 +465,14 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                         .text_color(t.text_primary)
                                         .child(format!(
                                             "{} v{} → v{}",
-                                            i.t(
-                                                "发现新版本：",
-                                                "Update Available:",
-                                            ),
+                                            i.t("settings_about.update_available"),
                                             info.current_version,
                                             info.latest_version
                                         )),
                                 )
                                 .child(crate::components::badge(
                                     &t,
-                                    i.t("可升级", "Available"),
+                                    i.t("settings_about.available"),
                                     crate::components::BadgeKind::Success,
                                 )),
                         )
@@ -497,7 +482,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 .text_color(t.text_muted)
                                 .child(format!(
                                     "{} {}",
-                                    i.t("发布时间：", "Released:"),
+                                    i.t("settings_about.released"),
                                     pd
                                 ))
                                 .into_any_element()
@@ -515,10 +500,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 .text_size(px(11.5))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_secondary)
-                                .child(i.t(
-                                    "更新日志 (Release Notes)：",
-                                    "Release Notes:",
-                                )),
+                                .child(i.t("settings_about.release_notes_2")),
                         )
                         .child(
                             div()
@@ -559,7 +541,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             .gap(px(8.0))
                             .child(crate::components::badge(
                                 &t,
-                                i.t("免安装版", "Portable"),
+                                i.t("settings_about.portable"),
                                 crate::components::BadgeKind::Accent,
                             ))
                             .child(
@@ -567,10 +549,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     .text_size(px(13.0))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(t.text_primary)
-                                    .child(i.t(
-                                        "检测到当前运行为免安装便携版",
-                                        "Detected portable standalone version",
-                                    )),
+                                    .child(i.t("settings_about.detected_portable_standalone_v")),
                             ),
                     )
                     .child(
@@ -578,10 +557,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             .text_size(px(12.0))
                             .line_height(gpui::relative(1.5))
                             .text_color(t.text_secondary)
-                            .child(i.t(
-                                "免安装版无需运行安装程序。请点击下方按钮前往 GitHub Release 页面下载最新的绿色压缩包 (aitoolplus-windows-x86_64.zip)，解压替换即可完成更新。所有用户配置与规则统一保存在 ~/.aitoolplus 目录，更新不会影响您的任何数据。",
-                                "Portable edition does not require an installer. Please click below to visit GitHub Release to download the latest zip archive (aitoolplus-windows-x86_64.zip) and extract it to replace the application files. User data in ~/.aitoolplus remains safe.",
-                            )),
+                            .child(i.t("settings_about.portable_edition_does_not")),
                     );
 
                 let portable_action_row = div()
@@ -591,7 +567,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     .flex_wrap()
                     .child(button_l(
                         "open-release-page-portable-btn",
-                        i.t("前往 Release 下载页面", "Go to Release Page"),
+                        i.t("settings_about.go_to_release_page"),
                         ButtonVariant::Primary,
                         &t,
                         cx,
@@ -600,10 +576,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 cx.open_url(&rel_url);
                                 ws.ui.toast(
                                     ws.i18n
-                                        .t(
-                                            "正在打开 Release 下载页面…",
-                                            "Opening Release page…",
-                                        )
+                                        .t("settings_about.opening_release_page")
                                         .to_string(),
                                     false,
                                 );
@@ -612,7 +585,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     ))
                     .child(button_l(
                         "copy-release-link-btn",
-                        i.t("复制下载链接", "Copy Link"),
+                        i.t("settings_about.copy_link"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -622,10 +595,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             ));
                             ws.ui.toast(
                                 ws.i18n
-                                    .t(
-                                        "已复制 Release 链接到剪贴板",
-                                        "Release link copied to clipboard",
-                                    )
+                                    .t("settings_about.release_link_copied_to")
                                     .to_string(),
                                 false,
                             );
@@ -633,7 +603,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     ))
                     .child(button_l(
                         "dismiss-update-version-btn",
-                        i.t("忽略此版本", "Dismiss Version"),
+                        i.t("settings_about.dismiss_version"),
                         ButtonVariant::Ghost,
                         &t,
                         cx,
@@ -643,7 +613,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             ws.ui.update_info = None;
                             ws.ui.toast(
                                 ws.i18n
-                                    .t("已忽略此版本更新", "Version update dismissed")
+                                    .t("settings_about.version_update_dismissed")
                                     .to_string(),
                                 false,
                             );
@@ -659,9 +629,9 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
 
                 let is_portable_asset = asset.name.ends_with(".zip");
                 let asset_type_label = if is_portable_asset {
-                    i.t("免安装版", "Portable")
+                    i.t("settings_about.portable")
                 } else {
-                    i.t("安装版", "Installer")
+                    i.t("settings_about.installer")
                 };
 
                 let asset_info_row = div()
@@ -672,18 +642,18 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     .text_color(t.text_secondary)
                     .child(format!(
                         "{} {} ({} - {})",
-                        i.t("更新包：", "Package:"),
+                        i.t("settings_about.package"),
                         asset.name,
                         asset_type_label,
                         if asset.size > 0 {
                             format_file_size(asset.size)
                         } else {
-                            i.t("完整包", "Full").to_string()
+                            i.t("settings_about.full").to_string()
                         }
                     ))
                     .child(format!(
                         "{} {}",
-                        i.t("加速源：", "Mirror:"),
+                        i.t("settings_about.mirror"),
                         mirror_label
                     ));
 
@@ -697,14 +667,14 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     let path_for_reveal = downloaded_path.clone();
                     let rel_url_ready = info.release_url.clone();
                     let ready_badge_text = if is_portable_asset {
-                        i.t("免安装更新已就绪", "Portable Update Ready")
+                        i.t("settings_about.portable_update_ready")
                     } else {
-                        i.t("安装包已就绪", "Installer Ready")
+                        i.t("settings_about.installer_ready")
                     };
                     let install_btn_text = if is_portable_asset {
-                        i.t("立即更新并重启", "Update & Restart Now")
+                        i.t("settings_about.update_restart_now")
                     } else {
-                        i.t("立即安装并重启", "Install & Restart Now")
+                        i.t("settings_about.install_restart_now")
                     };
 
                     let ready_row = div()
@@ -731,7 +701,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         ))
                         .child(button_l(
                             "reveal-update-folder",
-                            i.t("打开所在文件夹", "Open Folder"),
+                            i.t("settings_about.open_folder"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -745,7 +715,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         ))
                         .child(button_l(
                             "ready-release-notes-btn",
-                            i.t("查看发行说明", "Release Notes"),
+                            i.t("settings_about.release_notes"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -757,7 +727,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                         ))
                         .child(button_l(
                             "re-download-update-btn",
-                            i.t("重新下载", "Re-download"),
+                            i.t("settings_about.re_download"),
                             ButtonVariant::Ghost,
                             &t,
                             cx,
@@ -796,10 +766,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                         .text_color(t.text_primary)
                                         .child(format!(
                                             "{} {:.1}%",
-                                            i.t(
-                                                "正在下载更新包…",
-                                                "Downloading…",
-                                            ),
+                                            i.t("settings_about.downloading"),
                                             progress
                                         )),
                                 )
@@ -846,10 +813,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                         "--".into()
                                     }
                                 ))
-                                .child(i.t(
-                                    "支持断点续连与自动校验",
-                                    "Checksum verification enabled",
-                                )),
+                                .child(i.t("settings_about.checksum_verification_enabled")),
                         );
 
                     release_card = release_card.child(progress_card);
@@ -861,10 +825,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     let info_for_download = info.clone();
                     let download_btn = button_l(
                         "start-download-update",
-                        i.t(
-                            "立即下载更新包 (高速)",
-                            "Download Update (High Speed)",
-                        ),
+                        i.t("settings_about.download_update_high_speed"),
                         ButtonVariant::Primary,
                         &t,
                         cx,
@@ -961,7 +922,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                                 Some(path.clone());
                                             ws.ui.toast(
                                                 ws.i18n
-                                                    .t(
+                                                    .raw(
                                                         &format!(
                                                             "更新包下载完成并校验通过: {}",
                                                             path.display()
@@ -996,7 +957,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     let rel_url = info.release_url.clone();
                     let notes_btn = button_l(
                         "open-release-notes-btn",
-                        i.t("查看发行说明", "Release Notes"),
+                        i.t("settings_about.release_notes"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -1010,7 +971,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     let target_ver = info.latest_version.clone();
                     let dismiss_btn = button_l(
                         "dismiss-update-version-btn",
-                        i.t("忽略此版本", "Dismiss Version"),
+                        i.t("settings_about.dismiss_version"),
                         ButtonVariant::Ghost,
                         &t,
                         cx,
@@ -1020,7 +981,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             ws.ui.update_info = None;
                             ws.ui.toast(
                                 ws.i18n
-                                    .t(
+                                    .raw(
                                         &format!("已忽略 v{} 版本更新提醒", target_ver),
                                         &format!("Update v{} dismissed", target_ver),
                                     )
@@ -1041,10 +1002,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 .border_color(t.warning.opacity(0.4))
                                 .text_size(px(12.0))
                                 .text_color(t.warning)
-                                .child(i.t(
-                                    "提示：检测到当前应用通过 Scoop 安装，推荐在终端执行 'scoop update aitoolplus' 完成升级。",
-                                    "Note: Scoop-managed installation detected. Please upgrade via 'scoop update aitoolplus' in terminal.",
-                                )),
+                                .child(i.t("settings_about.note_scoop_managed_installatio")),
                         );
                     }
 
@@ -1076,7 +1034,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     .border_color(t.success.opacity(0.3))
                     .child(crate::components::badge(
                         &t,
-                        i.t("已是最新版本", "Up to Date"),
+                        i.t("settings_about.up_to_date"),
                         crate::components::BadgeKind::Success,
                     ))
                     .child(
@@ -1085,15 +1043,9 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             .text_color(t.text_secondary)
                             .child(format!(
                                 "{} v{} {}",
-                                i.t(
-                                    "当前安装的 AI ToolPlus",
-                                    "Currently installed AI ToolPlus"
-                                ),
+                                i.t("settings_about.currently_installed_ai_toolplu"),
                                 info.current_version,
-                                i.t(
-                                    "已是最新发布版本，暂无可用更新。",
-                                    "is the latest version, no update needed."
-                                )
+                                i.t("settings_about.is_the_latest_version")
                             )),
                     )
                     .into_any_element(),

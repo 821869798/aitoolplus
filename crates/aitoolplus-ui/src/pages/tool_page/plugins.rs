@@ -78,7 +78,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
     }
 
     let is_loading = ws.ui.grok_plugins_loading;
-    let refresh_label = i.t("刷新", "Refresh");
+    let refresh_label = i.t("tool_plugins.refresh");
 
     let (installed_count, can_enable_all, can_disable_all) =
         if let Some(Ok((installed, _))) = &ws.ui.grok_plugins {
@@ -97,7 +97,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
     if can_enable_all {
         header_actions = header_actions.child(button_l(
             "grok-plugins-enable-all",
-            i.t("全部启用", "Enable All"),
+            i.t("tool_plugins.enable_all"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -106,7 +106,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
                     Ok(count) => {
                         let msg = ws
                             .i18n
-                            .t(
+                            .raw(
                                 &format!("已启用 {count} 个插件"),
                                 &format!("enabled {count} plugins"),
                             )
@@ -124,7 +124,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
     if can_disable_all {
         header_actions = header_actions.child(button_l(
             "grok-plugins-disable-all",
-            i.t("全部停用", "Disable All"),
+            i.t("tool_plugins.disable_all"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -133,7 +133,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
                     Ok(count) => {
                         let msg = ws
                             .i18n
-                            .t(
+                            .raw(
                                 &format!("已停用 {count} 个插件"),
                                 &format!("disabled {count} plugins"),
                             )
@@ -171,8 +171,8 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
             .justify_between()
             .child(page_header(
                 &t,
-                i.t("已安装插件", "Installed Plugins"),
-                i.t(
+                i.t("tool_plugins.installed_plugins"),
+                i.raw(
                     &format!("管理已安装的 {} 个 Grok 插件", installed_count),
                     &format!("Manage {} installed Grok plugins", installed_count),
                 ),
@@ -195,7 +195,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
                         div()
                             .text_size(px(12.5))
                             .text_color(t.text_muted)
-                            .child(i.t("正在读取 Grok 插件…", "Loading Grok plugins…")),
+                            .child(i.t("tool_plugins.loading_grok_plugins")),
                     ),
             )
             .into_any_element();
@@ -207,7 +207,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
             return section
                 .child(crate::components::error_strip(
                     "opencode-plugins-read-err",
-                    i.t("插件读取失败", "plugins read failed"),
+                    i.t("tool_plugins.plugins_read_failed"),
                     &e,
                     &t,
                     cx,
@@ -259,16 +259,13 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
                         .text_size(px(14.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_primary)
-                        .child(i.t("没有已安装插件", "No installed plugins")),
+                        .child(i.t("tool_plugins.no_installed_plugins")),
                 )
                 .child(
                     div()
                         .text_size(px(12.0))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "可切换至「插件市场」标签页浏览并一键安装插件",
-                            "Switch to Marketplace tab to discover and install plugins",
-                        )),
+                        .child(i.t("tool_plugins.switch_to_marketplace_tab")),
                 ),
         );
     } else if filtered_plugins.is_empty() {
@@ -280,7 +277,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("未找到匹配的插件", "No matching plugins found")),
+                .child(i.t("tool_plugins.no_matching_plugins_found")),
         );
     } else {
         for plugin in filtered_plugins {
@@ -312,7 +309,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
             );
             header_row = header_row.child(badge(
                 &t,
-                if enabled { i.t("已启用", "Enabled") } else { i.t("已停用", "Disabled") },
+                if enabled { i.t("tool_plugins.enabled") } else { i.t("tool_plugins.disabled") },
                 if enabled { BadgeKind::Success } else { BadgeKind::Neutral },
             ));
             header_row = header_row.child(
@@ -350,7 +347,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
             // Action buttons
             header_row = header_row.child(button_l(
                 gpui::SharedString::from(format!("grok-toggle-{}", plugin.plugin_id)),
-                if enabled { i.t("停用", "Disable") } else { i.t("启用", "Enable") },
+                if enabled { i.t("tool_plugins.disable") } else { i.t("tool_plugins.enable") },
                 if enabled { ButtonVariant::Secondary } else { ButtonVariant::Primary },
                 &t,
                 cx,
@@ -369,7 +366,7 @@ pub(super) fn grok_installed_plugins_section(ws: &mut Workspace, cx: &mut Contex
             header_row = header_row.child(button_with_icon_l(
                 gpui::SharedString::from(format!("grok-del-{}", plugin.plugin_id)),
                 crate::icons::TRASH_SVG,
-                i.t("卸载", "Uninstall"),
+                i.t("tool_plugins.uninstall"),
                 ButtonVariant::Danger,
                 &t,
                 cx,
@@ -424,7 +421,7 @@ pub(super) fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Work
     }
 
     let is_loading = ws.ui.grok_plugins_loading;
-    let refresh_label = i.t("刷新", "Refresh");
+    let refresh_label = i.t("tool_plugins.refresh");
 
     let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
 
@@ -443,7 +440,7 @@ pub(super) fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Work
                         div()
                             .text_size(px(12.5))
                             .text_color(t.text_muted)
-                            .child(i.t("正在读取 Grok 插件市场…", "Loading Grok marketplace plugins…")),
+                            .child(i.t("tool_plugins.loading_grok_marketplace_plugi")),
                     ),
             )
             .into_any_element();
@@ -455,7 +452,7 @@ pub(super) fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Work
             return section
                 .child(crate::components::error_strip(
                     "opencode-market-read-err",
-                    i.t("插件市场读取失败", "marketplace read failed"),
+                    i.t("tool_plugins.marketplace_read_failed"),
                     &e,
                     &t,
                     cx,
@@ -498,9 +495,9 @@ pub(super) fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Work
             .text_color(t.text_muted)
             .child(format!(
                 "{} {} {}",
-                i.t("匹配到", "Matched"),
+                i.t("tool_plugins.matched"),
                 filtered_mkt.len(),
-                i.t("个插件", "plugins")
+                i.t("tool_plugins.plugins")
             )),
     );
     toolbar = toolbar.child(button_with_icon_loading_l(
@@ -529,7 +526,7 @@ pub(super) fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Work
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("暂无市场插件", "No marketplace plugins available")),
+                .child(i.t("tool_plugins.no_marketplace_plugins_availab")),
         );
     } else if filtered_mkt.is_empty() {
         section = section.child(
@@ -540,7 +537,7 @@ pub(super) fn grok_marketplace_section(ws: &mut Workspace, cx: &mut Context<Work
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("未找到匹配的市场插件", "No matching marketplace plugins found")),
+                .child(i.t("tool_plugins.no_matching_marketplace_plugin")),
         );
     } else {
         let items: std::sync::Arc<Vec<aitoolplus_core::grok_plugins::GrokPlugin>> =
@@ -631,7 +628,7 @@ pub(super) fn render_virtual_grok_marketplace_card(
             .child(plugin.name.clone()),
     );
     if is_installed {
-        row1 = row1.child(badge(t, i.t("已安装", "Installed"), BadgeKind::Success));
+        row1 = row1.child(badge(t, i.t("tool_plugins.installed"), BadgeKind::Success));
     }
     row1 = row1.child(
         div()
@@ -683,7 +680,7 @@ pub(super) fn render_virtual_grok_marketplace_card(
                         );
                     });
                 })
-                .child(i.t("安装并信任", "Install & Trust")),
+                .child(i.t("tool_plugins.install_trust")),
         );
     } else {
         row1 = row1.child(
@@ -698,7 +695,7 @@ pub(super) fn render_virtual_grok_marketplace_card(
                 .border_color(t.card_border)
                 .text_size(px(11.5))
                 .text_color(t.text_muted)
-                .child(i.t("已安装", "Installed")),
+                .child(i.t("tool_plugins.installed")),
         );
     }
 
@@ -753,7 +750,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
     }
 
     let is_loading = ws.ui.codex_plugins_loading;
-    let refresh_label = i.t("刷新", "Refresh");
+    let refresh_label = i.t("tool_plugins.refresh");
 
     let (installed_count, can_enable_all, can_disable_all) =
         if let Some(Ok(data)) = &ws.ui.codex_plugins {
@@ -772,7 +769,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
     if can_enable_all {
         header_actions = header_actions.child(button_l(
             "codex-plugins-enable-all",
-            i.t("全部启用", "Enable All"),
+            i.t("tool_plugins.enable_all"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -781,7 +778,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                     Ok(count) => {
                         let msg = ws
                             .i18n
-                            .t(
+                            .raw(
                                 &format!("已启用 {count} 个插件"),
                                 &format!("enabled {count} plugins"),
                             )
@@ -799,7 +796,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
     if can_disable_all {
         header_actions = header_actions.child(button_l(
             "codex-plugins-disable-all",
-            i.t("全部停用", "Disable All"),
+            i.t("tool_plugins.disable_all"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -808,7 +805,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                     Ok(count) => {
                         let msg = ws
                             .i18n
-                            .t(
+                            .raw(
                                 &format!("已停用 {count} 个插件"),
                                 &format!("disabled {count} plugins"),
                             )
@@ -846,8 +843,8 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
             .justify_between()
             .child(page_header(
                 &t,
-                i.t("已安装插件", "Installed Plugins"),
-                i.t(
+                i.t("tool_plugins.installed_plugins"),
+                i.raw(
                     &format!("管理已安装的 {} 个 Codex 插件", installed_count),
                     &format!("Manage {} installed Codex plugins", installed_count),
                 ),
@@ -870,7 +867,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                         div()
                             .text_size(px(12.5))
                             .text_color(t.text_muted)
-                            .child(i.t("正在读取 Codex 插件…", "Loading Codex plugins…")),
+                            .child(i.t("tool_plugins.loading_codex_plugins")),
                     ),
             )
             .into_any_element();
@@ -882,7 +879,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
             return section
                 .child(crate::components::error_strip(
                     "codex-plugins-read-err",
-                    i.t("插件读取失败", "plugins read failed"),
+                    i.t("tool_plugins.plugins_read_failed"),
                     &e,
                     &t,
                     cx,
@@ -935,16 +932,13 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                         .text_size(px(14.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_primary)
-                        .child(i.t("没有已安装插件", "No installed plugins")),
+                        .child(i.t("tool_plugins.no_installed_plugins")),
                 )
                 .child(
                     div()
                         .text_size(px(12.0))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "可切换至「插件市场」标签页浏览并一键安装插件",
-                            "Switch to Marketplace tab to discover and install plugins",
-                        )),
+                        .child(i.t("tool_plugins.switch_to_marketplace_tab")),
                 ),
         );
     } else if filtered_plugins.is_empty() {
@@ -956,7 +950,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("未找到匹配的插件", "No matching plugins found")),
+                .child(i.t("tool_plugins.no_matching_plugins_found")),
         );
     } else {
         for plugin in filtered_plugins {
@@ -988,7 +982,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
             );
             header_row = header_row.child(badge(
                 &t,
-                if enabled { i.t("已启用", "Enabled") } else { i.t("已停用", "Disabled") },
+                if enabled { i.t("tool_plugins.enabled") } else { i.t("tool_plugins.disabled") },
                 if enabled { BadgeKind::Success } else { BadgeKind::Neutral },
             ));
             header_row = header_row.child(
@@ -1026,7 +1020,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
             // Action buttons
             header_row = header_row.child(button_l(
                 gpui::SharedString::from(format!("codex-toggle-{}", plugin.plugin_id)),
-                if enabled { i.t("停用", "Disable") } else { i.t("启用", "Enable") },
+                if enabled { i.t("tool_plugins.disable") } else { i.t("tool_plugins.enable") },
                 if enabled { ButtonVariant::Secondary } else { ButtonVariant::Primary },
                 &t,
                 cx,
@@ -1035,9 +1029,9 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                     match aitoolplus_core::codex_plugins::set_plugin_enabled(&ws.paths, &id, !enabled) {
                         Ok(_) => {
                             let msg = if !enabled {
-                                ws.i18n.t("插件已启用", "plugin enabled")
+                                ws.i18n.t("tool_plugins.plugin_enabled_2")
                             } else {
-                                ws.i18n.t("插件已停用", "plugin disabled")
+                                ws.i18n.t("tool_plugins.plugin_disabled_2")
                             };
                             ws.ui.toast(msg.to_string(), false);
                             ws.ui.codex_plugins = None;
@@ -1051,7 +1045,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
             header_row = header_row.child(button_with_icon_l(
                 gpui::SharedString::from(format!("codex-del-{}", plugin.plugin_id)),
                 crate::icons::TRASH_SVG,
-                i.t("卸载", "Uninstall"),
+                i.t("tool_plugins.uninstall"),
                 ButtonVariant::Danger,
                 &t,
                 cx,
@@ -1059,7 +1053,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                     let id = pid_del.clone();
                     match aitoolplus_core::codex_plugins::uninstall_plugin(&ws.paths, &id) {
                         Ok(_) => {
-                            ws.ui.toast(ws.i18n.t("插件已卸载", "plugin uninstalled").to_string(), false);
+                            ws.ui.toast(ws.i18n.t("tool_plugins.plugin_uninstalled").to_string(), false);
                             ws.ui.codex_plugins = None;
                             load_codex_plugins(ws, cx);
                         }
@@ -1085,7 +1079,7 @@ pub(super) fn codex_installed_plugins_section(ws: &mut Workspace, cx: &mut Conte
                     div()
                         .text_size(px(11.0))
                         .text_color(t.text_muted)
-                        .child(format!("{}: {}", i.t("路径", "Path"), path)),
+                        .child(format!("{}: {}", i.t("tool_plugins.path"), path)),
                 );
             }
 
@@ -1106,7 +1100,7 @@ pub(super) fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wor
     }
 
     let is_loading = ws.ui.codex_plugins_loading;
-    let refresh_label = i.t("刷新", "Refresh");
+    let refresh_label = i.t("tool_plugins.refresh");
 
     let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
 
@@ -1125,7 +1119,7 @@ pub(super) fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wor
                         div()
                             .text_size(px(12.5))
                             .text_color(t.text_muted)
-                            .child(i.t("正在读取 Codex 插件市场…", "Loading Codex marketplace plugins…")),
+                            .child(i.t("tool_plugins.loading_codex_marketplace_plug")),
                     ),
             )
             .into_any_element();
@@ -1137,7 +1131,7 @@ pub(super) fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wor
             return section
                 .child(crate::components::error_strip(
                     "codex-market-read-err",
-                    i.t("插件市场读取失败", "marketplace read failed"),
+                    i.t("tool_plugins.marketplace_read_failed"),
                     &e,
                     &t,
                     cx,
@@ -1183,9 +1177,9 @@ pub(super) fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wor
             .text_color(t.text_muted)
             .child(format!(
                 "{} {} {}",
-                i.t("匹配到", "Matched"),
+                i.t("tool_plugins.matched"),
                 filtered_mkt.len(),
-                i.t("个插件", "plugins")
+                i.t("tool_plugins.plugins")
             )),
     );
     toolbar = toolbar.child(button_with_icon_loading_l(
@@ -1214,7 +1208,7 @@ pub(super) fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wor
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("暂无市场插件", "No marketplace plugins available")),
+                .child(i.t("tool_plugins.no_marketplace_plugins_availab")),
         );
     } else if filtered_mkt.is_empty() {
         section = section.child(
@@ -1225,7 +1219,7 @@ pub(super) fn codex_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wor
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("未找到匹配的市场插件", "No matching marketplace plugins found")),
+                .child(i.t("tool_plugins.no_matching_marketplace_plugin")),
         );
     } else {
         let items: std::sync::Arc<Vec<aitoolplus_core::codex_plugins::CodexMarketplacePlugin>> =
@@ -1332,7 +1326,7 @@ pub(super) fn render_virtual_codex_marketplace_card(
         header_row = header_row.child(plugin_tag(cat.clone(), t.accent_subtle, t.accent));
     }
     if is_installed {
-        header_row = header_row.child(badge(t, i.t("已安装", "Installed"), BadgeKind::Success));
+        header_row = header_row.child(badge(t, i.t("tool_plugins.installed"), BadgeKind::Success));
     }
     header_row = header_row.child(div().flex_1());
 
@@ -1349,7 +1343,7 @@ pub(super) fn render_virtual_codex_marketplace_card(
                 .border_color(t.card_border)
                 .text_size(px(11.5))
                 .text_color(t.text_muted)
-                .child(i.t("已安装", "Installed")),
+                .child(i.t("tool_plugins.installed")),
         );
     } else {
         let ws_entity = ws_entity.clone();
@@ -1378,7 +1372,7 @@ pub(super) fn render_virtual_codex_marketplace_card(
                     let _ = ws_entity.update(cx, |ws, cx| {
                         match aitoolplus_core::codex_plugins::install_plugin(&ws.paths, &pid) {
                             Ok(_) => {
-                                ws.ui.toast(ws.i18n.t("插件已安装", "plugin installed").to_string(), false);
+                                ws.ui.toast(ws.i18n.t("tool_plugins.plugin_installed").to_string(), false);
                                 ws.ui.codex_plugins = None;
                                 load_codex_plugins(ws, cx);
                             }
@@ -1387,7 +1381,7 @@ pub(super) fn render_virtual_codex_marketplace_card(
                         cx.notify();
                     });
                 })
-                .child(i.t("安装", "Install")),
+                .child(i.t("tool_plugins.install")),
         );
     }
 
@@ -1423,7 +1417,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
     }
 
     let is_loading = ws.ui.claude_plugins_loading;
-    let refresh_label = i.t("刷新", "Refresh");
+    let refresh_label = i.t("tool_plugins.refresh");
 
     let (installed_count, can_enable_all, can_disable_all) =
         if let Some(Ok(data)) = &ws.ui.claude_plugins {
@@ -1451,7 +1445,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
     if can_enable_all {
         header_actions = header_actions.child(button_l(
             "plugins-enable-all-top",
-            i.t("全部启用", "Enable All"),
+            i.t("tool_plugins.enable_all"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -1460,7 +1454,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                     Ok((count, _)) => {
                         let msg = ws
                             .i18n
-                            .t(
+                            .raw(
                                 &format!("已启用 {count} 个插件"),
                                 &format!("enabled {count} plugins"),
                             )
@@ -1478,7 +1472,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
     if can_disable_all {
         header_actions = header_actions.child(button_l(
             "plugins-disable-all-top",
-            i.t("全部停用", "Disable All"),
+            i.t("tool_plugins.disable_all"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -1487,7 +1481,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                     Ok((count, _)) => {
                         let msg = ws
                             .i18n
-                            .t(
+                            .raw(
                                 &format!("已停用 {count} 个插件"),
                                 &format!("disabled {count} plugins"),
                             )
@@ -1521,7 +1515,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
     header_actions = header_actions.child(button_with_icon_l(
         "claude-plugins-docs-btn",
         crate::icons::BOOK_OPEN_SVG,
-        i.t("插件文档", "Docs"),
+        i.t("tool_plugins.docs"),
         ButtonVariant::Ghost,
         &t,
         cx,
@@ -1537,8 +1531,8 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
             .justify_between()
             .child(page_header(
                 &t,
-                i.t("已安装插件", "Installed Plugins"),
-                i.t(
+                i.t("tool_plugins.installed_plugins"),
+                i.raw(
                     &format!("管理已安装的 {} 个 Claude Code 插件", installed_count),
                     &format!("Manage {} installed Claude Code plugins", installed_count),
                 ),
@@ -1562,7 +1556,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                         div()
                             .text_size(px(12.5))
                             .text_color(t.text_muted)
-                            .child(i.t("正在读取插件信息…", "Loading plugins…")),
+                            .child(i.t("tool_plugins.loading_plugins")),
                     ),
             )
             .into_any_element();
@@ -1574,7 +1568,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
             return section
                 .child(crate::components::error_strip(
                     "claude-plugins-read-err",
-                    i.t("插件读取失败", "plugins read failed"),
+                    i.t("tool_plugins.plugins_read_failed"),
                     &e,
                     &t,
                     cx,
@@ -1639,16 +1633,13 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                                 .text_size(px(14.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
-                                .child(i.t("没有已安装插件", "No installed plugins")),
+                                .child(i.t("tool_plugins.no_installed_plugins")),
                         )
                         .child(
                             div()
                                 .text_size(px(12.0))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "可切换至「插件市场」标签页浏览并一键安装插件",
-                                    "Switch to Marketplaces tab to discover and install plugins",
-                                )),
+                                .child(i.t("tool_plugins.switch_to_marketplaces_tab")),
                         ),
                 );
             } else if filtered_plugins.is_empty() {
@@ -1660,7 +1651,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                         .p(px(32.0))
                         .text_size(px(12.5))
                         .text_color(t.text_muted)
-                        .child(i.t("未找到匹配的插件", "No matching plugins found")),
+                        .child(i.t("tool_plugins.no_matching_plugins_found")),
                 );
             } else {
                 for plugin in filtered_plugins {
@@ -1699,11 +1690,11 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                     );
 
                     if user_installed && enabled {
-                        header_row = header_row.child(badge(&t, i.t("已启用", "Enabled"), BadgeKind::Success));
+                        header_row = header_row.child(badge(&t, i.t("tool_plugins.enabled"), BadgeKind::Success));
                     } else if user_installed && !enabled {
-                        header_row = header_row.child(badge(&t, i.t("已停用", "Disabled"), BadgeKind::Neutral));
+                        header_row = header_row.child(badge(&t, i.t("tool_plugins.disabled"), BadgeKind::Neutral));
                     } else {
-                        header_row = header_row.child(badge(&t, i.t("非用户级", "Non-user scope"), BadgeKind::Warning));
+                        header_row = header_row.child(badge(&t, i.t("tool_plugins.non_user_scope"), BadgeKind::Warning));
                     }
 
                     header_row = header_row.child(
@@ -1744,7 +1735,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                     if user_installed {
                         header_row = header_row.child(button_l(
                             gpui::SharedString::from(format!("plugin-toggle-{}", plugin.plugin_id)),
-                            if enabled { i.t("停用", "Disable") } else { i.t("启用", "Enable") },
+                            if enabled { i.t("tool_plugins.disable") } else { i.t("tool_plugins.enable") },
                             if enabled { ButtonVariant::Secondary } else { ButtonVariant::Primary },
                             &t,
                             cx,
@@ -1757,9 +1748,9 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                                     ) {
                                         Ok(_) => {
                                             let msg = if target {
-                                                ws.i18n.t("已启用插件", "Plugin enabled")
+                                                ws.i18n.t("tool_plugins.plugin_enabled")
                                             } else {
-                                                ws.i18n.t("已停用插件", "Plugin disabled")
+                                                ws.i18n.t("tool_plugins.plugin_disabled")
                                             };
                                             ws.ui.toast(msg.to_string(), false);
                                             ws.ui.claude_plugins = None;
@@ -1775,7 +1766,7 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                         header_row = header_row.child(button_with_icon_l(
                             gpui::SharedString::from(format!("plugin-del-{}", plugin.plugin_id)),
                             crate::icons::TRASH_SVG,
-                            i.t("卸载", "Uninstall"),
+                            i.t("tool_plugins.uninstall"),
                             ButtonVariant::Danger,
                             &t,
                             cx,
@@ -1828,10 +1819,10 @@ pub(super) fn claude_installed_plugins_section(ws: &mut Workspace, cx: &mut Cont
                     // Row 4: Meta info (Scopes + Install Path)
                     let mut meta_items = vec![];
                     if !plugin.install_scopes.is_empty() {
-                        meta_items.push(format!("{}: {}", i.t("作用域", "Scopes"), plugin.install_scopes.join(", ")));
+                        meta_items.push(format!("{}: {}", i.t("tool_plugins.scopes"), plugin.install_scopes.join(", ")));
                     }
                     if let Some(path) = &plugin.install_path {
-                        meta_items.push(format!("{}: {}", i.t("路径", "Path"), path));
+                        meta_items.push(format!("{}: {}", i.t("tool_plugins.path"), path));
                     }
                     if !meta_items.is_empty() {
                         card = card.child(
@@ -1878,7 +1869,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
     }
 
     let is_loading = ws.ui.claude_plugins_loading;
-    let refresh_label = i.t("刷新", "Refresh");
+    let refresh_label = i.t("tool_plugins.refresh");
 
     let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
 
@@ -1897,7 +1888,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
                         div()
                             .text_size(px(12.5))
                             .text_color(t.text_muted)
-                            .child(i.t("正在读取插件市场…", "Loading marketplace plugins…")),
+                            .child(i.t("tool_plugins.loading_marketplace_plugins")),
                     ),
             )
             .into_any_element();
@@ -1909,7 +1900,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
             return section
                 .child(crate::components::error_strip(
                     "claude-market-read-err",
-                    i.t("插件市场读取失败", "marketplace read failed"),
+                    i.t("tool_plugins.marketplace_read_failed"),
                     &e,
                     &t,
                     cx,
@@ -1973,16 +1964,16 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
             .text_color(t.text_muted)
             .child(format!(
                 "{} {} {}",
-                i.t("匹配到", "Matched"),
+                i.t("tool_plugins.matched"),
                 filtered_mkt.len(),
-                i.t("个插件", "plugins")
+                i.t("tool_plugins.plugins")
             )),
     );
 
     let mkt_btn_label = if is_expanded {
-        i.t("收起市场源 ▴", "Collapse Sources ▴")
+        i.t("tool_plugins.collapse_sources")
     } else {
-        i.t(
+        i.raw(
             &format!("管理市场源 ({}) ▾", data.marketplaces.len()),
             &format!("Manage Sources ({}) ▾", data.marketplaces.len()),
         )
@@ -2080,9 +2071,9 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
                             ) {
                                 Ok(_) => {
                                     let msg = if target {
-                                        ws.i18n.t("已开启自动更新", "Auto-update enabled")
+                                        ws.i18n.t("tool_plugins.auto_update_enabled")
                                     } else {
-                                        ws.i18n.t("已关闭自动更新", "Auto-update disabled")
+                                        ws.i18n.t("tool_plugins.auto_update_disabled")
                                     };
                                     ws.ui.toast(msg.to_string(), false);
                                     ws.ui.claude_plugins = None;
@@ -2098,7 +2089,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
 
             actions = actions.child(button_l(
                 gpui::SharedString::from(format!("mkt-upd-{}", market.name)),
-                i.t("更新", "Update"),
+                i.t("tool_plugins.update"),
                 ButtonVariant::Secondary,
                 &t,
                 cx,
@@ -2127,7 +2118,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
             actions = actions.child(button_with_icon_l(
                 gpui::SharedString::from(format!("mkt-del-{}", market.name)),
                 crate::icons::TRASH_SVG,
-                i.t("移除", "Remove"),
+                i.t("tool_plugins.remove"),
                 ButtonVariant::Danger,
                 &t,
                 cx,
@@ -2166,7 +2157,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
                 .child(button_with_icon_l(
                     "mkt-add-btn",
                     crate::icons::PLUS_SVG,
-                    i.t("添加市场", "Add"),
+                    i.t("tool_plugins.add"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2177,7 +2168,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
                             val
                         });
                         if src.is_empty() {
-                            let msg = ws.i18n.t("请输入来源", "source required").to_string();
+                            let msg = ws.i18n.t("tool_plugins.source_required").to_string();
                             ws.ui.toast(msg, true);
                             cx.notify();
                             return;
@@ -2212,7 +2203,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("暂无市场插件", "No marketplace plugins available")),
+                .child(i.t("tool_plugins.no_marketplace_plugins_availab")),
         );
     } else if filtered_mkt.is_empty() {
         section = section.child(
@@ -2223,7 +2214,7 @@ pub(super) fn claude_marketplace_section(ws: &mut Workspace, cx: &mut Context<Wo
                 .p(px(32.0))
                 .text_size(px(12.5))
                 .text_color(t.text_muted)
-                .child(i.t("未找到匹配的市场插件", "No matching marketplace plugins found")),
+                .child(i.t("tool_plugins.no_matching_marketplace_plugin")),
         );
     } else {
         let items: std::sync::Arc<Vec<aitoolplus_core::claude_plugins::MarketplacePlugin>> =
@@ -2360,9 +2351,9 @@ pub(super) fn render_virtual_marketplace_card(
         header_row = header_row.child(badge(
             t,
             if is_user_installed {
-                i.t("已安装", "Installed")
+                i.t("tool_plugins.installed")
             } else {
-                i.t("项目级已安装", "Installed (other scope)")
+                i.t("tool_plugins.installed_other_scope")
             },
             BadgeKind::Success,
         ));
@@ -2384,7 +2375,7 @@ pub(super) fn render_virtual_marketplace_card(
                 .border_color(t.card_border)
                 .text_size(px(11.5))
                 .text_color(t.text_muted)
-                .child(i.t("已安装", "Installed")),
+                .child(i.t("tool_plugins.installed")),
         );
     } else {
         let ws_entity = ws_entity.clone();
@@ -2415,7 +2406,7 @@ pub(super) fn render_virtual_marketplace_card(
                         .size(px(13.0))
                         .text_color(gpui::white()),
                 )
-                .child(i.t("安装", "Install"))
+                .child(i.t("tool_plugins.install"))
                 .on_click(move |_ev, _win, cx| {
                     let id = to_install.clone();
                     let success_zh = format!("插件 {id} 已安装");
@@ -2504,7 +2495,7 @@ pub(super) fn render_virtual_marketplace_card(
                         .size(px(11.0))
                         .text_color(t.text_secondary),
                 )
-                .child(i.t("主页", "Homepage"))
+                .child(i.t("tool_plugins.homepage"))
                 .on_click(move |_ev, _win, _cx| {
                     open_in_browser(&hp_clone);
                 }),

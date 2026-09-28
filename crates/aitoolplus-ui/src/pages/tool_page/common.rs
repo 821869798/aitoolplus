@@ -37,7 +37,7 @@ pub(super) fn spawn_tool_action<F>(
             match result {
                 Ok(()) => {
                     workspace.ui.toast(
-                        workspace.i18n.t(&success_zh, &success_en).to_string(),
+                        workspace.i18n.raw(&success_zh, &success_en).to_string(),
                         false,
                     );
                     if let Some(tool) = target {

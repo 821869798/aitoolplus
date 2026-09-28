@@ -34,9 +34,9 @@ pub(super) fn common_section(
     };
 
     let common_is_toml = tool == ToolId::Codex;
-    let save_label = i.t("保存并应用通用配置", "Save & Apply Common Config");
-    let format_label = i.t("格式化", "Format");
-    let extract_label = i.t("从当前文件读取", "Read Current File");
+    let save_label = i.t("tool_runtime.save_apply_common_config");
+    let format_label = i.t("tool_runtime.format");
+    let extract_label = i.t("tool_runtime.read_current_file");
 
     div()
         .flex()
@@ -44,11 +44,8 @@ pub(super) fn common_section(
         .gap(px(12.0))
         .child(section_title(
             &t,
-            i.t(
-                "通用配置（与供应商配置合并）",
-                "Common Config (merged with provider)",
-            ),
-            Some(i.t(
+            i.t("tool_runtime.common_config_merged_with"),
+            Some(i.raw(
                 if common_is_toml {
                     "此 TOML 会作为基础层，与所选供应商配置合并后写入"
                 } else {
@@ -131,7 +128,7 @@ pub(super) fn common_section(
                                 editor.update(cx, |ta, cx| ta.set_text_silent(content, cx));
                             }
                             Err(_) => {
-                                let msg = ws.i18n.t("读取失败", "read failed").to_string();
+                                let msg = ws.i18n.t("tool_runtime.read_failed").to_string();
                                 ws.ui.toast(msg, true);
                             }
                         }
@@ -186,7 +183,7 @@ pub(super) fn common_section(
                                 }
                                 ws.persist_store();
                                 let msg =
-                                    ws.i18n.t("已保存并应用", "saved and applied").to_string();
+                                    ws.i18n.t("tool_runtime.saved_and_applied").to_string();
                                 ws.ui.toast(msg, false);
                             }
                             Err(error) => {
@@ -239,7 +236,7 @@ pub fn render_runtime_edit_dialog(
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "config".into());
 
-    let title = i.t(
+    let title = i.raw(
         &format!("编辑配置文件 - {file_name}"),
         &format!("Edit Config - {file_name}"),
     );
@@ -284,7 +281,7 @@ pub fn render_runtime_edit_dialog(
                 .pt(px(4.0))
                 .child(button_l(
                     "runtime-edit-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("tool_runtime.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -295,7 +292,7 @@ pub fn render_runtime_edit_dialog(
                 ))
                 .child(button_l(
                     "runtime-edit-save",
-                    i.t("保存更改", "Save Changes"),
+                    i.t("tool_runtime.save_changes"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -312,10 +309,7 @@ pub fn render_runtime_edit_dialog(
                                     ws.ui.runtime_edit_dialog = None;
                                     let msg = ws
                                         .i18n
-                                        .t(
-                                            "配置文件已成功保存",
-                                            "config file saved successfully",
-                                        )
+                                        .t("tool_runtime.config_file_saved_successfully")
                                         .to_string();
                                     ws.ui.toast(msg, false);
                                 }
@@ -378,15 +372,12 @@ pub(super) fn runtime_section(
             .justify_between()
             .child(page_header(
                 &t,
-                i.t("运行时文件", "Runtime Files"),
-                i.t(
-                    "查看、在外部编辑器打开或在线直接编辑工具的真实配置文件",
-                    "Inspect, reveal, open in editor, or edit real tool config files",
-                ),
+                i.t("tool_runtime.runtime_files"),
+                i.t("tool_runtime.inspect_reveal_open_in"),
             ))
             .child(button_l(
                 "runtime-refresh-btn",
-                i.t("刷新", "Refresh"),
+                i.t("tool_runtime.refresh"),
                 ButtonVariant::Secondary,
                 &t,
                 cx,
@@ -401,7 +392,7 @@ pub(super) fn runtime_section(
         section = section.child(crate::components::empty_state_svg(
             &t,
             crate::icons::FILE_TEXT_SVG,
-            i.t("该工具没有已知配置文件", "No known config files"),
+            i.t("tool_runtime.no_known_config_files"),
             "",
         ));
         return section.into_any_element();
@@ -446,9 +437,9 @@ pub(super) fn runtime_section(
                                 .child(badge(
                                     &t,
                                     if exists {
-                                        i.t("存在", "exists")
+                                        i.t("tool_runtime.exists")
                                     } else {
-                                        i.t("缺失", "missing")
+                                        i.t("tool_runtime.missing")
                                     },
                                     if exists {
                                         BadgeKind::Success
@@ -477,7 +468,7 @@ pub(super) fn runtime_section(
                                 .gap(px(4.0))
                                 .child(button_l(
                                     gpui::SharedString::from(format!("runtime-reveal-{idx}")),
-                                    i.t("定位", "Reveal"),
+                                    i.t("tool_runtime.reveal"),
                                     ButtonVariant::Secondary,
                                     &t,
                                     cx,
@@ -487,7 +478,7 @@ pub(super) fn runtime_section(
                                 ))
                                 .child(button_l(
                                     gpui::SharedString::from(format!("runtime-open-{idx}")),
-                                    i.t("打开", "Open"),
+                                    i.t("tool_runtime.open"),
                                     ButtonVariant::Secondary,
                                     &t,
                                     cx,
@@ -497,7 +488,7 @@ pub(super) fn runtime_section(
                                 ))
                                 .child(button_l(
                                     gpui::SharedString::from(format!("runtime-copy-{idx}")),
-                                    i.t("复制路径", "Copy Path"),
+                                    i.t("tool_runtime.copy_path"),
                                     ButtonVariant::Secondary,
                                     &t,
                                     cx,
@@ -509,7 +500,7 @@ pub(super) fn runtime_section(
                                             ));
                                             let msg = ws
                                                 .i18n
-                                                .t("路径已复制", "path copied")
+                                                .t("tool_runtime.path_copied")
                                                 .to_string();
                                             ws.ui.toast(msg, false);
                                             cx.notify();
@@ -519,9 +510,9 @@ pub(super) fn runtime_section(
                                 .child(button_l(
                                     gpui::SharedString::from(format!("runtime-edit-{idx}")),
                                     if exists {
-                                        i.t("在线编辑", "Edit")
+                                        i.t("tool_runtime.edit")
                                     } else {
-                                        i.t("创建文件", "Create")
+                                        i.t("tool_runtime.create")
                                     },
                                     if exists {
                                         ButtonVariant::Primary
@@ -581,10 +572,7 @@ pub(super) fn runtime_section(
                         .bg(t.input_bg)
                         .text_size(px(11.5))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "文件当前不存在，点击右上角“创建文件”或“在线编辑”可直接初始化保存。",
-                            "File does not exist yet. Click Create or Edit above to initialize it.",
-                        ))
+                        .child(i.t("tool_runtime.file_does_not_exist"))
                         .into_any_element()
                 }),
         );
@@ -649,15 +637,12 @@ pub(super) fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                 .w_full()
                 .child(section_title(
                     &t,
-                    i.t("模型设置", "Model Settings"),
-                    Some(i.t(
-                        "写入 settings.json 的 defaultProvider / defaultModel / defaultThinkingLevel",
-                        "writes settings.json defaultProvider / defaultModel / defaultThinkingLevel",
-                    )),
+                    i.t("tool_runtime.model_settings"),
+                    Some(i.t("tool_runtime.writes_settings_json_defaultpr")),
                 ))
                 .child(button_l(
                     "pi-ms-save",
-                    i.t("保存模型设置", "Save Model Settings"),
+                    i.t("tool_runtime.save_model_settings"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -690,7 +675,7 @@ pub(super) fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                             Ok(_) => {
                                 ws.ui.toast(
                                     ws.i18n
-                                        .t("模型设置已保存", "Model settings saved")
+                                        .t("tool_runtime.model_settings_saved")
                                         .to_string(),
                                     false,
                                 );
@@ -743,7 +728,7 @@ pub(super) fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
         (Err(e), _) | (_, Err(e)) => {
             section = section.child(crate::components::error_strip(
                 "pi-cfg-read-err",
-                i.t("配置读取失败", "Config read failed"),
+                i.t("tool_runtime.config_read_failed"),
                 &e,
                 &t,
                 cx,
@@ -776,12 +761,12 @@ pub(super) fn pi_searchable_select(
 
     components::fused_combobox(
         id,
-        Some(i.t(label, label)),
+        Some(i.raw(label, label)),
         input_entity,
         is_open,
         is_typing,
         options,
-        Some(i.t("无匹配项", "No matches found")),
+        Some(i.t("tool_runtime.no_matches_found")),
         &t,
         cx,
         move |ws, window, cx| {
@@ -870,11 +855,8 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                 .w_full()
                 .child(section_title(
                     &t,
-                    i.t("Pi 其他设置 (settings.json)", "Pi Other Settings (settings.json)"),
-                    Some(i.t(
-                        "管理 ~/.pi/agent/settings.json 中除 packages 以外的所有顶层字段（如 default_provider、theme 等）",
-                        "All settings in ~/.pi/agent/settings.json outside packages (e.g. default_provider, theme, etc.)",
-                    )),
+                    i.t("tool_runtime.pi_other_settings_settings"),
+                    Some(i.t("tool_runtime.all_settings_in_pi")),
                 ))
                 .child(
                     div()
@@ -883,7 +865,7 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                         .gap(px(8.0))
                         .child(button_l(
                             "pi-other-fmt",
-                            i.t("格式化 JSON", "Format JSON"),
+                            i.t("tool_runtime.format_json"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -893,12 +875,12 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                                     Ok(val) => {
                                         if let Ok(formatted) = serde_json::to_string_pretty(&val) {
                                             editor_fmt.update(cx, |ta, cx| ta.set_text(formatted, cx));
-                                            let msg = ws.i18n.t("已格式化 JSON", "Formatted JSON").to_string();
+                                            let msg = ws.i18n.t("tool_runtime.formatted_json").to_string();
                                             ws.ui.toast(msg, false);
                                         }
                                     }
                                     Err(e) => {
-                                        let msg = ws.i18n.t(&format!("JSON 格式不正确：{e}"), &format!("Invalid JSON: {e}")).to_string();
+                                        let msg = ws.i18n.raw(&format!("JSON 格式不正确：{e}"), &format!("Invalid JSON: {e}")).to_string();
                                         ws.ui.toast(msg, true);
                                     }
                                 }
@@ -907,20 +889,20 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                         ))
                         .child(button_l(
                             "pi-other-reload",
-                            i.t("重新加载", "Reload"),
+                            i.t("tool_runtime.reload"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
                             |ws, _, _, cx| {
                                 ws.ui.pi_other_editor = None;
-                                let msg = ws.i18n.t("已从磁盘重新加载设置", "Reloaded settings from disk").to_string();
+                                let msg = ws.i18n.t("tool_runtime.reloaded_settings_from_disk").to_string();
                                 ws.ui.toast(msg, false);
                                 cx.notify();
                             },
                         ))
                         .child(button_l(
                             "pi-other-save",
-                            i.t("保存设置", "Save Settings"),
+                            i.t("tool_runtime.save_settings"),
                             ButtonVariant::Primary,
                             &t,
                             cx,
@@ -933,7 +915,7 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                                         ) {
                                             Ok(_) => {
                                                 ws.ui.pi_other_editor = None;
-                                                let msg = ws.i18n.t("已保存其他设置", "Other settings saved").to_string();
+                                                let msg = ws.i18n.t("tool_runtime.other_settings_saved").to_string();
                                                 ws.ui.toast(msg, false);
                                             }
                                             Err(e) => ws.ui.toast(format!("save failed: {e}"), true),
@@ -942,7 +924,7 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                                     Err(e) => {
                                         let msg = ws
                                             .i18n
-                                            .t(&format!("JSON 无效：{e}"), &format!("invalid JSON: {e}"))
+                                            .raw(&format!("JSON 无效：{e}"), &format!("invalid JSON: {e}"))
                                             .to_string();
                                         ws.ui.toast(msg, true);
                                     }
@@ -964,7 +946,7 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                         .justify_between()
                         .text_size(px(12.0))
                         .text_color(t.text_secondary)
-                        .child(i.t("设置文件：~/.pi/agent/settings.json", "Settings file: ~/.pi/agent/settings.json"))
+                        .child(i.t("tool_runtime.settings_file_pi_agent"))
                         .child(
                             div()
                                 .px(px(6.0))
@@ -990,10 +972,7 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                     div()
                         .text_size(px(11.5))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "提示：packages 字段由「扩展」页签统一维护管理，此处修改时会自动合并保留已安装扩展配置。",
-                            "Note: the packages field is maintained by the Extensions tab and will be preserved automatically.",
-                        )),
+                        .child(i.t("tool_runtime.note_the_packages_field")),
                 );
 
             div()
@@ -1020,7 +999,7 @@ pub(super) fn pi_other_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
             .border_color(t.card_border)
             .child(crate::components::error_strip(
                 "pi-other-read-err",
-                i.t("读取 settings.json 失败", "Failed to read settings.json"),
+                i.t("tool_runtime.failed_to_read_settings"),
                 &e,
                 &t,
                 cx,

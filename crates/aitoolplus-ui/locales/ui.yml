@@ -1,0 +1,3237 @@
+_version: 2
+antigravity:
+  delete_antigravity_account:
+    zh-CN: 删除 Antigravity 账号
+    en: Delete Antigravity Account
+  account_enabled:
+    zh-CN: 账号已启用
+    en: Account enabled
+  account_disabled:
+    zh-CN: 账号已禁用
+    en: Account disabled
+  all_account_quotas_refreshed:
+    zh-CN: 全部账号配额已刷新
+    en: All account quotas refreshed
+  refreshing_all_account_quotas:
+    zh-CN: 正在刷新全部账号配额…
+    en: Refreshing all account quotas…
+  quota_refreshed:
+    zh-CN: 配额已刷新
+    en: Quota refreshed
+  importing_accounts_from_antigr:
+    zh-CN: 正在从 Antigravity Manager 迁移账号…
+    en: Importing accounts from Antigravity Manager…
+  importing_local_antigravity_cr:
+    zh-CN: 正在从本机导入 Antigravity 凭据…
+    en: Importing local Antigravity credentials…
+  scanning_legacy_backup_data:
+    zh-CN: 正在扫描旧版备份数据…
+    en: Scanning legacy backup data…
+  scanning_local_accounts:
+    zh-CN: 正在扫描本地已登录账号…
+    en: Scanning local accounts…
+  import_failed_token_could:
+    zh-CN: 导入失败，未能验证 Token
+    en: Import failed, token could not be verified
+  please_provide_a_valid:
+    zh-CN: 请填写 Refresh Token (以 1// 开头)
+    en: Please provide a valid Refresh Token (starting with 1//)
+  validating_code_and_fetching:
+    zh-CN: 正在验证授权码并获取账号信息…
+    en: Validating code and fetching account info…
+  please_enter_the_callback:
+    zh-CN: 请先输入回调 URL 或授权码
+    en: Please enter the callback URL or code
+  waiting_for_oauth_callback:
+    zh-CN: 正在等待授权回调…
+    en: Waiting for OAuth callback…
+  opened_browser_for_authorizati:
+    zh-CN: 已在浏览器中打开授权页面，请在浏览器中完成登录…
+    en: Opened browser for authorization…
+  add_account:
+    zh-CN: 添加新账号
+    en: Add Account
+  confirm_add:
+    zh-CN: 确认添加
+    en: Confirm Add
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  import_from_legacy_backup:
+    zh-CN: 从旧版数据导入
+    en: Import from Legacy Backup
+  scans_antigravity_agent_direct:
+    zh-CN: 扫描 ~/.antigravity-agent 目录，批量导入旧版本的账号数据。
+    en: Scans ~/.antigravity-agent directory to batch import legacy accounts.
+  scheme_b_import_from:
+    zh-CN: '方案 B: 从旧版数据文件导入'
+    en: 'Scheme B: Import from Legacy Backup'
+  or:
+    zh-CN: 或者
+    en: OR
+  import_custom_db_state:
+    zh-CN: 从自定义 DB 导入 (state.vscdb)
+    en: Import Custom DB (state.vscdb)
+  import_all_local_logged:
+    zh-CN: 一键导入所有本地已登录账号
+    en: Import All Local Logged-in Accounts
+  automatically_scans_system_key:
+    zh-CN: 自动对本地系统 Keyring、Antigravity IDE、插件版及 CLI 进行全量扫描并批量导入已登录账号。
+    en: Automatically scans System Keyring, Antigravity IDE, extension, and CLI to
+      import accounts.
+  scheme_a_auto_scan:
+    zh-CN: '方案 A: 自动扫描本地已登录账号'
+    en: 'Scheme A: Auto Scan Local Accounts'
+  custom_label_optional:
+    zh-CN: 账号备注（可选）
+    en: Custom Label (Optional)
+  hint_supports_pasting_multiple:
+    zh-CN: '提示: 支持一次性粘贴多个 Token 或 JSON 数组，系统将自动识别并批量导入。'
+    en: 'Hint: Supports pasting multiple tokens or JSON array, system will auto-extract
+      and batch import.'
+  refresh_token:
+    zh-CN: Refresh Token
+    en: Refresh Token
+  submit:
+    zh-CN: 提交
+    en: Submit
+  browser_did_not_redirect:
+    zh-CN: 浏览器没有自动跳转？请在此处粘贴回调链接或 Authorization Code：
+    en: 'Browser did not redirect? Paste callback URL or Authorization Code:'
+  i_have_authorized_continue:
+    zh-CN: 我已授权，继续
+    en: I Have Authorized, Continue
+  copy_link:
+    zh-CN: 复制授权链接
+    en: Copy Link
+  copied:
+    zh-CN: 已复制
+    en: Copied
+  copied_link:
+    zh-CN: 已复制授权链接
+    en: Copied link
+  authorization_link:
+    zh-CN: 授权链接
+    en: Authorization Link
+  start_oauth_login:
+    zh-CN: 开始 OAuth 授权
+    en: Start OAuth Login
+  will_open_default_browser:
+    zh-CN: 将打开默认浏览器进行 Google 登录授权，自动获取并保存 Token。
+    en: Will open default browser for Google sign-in and save Token automatically.
+  recommended_method:
+    zh-CN: 推荐方式
+    en: Recommended Method
+  failed:
+    zh-CN: 操作失败
+    en: Failed
+  close:
+    zh-CN: 关闭
+    en: Close
+  import_from_db:
+    zh-CN: 从数据库导入
+    en: Import from DB
+  oauth_auth:
+    zh-CN: OAuth 授权
+    en: OAuth Auth
+  edit_custom_label:
+    zh-CN: 编辑自定义标签
+    en: Edit Custom Label
+  label_saved:
+    zh-CN: 标签已保存
+    en: Label saved
+  save:
+    zh-CN: 保存
+    en: Save
+  label_cleared:
+    zh-CN: 已清除标签
+    en: Label cleared
+  clear_label:
+    zh-CN: 清除标签
+    en: Clear Label
+  set_a_custom_label:
+    zh-CN: 设置自定义标签方便在多账号列表中快速辨识（例如：工作号、主力账号、备用、测试等）。
+    en: Set a custom label to easily identify this account in the list.
+  device_fingerprint:
+    zh-CN: 设备指纹
+    en: Device Fingerprint
+  device_fingerprint_bound_and:
+    zh-CN: 设备指纹已绑定并保存
+    en: Device fingerprint bound and saved
+  save_bind:
+    zh-CN: 保存并绑定
+    en: Save & Bind
+  copied_device_profile_to:
+    zh-CN: 已复制完整设备指纹到剪贴板
+    en: Copied device profile to clipboard
+  copy_all:
+    zh-CN: 复制全部
+    en: Copy All
+  new_fingerprint_generated_clic:
+    zh-CN: 已生成新随机指纹，点击「保存并绑定」生效
+    en: New fingerprint generated. Click Save to apply.
+  generate_new:
+    zh-CN: 重新生成随机指纹
+    en: Generate New
+  device_fingerprints_isolate_ac:
+    zh-CN: 设备指纹用于隔离不同账号的 IDE/VS Code 设备标识，避免多账号关联或风控限制。
+    en: Device fingerprints isolate account machine identifiers to avoid multi-account
+      association.
+  account_details:
+    zh-CN: 账号详情
+    en: Account Details
+  quota_group_windows:
+    zh-CN: 配额组窗口摘要
+    en: Quota Group Windows
+  all_model_detailed_quotas:
+    zh-CN: 全部模型详细配额
+    en: All Model Detailed Quotas
+  no_detailed_model_quotas:
+    zh-CN: 暂无各模型配额数据
+    en: No detailed model quotas available
+  no_quota_data_yet:
+    zh-CN: 暂未获取配额信息，点击右侧「刷新配额」获取当前额度。
+    en: No quota data yet. Click 'Refresh Quota' on the right to check current limits.
+  quota_403:
+    zh-CN: 配额受限 (403)
+    en: Quota 403
+  delete_account:
+    zh-CN: 删除账号
+    en: Delete Account
+  disable_account:
+    zh-CN: 禁用账号
+    en: Disable Account
+  enable_account:
+    zh-CN: 启用账号
+    en: Enable Account
+  switch_to_cli_agy:
+    zh-CN: 切换到 CLI (agy)
+    en: Switch to CLI (agy)
+  switch_to_antigravity_ide:
+    zh-CN: 切换到 Antigravity IDE
+    en: Switch to Antigravity IDE
+  switch_to_antigravity_app:
+    zh-CN: 切换到 Antigravity App
+    en: Switch to Antigravity App
+  refresh_token_copied_to:
+    zh-CN: 已复制 Refresh Token 到剪贴板
+    en: Refresh token copied to clipboard
+  copy_refresh_token:
+    zh-CN: 复制 Refresh Token
+    en: Copy Refresh Token
+  export_credentials:
+    zh-CN: 导出凭据
+    en: Export Credentials
+  refresh_quota:
+    zh-CN: 刷新配额
+    en: Refresh Quota
+  edit_label:
+    zh-CN: 编辑标签
+    en: Edit Label
+  details:
+    zh-CN: 详情
+    en: Details
+  disabled:
+    zh-CN: 已禁用
+    en: Disabled
+  active:
+    zh-CN: 当前活动
+    en: Active
+  weekly_0:
+    zh-CN: 周配额 0%
+    en: Weekly 0%
+  weekly_quota_exhausted:
+    zh-CN: 周配额已耗尽
+    en: Weekly quota exhausted
+  copied_2:
+    zh-CN: 已复制内容
+    en: Copied
+  copy:
+    zh-CN: 复制
+    en: Copy
+  user:
+    zh-CN: 用户
+    en: User
+  no_text_transcript_messages:
+    zh-CN: 此会话暂未记录明文消息。
+    en: No text transcript messages recorded for this session.
+  this_desktop_app_session:
+    zh-CN: 此桌面 App 会话历史仅保存于本地 Protocol Buffers 二进制缓存中，无明文对话记录。
+    en: This Desktop App session history is stored in binary protocol buffers (.pb).
+  reveal_file:
+    zh-CN: 定位文件
+    en: Reveal File
+  back:
+    zh-CN: 返回列表
+    en: Back
+  no_matching_sessions_found:
+    zh-CN: 没有找到匹配的会话，请尝试更换关键词
+    en: No matching sessions found, try a different keyword.
+  conversations_started_in_agy:
+    zh-CN: 在终端中使用 agy，或在 Antigravity 桌面端中开始对话后，历史会话将自动显示在此处
+    en: Conversations started in agy CLI or Antigravity IDE will automatically appear
+      here.
+  no_antigravity_sessions_found:
+    zh-CN: 暂无 Antigravity 会话记录
+    en: No Antigravity sessions found
+  scanning_antigravity_sessions:
+    zh-CN: 后台正在扫描 Antigravity 会话，请稍候
+    en: Scanning Antigravity sessions in the background
+  loading_sessions:
+    zh-CN: 正在加载会话列表…
+    en: Loading sessions…
+  total:
+    zh-CN: 共计
+    en: Total
+  refreshed_session_list:
+    zh-CN: 已刷新会话列表
+    en: Refreshed session list
+  refresh:
+    zh-CN: 刷新
+    en: Refresh
+  desktop_app:
+    zh-CN: 桌面 App
+    en: Desktop App
+  terminal_cli:
+    zh-CN: 终端 CLI
+    en: Terminal CLI
+  all:
+    zh-CN: 全部
+    en: All
+  try_switching_filter_tier:
+    zh-CN: 尝试更换筛选分类或搜索关键词
+    en: Try switching filter tier or changing search keywords
+  click_add_account_or:
+    zh-CN: 点击上方「添加账号」进行 Google 授权或输入 Refresh Token，也可以「从本机导入」当前凭据
+    en: Click 'Add Account' or 'Import Local' above to get started
+  no_matching_accounts_found:
+    zh-CN: 没有找到匹配的账号
+    en: No matching accounts found
+  no_antigravity_accounts_yet:
+    zh-CN: 还没有添加 Antigravity 账号
+    en: No Antigravity accounts yet
+  auto_refresh_disabled:
+    zh-CN: 后台自动刷新已关闭
+    en: Auto refresh disabled
+  auto_refresh_off:
+    zh-CN: '自动刷新: 关'
+    en: 'Auto Refresh: Off'
+  mask_emails:
+    zh-CN: 隐藏邮箱
+    en: Mask emails
+  refresh_all_quotas:
+    zh-CN: 刷新全部配额
+    en: Refresh All Quotas
+  import_local:
+    zh-CN: 从本机导入
+    en: Import Local
+  add_account_2:
+    zh-CN: 添加账号
+    en: Add Account
+  sessions:
+    zh-CN: 会话管理
+    en: Sessions
+  accounts_quota:
+    zh-CN: 账号与配额
+    en: Accounts & Quota
+layout:
+  proxy_active:
+    zh-CN: 代理开启
+    en: Proxy Active
+  preferences_paths_backups:
+    zh-CN: 个性化偏好、CLI 根目录与自动备份管理
+    en: Preferences, paths & backups
+  settings:
+    zh-CN: 系统设置
+    en: Settings
+  account_quota_inspection_and:
+    zh-CN: Google / Antigravity 账号配额监控与一键凭据无缝切换
+    en: Account quota inspection and seamless credential switching
+  antigravity_accounts:
+    zh-CN: Antigravity 账号管理
+    en: Antigravity Accounts
+  browse_resume_and_manage:
+    zh-CN: Google / Antigravity CLI 与桌面 App 历史会话查看、恢复与管理
+    en: Browse, resume, and manage Antigravity CLI & App chat sessions
+  antigravity_sessions:
+    zh-CN: Antigravity 会话管理
+    en: Antigravity Sessions
+  system_prompts_agent_tool:
+    zh-CN: 扩展各 AI 工具的系统 Prompt 与函数技能库
+    en: System prompts & agent tool skills
+  skills:
+    zh-CN: Skills 技能
+    en: Skills
+  manage_model_context_protocol:
+    zh-CN: 统一管理各工具的 Model Context Protocol 协议服务
+    en: Manage Model Context Protocol servers
+  mcp_servers:
+    zh-CN: MCP 服务器
+    en: MCP Servers
+  providers_runtime_configuratio:
+    zh-CN: 模型供应商与运行时配置
+    en: Providers & Runtime Configuration
+  antigravity:
+    zh-CN: Antigravity
+    en: Antigravity
+  shared_resources:
+    zh-CN: 共享资源
+    en: Shared Resources
+  coding_tools:
+    zh-CN: 编码工具
+    en: Coding Tools
+local_env:
+  refresh:
+    zh-CN: 刷新
+    en: Refresh
+  check_local_agent_clis:
+    zh-CN: 检查本机 Agent CLI，并按安装来源升级。
+    en: Check local Agent CLIs and update them in place.
+  local_environment:
+    zh-CN: 本地环境检查
+    en: Local Environment
+  up_to_date:
+    zh-CN: 已是最新
+    en: Up to date
+  check_the_runtime:
+    zh-CN: 请检查运行环境
+    en: Check the runtime
+  latest:
+    zh-CN: 最新版本
+    en: Latest
+  current:
+    zh-CN: 当前版本
+    en: Current
+  update:
+    zh-CN: 升级
+    en: Update
+  install:
+    zh-CN: 安装
+    en: Install
+  unknown:
+    zh-CN: 未知
+    en: Unknown
+  not_installed:
+    zh-CN: 未安装
+    en: Not installed
+  installed_but_cannot_run:
+    zh-CN: 已安装但无法运行
+    en: Installed but cannot run
+  checking:
+    zh-CN: 检查中
+    en: Checking
+  checking_2:
+    zh-CN: 正在检查…
+    en: Checking…
+mcp:
+  saved_and_synced:
+    zh-CN: 已保存并同步
+    en: saved and synced
+  name_is_required:
+    zh-CN: 名称不能为空
+    en: name is required
+  timeout_must_be_a:
+    zh-CN: 超时必须是正整数
+    en: timeout must be a positive integer
+  headers_must_be_a:
+    zh-CN: 请求头必须是 JSON 对象
+    en: headers must be a JSON object
+  environment_must_be_a:
+    zh-CN: 环境变量必须是 JSON 对象
+    en: environment must be a JSON object
+  save_sync:
+    zh-CN: 保存并同步
+    en: Save & Sync
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  group:
+    zh-CN: 分组
+    en: Group
+  tool_timeout_seconds:
+    zh-CN: 工具超时（秒）
+    en: Tool timeout (seconds)
+  headers:
+    zh-CN: 请求头
+    en: Headers
+  server_url:
+    zh-CN: 服务器 URL
+    en: Server URL
+  environment:
+    zh-CN: 环境变量
+    en: Environment
+  command_args:
+    zh-CN: 命令与参数
+    en: Command & Args
+  sse:
+    zh-CN: SSE
+    en: SSE
+  http:
+    zh-CN: HTTP
+    en: HTTP
+  stdio:
+    zh-CN: Stdio
+    en: Stdio
+  type:
+    zh-CN: 类型：
+    en: 'Type:'
+  name:
+    zh-CN: 名称
+    en: Name
+  target_tools:
+    zh-CN: 应用到目标工具
+    en: Target Tools
+  add_mcp_server:
+    zh-CN: 新增 MCP 服务器
+    en: Add MCP Server
+  edit_mcp_server:
+    zh-CN: 编辑 MCP 服务器
+    en: Edit MCP Server
+  group_optional:
+    zh-CN: 分组（可选）
+    en: Group (optional)
+  tool_timeout_seconds_optional:
+    zh-CN: 工具超时秒数（可选）
+    en: Tool timeout seconds (optional)
+  headers_json:
+    zh-CN: Headers JSON，如 {"Authorization":"Bearer ..."}
+    en: Headers JSON
+  url_http_sse:
+    zh-CN: URL（http/sse）
+    en: URL (http/sse)
+  environment_json:
+    zh-CN: 环境变量 JSON，如 {"KEY":"value"}
+    en: Environment JSON
+  args_space_separated:
+    zh-CN: 参数（空格分隔）
+    en: Args (space separated)
+  command_stdio:
+    zh-CN: 命令（stdio）
+    en: Command (stdio)
+  no_servers_enabled:
+    zh-CN: 没有启用的服务器
+    en: no servers enabled
+  add_tag:
+    zh-CN: 添加标签
+    en: Add Tag
+  add:
+    zh-CN: 添加
+    en: Add
+  tag_name:
+    zh-CN: 标签名称
+    en: Tag Name
+  edit_metadata:
+    zh-CN: 编辑元数据
+    en: Edit Metadata
+  metadata_updated:
+    zh-CN: 元数据已更新
+    en: Metadata updated
+  save:
+    zh-CN: 保存
+    en: Save
+  note:
+    zh-CN: 备注 (Note)
+    en: Note
+  group_2:
+    zh-CN: 分组 (Group)
+    en: Group
+  import_existing_mcp:
+    zh-CN: 导入已有 MCP 配置
+    en: Import Existing MCP
+  no_new_mcp_servers:
+    zh-CN: 未发现新的 MCP 服务器
+    en: No new MCP servers discovered
+  scan_import_now:
+    zh-CN: 立即扫描并导入
+    en: Scan & Import Now
+  scan_all_installed_ai:
+    zh-CN: 扫描本地所有已安装的 AI 编程工具（Claude Desktop、Cursor、VSCode 等），导入已有的 MCP 服务器配置。
+    en: Scan all installed AI coding tools (Claude Desktop, Cursor, VSCode, etc.)
+      and import existing MCP configs.
+  import_mcp_json:
+    zh-CN: 导入 MCP 配置 (JSON)
+    en: Import MCP (JSON)
+  no_mcp_servers_found:
+    zh-CN: 未能从 JSON 中解析出任何 MCP 服务器
+    en: No MCP servers found in JSON
+  parse_import:
+    zh-CN: 解析并导入
+    en: Parse & Import
+  supports_pasting_mcp_json:
+    zh-CN: 支持从 Claude Desktop、Cursor、VSCode 或标准 MCP JSON 配置片段直接粘贴并导入：
+    en: 'Supports pasting MCP JSON configuration from Claude Desktop, Cursor, VSCode,
+      etc.:'
+  valid_json_but_no:
+    zh-CN: 'JSON 格式正确，但未识别到 mcpServers 配置（需包含 "mcpServers": { ... } 结构）'
+    en: 'Valid JSON, but no mcpServers configuration recognized (expected ''"mcpServers":
+      { ... }'')'
+  delete_mcp_server:
+    zh-CN: 删除 MCP 服务器
+    en: Delete MCP Server
+  delete:
+    zh-CN: 删除
+    en: Delete
+  enable:
+    zh-CN: 启用
+    en: Enable
+  disable:
+    zh-CN: 停用
+    en: Disable
+  note_2:
+    zh-CN: 备注
+    en: Note
+  metadata:
+    zh-CN: 元数据
+    en: Metadata
+  edit:
+    zh-CN: 编辑
+    en: Edit
+  supported_tools_sync:
+    zh-CN: 支持工具同步
+    en: Supported Tools Sync
+  no_tags_yet:
+    zh-CN: 暂无标签
+    en: No tags yet
+  tag_name_2:
+    zh-CN: 标签名
+    en: Tag Name
+  add_tag_2:
+    zh-CN: + 添加标签
+    en: + Add Tag
+  tags:
+    zh-CN: 标签
+    en: Tags
+  no_notes:
+    zh-CN: 无备注
+    en: No notes
+  note_3:
+    zh-CN: 备注：
+    en: 'Note:'
+  ungrouped:
+    zh-CN: 未分组
+    en: Ungrouped
+  group_3:
+    zh-CN: 分组：
+    en: 'Group:'
+  copied:
+    zh-CN: 已复制
+    en: Copied
+  copy:
+    zh-CN: 复制
+    en: Copy
+  configuration:
+    zh-CN: 配置信息
+    en: Configuration
+  copied_config_to_clipboard:
+    zh-CN: 已复制配置到剪贴板
+    en: Copied config to clipboard
+  try_a_different_search:
+    zh-CN: 尝试更换搜索关键词
+    en: Try a different search keyword
+  click_add_server_or:
+    zh-CN: 点击“+ 新增服务器”或“导入”开始添加，或等待已安装工具的配置自动导入
+    en: Click '+ Add Server' or 'Import' to add a server, or import from installed
+      tools
+  no_matching_mcp_servers:
+    zh-CN: 没有找到匹配的 MCP 服务器
+    en: No matching MCP servers
+  no_mcp_servers_yet:
+    zh-CN: 还没有 MCP 服务器
+    en: No MCP servers yet
+  add_server:
+    zh-CN: 新增服务器
+    en: Add Server
+  import_json:
+    zh-CN: 导入 JSON
+    en: Import JSON
+  import_existing:
+    zh-CN: 导入已有
+    en: Import Existing
+  manage_cross_tool_mcp:
+    zh-CN: 管理跨工具的 MCP 服务器配置，一键同步到各 AI 编程工具
+    en: Manage cross-tool MCP server configurations, sync with one click
+  view_official_docs:
+    zh-CN: 查看官方文档
+    en: View Official Docs
+  mcp_servers:
+    zh-CN: MCP 服务器
+    en: MCP Servers
+  just_now:
+    zh-CN: 刚刚
+    en: just now
+pages:
+  success:
+    zh-CN: 操作成功
+    en: Success
+  operation_failed:
+    zh-CN: 操作失败
+    en: Operation Failed
+  session_deleted:
+    zh-CN: Antigravity 会话已删除
+    en: Session deleted
+  account_deleted:
+    zh-CN: Antigravity 账号已删除
+    en: Account deleted
+  skill_deleted:
+    zh-CN: Skill 已卸载删除
+    en: skill deleted
+  mcp_server_deleted:
+    zh-CN: MCP 服务器已删除
+    en: MCP server deleted
+  session_deleted_2:
+    zh-CN: 会话已删除
+    en: session deleted
+  prompt_deleted:
+    zh-CN: Prompt 已删除
+    en: prompt deleted
+  provider_deleted:
+    zh-CN: 供应商已删除
+    en: provider deleted
+  install_and_restart_now:
+    zh-CN: 立即安装并重启
+    en: Install and Restart Now
+  install_later:
+    zh-CN: 稍后安装
+    en: Install Later
+  all_configurations_in_aitoolpl:
+    zh-CN: ✓ 个人数据与配置统一保存在 ~/.aitoolplus，升级不受任何影响
+    en: ✓ All configurations in ~/.aitoolplus are safe and will be preserved
+  file:
+    zh-CN: 安装包文件
+    en: File
+  the_update_package_has:
+    zh-CN: 安装包已通过 SHA-256 安全校验，是否立即退出当前应用并运行安装程序进行升级？
+    en: The update package has passed SHA-256 verification. Would you like to exit
+      the app and launch the installer now?
+  update_package_downloaded_succ:
+    zh-CN: 新版本更新包已下载完成
+    en: Update Package Downloaded Successfully
+  install_application_update:
+    zh-CN: 安装新版本更新
+    en: Install Application Update
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  delete:
+    zh-CN: 删除
+    en: Delete
+  model_pricing:
+    zh-CN: 价格设置
+    en: Model Pricing
+  model_stats:
+    zh-CN: 模型统计
+    en: Model Stats
+  provider_stats:
+    zh-CN: 来源统计
+    en: Provider Stats
+  request_logs:
+    zh-CN: 请求日志
+    en: Request Logs
+  all_time:
+    zh-CN: 全部
+    en: All Time
+  k_30_days:
+    zh-CN: 近 30 天
+    en: 30 Days
+  k_7_days:
+    zh-CN: 近 7 天
+    en: 7 Days
+  today:
+    zh-CN: 今天
+    en: Today
+  cost:
+    zh-CN: 费用趋势
+    en: Cost
+  requests:
+    zh-CN: 请求量趋势
+    en: Requests
+  tokens:
+    zh-CN: Token 趋势
+    en: Tokens
+  bar:
+    zh-CN: 柱状图
+    en: Bar
+  area:
+    zh-CN: 走势图
+    en: Area
+session_detail:
+  collapse:
+    zh-CN: 收起 ▲
+    en: Collapse ▲
+  copied_params:
+    zh-CN: 已复制工具参数
+    en: Copied params
+  copy:
+    zh-CN: 复制参数
+    en: Copy
+  tool:
+    zh-CN: 工具调用
+    en: Tool
+  expand:
+    zh-CN: 展开 ▼
+    en: Expand ▼
+  copy_2:
+    zh-CN: 复制
+    en: Copy
+  lines_collapsed:
+    zh-CN: 行已折叠
+    en: lines collapsed
+  copied_output:
+    zh-CN: 已复制命令输出
+    en: Copied output
+  copy_output:
+    zh-CN: 复制输出
+    en: Copy Output
+  expand_all:
+    zh-CN: 展开全部 ▼
+    en: Expand All ▼
+  lines:
+    zh-CN: 行
+    en: lines
+  output:
+    zh-CN: 输出
+    en: Output
+  desc:
+    zh-CN: 说明
+    en: Desc
+  copied_command:
+    zh-CN: 已复制命令
+    en: Copied command
+  copy_cmd:
+    zh-CN: 复制命令
+    en: Copy Cmd
+  completed:
+    zh-CN: 已执行
+    en: Completed
+  failed:
+    zh-CN: 执行失败
+    en: Failed
+  __bash_command:
+    zh-CN: '>_ 终端命令 (Bash)'
+    en: '>_ Bash Command'
+  done:
+    zh-CN: 已执行
+    en: Done
+  failed_2:
+    zh-CN: 失败
+    en: Failed
+  chars:
+    zh-CN: 字
+    en: chars
+  thinking_process:
+    zh-CN: 🧠 思考过程 (Thinking)
+    en: 🧠 Thinking Process
+  copied_message_content:
+    zh-CN: 已复制消息内容
+    en: Copied message content
+  user:
+    zh-CN: 用户
+    en: User
+  delete_session:
+    zh-CN: 删除会话
+    en: Delete Session
+  delete_this_session_this:
+    zh-CN: 确定要删除这条会话记录吗？此操作无法恢复。
+    en: Delete this session? This action cannot be undone.
+  reveal_in_explorer:
+    zh-CN: 定位文件
+    en: Reveal in Explorer
+  source_file_not_found:
+    zh-CN: 源文件路径不存在
+    en: source file not found
+  export_markdown:
+    zh-CN: 导出 Markdown
+    en: Export Markdown
+  export_json:
+    zh-CN: 导出 JSON
+    en: Export JSON
+  rename_session:
+    zh-CN: 重命名会话
+    en: Rename Session
+  try_adjusting_the_filter:
+    zh-CN: 可尝试调整上方的角色或内容筛选条件
+    en: Try adjusting the filter chips above
+  no_matching_messages:
+    zh-CN: 暂无匹配消息
+    en: No matching messages
+  bash:
+    zh-CN: 命令
+    en: Bash
+  tool_2:
+    zh-CN: 工具
+    en: Tool
+  thinking:
+    zh-CN: 思考
+    en: Thinking
+  text:
+    zh-CN: 对话
+    en: Text
+  assistant:
+    zh-CN: 助手
+    en: Assistant
+  total:
+    zh-CN: 总计
+    en: total
+  msgs:
+    zh-CN: 条消息
+    en: msgs
+  actions:
+    zh-CN: 操作
+    en: Actions
+  copied_resume_command:
+    zh-CN: 已复制恢复命令
+    en: Copied resume command
+  resume:
+    zh-CN: 恢复命令
+    en: Resume
+  back:
+    zh-CN: 返回
+    en: Back
+settings_about:
+  is_the_latest_version:
+    zh-CN: 已是最新发布版本，暂无可用更新。
+    en: is the latest version, no update needed.
+  currently_installed_ai_toolplu:
+    zh-CN: 当前安装的 AI ToolPlus
+    en: Currently installed AI ToolPlus
+  up_to_date:
+    zh-CN: 已是最新版本
+    en: Up to Date
+  note_scoop_managed_installatio:
+    zh-CN: 提示：检测到当前应用通过 Scoop 安装，推荐在终端执行 'scoop update aitoolplus' 完成升级。
+    en: 'Note: Scoop-managed installation detected. Please upgrade via ''scoop update
+      aitoolplus'' in terminal.'
+  dismiss_version:
+    zh-CN: 忽略此版本
+    en: Dismiss Version
+  release_notes:
+    zh-CN: 查看发行说明
+    en: Release Notes
+  download_update_high_speed:
+    zh-CN: 立即下载更新包 (高速)
+    en: Download Update (High Speed)
+  checksum_verification_enabled:
+    zh-CN: 支持断点续连与自动校验
+    en: Checksum verification enabled
+  downloading:
+    zh-CN: 正在下载更新包…
+    en: Downloading…
+  re_download:
+    zh-CN: 重新下载
+    en: Re-download
+  open_folder:
+    zh-CN: 打开所在文件夹
+    en: Open Folder
+  install_restart_now:
+    zh-CN: 立即安装并重启
+    en: Install & Restart Now
+  update_restart_now:
+    zh-CN: 立即更新并重启
+    en: Update & Restart Now
+  installer_ready:
+    zh-CN: 安装包已就绪
+    en: Installer Ready
+  portable_update_ready:
+    zh-CN: 免安装更新已就绪
+    en: Portable Update Ready
+  mirror:
+    zh-CN: 加速源：
+    en: 'Mirror:'
+  full:
+    zh-CN: 完整包
+    en: Full
+  package:
+    zh-CN: 更新包：
+    en: 'Package:'
+  installer:
+    zh-CN: 安装版
+    en: Installer
+  portable:
+    zh-CN: 免安装版
+    en: Portable
+  version_update_dismissed:
+    zh-CN: 已忽略此版本更新
+    en: Version update dismissed
+  release_link_copied_to:
+    zh-CN: 已复制 Release 链接到剪贴板
+    en: Release link copied to clipboard
+  copy_link:
+    zh-CN: 复制下载链接
+    en: Copy Link
+  opening_release_page:
+    zh-CN: 正在打开 Release 下载页面…
+    en: Opening Release page…
+  go_to_release_page:
+    zh-CN: 前往 Release 下载页面
+    en: Go to Release Page
+  portable_edition_does_not:
+    zh-CN: 免安装版无需运行安装程序。请点击下方按钮前往 GitHub Release 页面下载最新的绿色压缩包 (aitoolplus-windows-x86_64.zip)，解压替换即可完成更新。所有用户配置与规则统一保存在
+      ~/.aitoolplus 目录，更新不会影响您的任何数据。
+    en: Portable edition does not require an installer. Please click below to visit
+      GitHub Release to download the latest zip archive (aitoolplus-windows-x86_64.zip)
+      and extract it to replace the application files. User data in ~/.aitoolplus
+      remains safe.
+  detected_portable_standalone_v:
+    zh-CN: 检测到当前运行为免安装便携版
+    en: Detected portable standalone version
+  release_notes_2:
+    zh-CN: 更新日志 (Release Notes)：
+    en: 'Release Notes:'
+  released:
+    zh-CN: 发布时间：
+    en: 'Released:'
+  available:
+    zh-CN: 可升级
+    en: Available
+  update_available:
+    zh-CN: 发现新版本：
+    en: 'Update Available:'
+  notice:
+    zh-CN: 更新提示：
+    en: 'Notice:'
+  already_up_to_date:
+    zh-CN: 当前已是最新版
+    en: Already up to date
+  check_for_updates:
+    zh-CN: 检查更新
+    en: Check for Updates
+  checking:
+    zh-CN: 正在检查中…
+    en: Checking…
+  never_checked:
+    zh-CN: 尚未检查过更新
+    en: Never checked
+  last_checked:
+    zh-CN: 上次检查时间：
+    en: 'Last checked:'
+  ready:
+    zh-CN: 已就绪
+    en: Ready
+  latest:
+    zh-CN: 最新版本
+    en: Latest
+  update_available_2:
+    zh-CN: 发现新版本
+    en: Update Available
+  current:
+    zh-CN: 当前版本：
+    en: 'Current:'
+  ghproxy_mirror_gh_proxy:
+    zh-CN: 国内网络推荐使用 gh-proxy.com 镜像加速，秒速完成下载
+    en: GhProxy mirror (gh-proxy.com) recommended for high-speed downloads
+  download_mirror_source:
+    zh-CN: 下载加速镜像源：
+    en: 'Download Mirror Source:'
+  github_official_direct:
+    zh-CN: GitHub 官方 (直连)
+    en: GitHub Official (Direct)
+  ghproxy_mirror_gh_proxy_2:
+    zh-CN: GhProxy 镜像加速 (gh-proxy.com)
+    en: GhProxy Mirror (gh-proxy.com)
+  checks_releases_quietly_2:
+    zh-CN: 应用启动 2.5 秒后在后台静默检查；绝不静默强制安装
+    en: Checks releases quietly 2.5s after launch; never forces silent installation
+  check_for_updates_on:
+    zh-CN: 启动时自动检查更新
+    en: Check for Updates on Startup
+  update_engine_matching_cc:
+    zh-CN: 全面对标 cc-switch / ai-toolbox 更新机制，支持 GitHub 官方直连、国内高速镜像代理与自定义 CDN
+    en: Update engine matching cc-switch and ai-toolbox, supporting GitHub official,
+      China mirrors, and custom CDNs
+  software_updates_cdn_mirrors:
+    zh-CN: 软件更新与 CDN 镜像加速
+    en: Software Updates & CDN Mirrors
+  open_config_root:
+    zh-CN: 打开配置根目录
+    en: Open Config Root
+  open_backups_dir:
+    zh-CN: 打开备份存储目录
+    en: Open Backups Dir
+  open_appdata_dir:
+    zh-CN: 打开应用数据目录
+    en: Open AppData Dir
+  aitoolplus_user_profile_cc:
+    zh-CN: ~/.aitoolplus（统一用户数据目录，对标 CC-Switch）
+    en: ~/.aitoolplus (User Profile, CC-Switch Parity)
+  data_storage_directory:
+    zh-CN: 数据存储目录：
+    en: 'Data Storage Directory:'
+  native_rust_gpui_developer:
+    zh-CN: Rust + GPUI 原生多端 AI 辅助开发工具箱，全面对标 cc-switch 与 ai-toolbox
+    en: Native Rust + GPUI developer toolkit, matching cc-switch and ai-toolbox
+  about_ai_toolplus:
+    zh-CN: 关于 AI ToolPlus
+    en: About AI ToolPlus
+settings_advanced:
+  extra_files_or_directories:
+    zh-CN: 额外指定包含在备份中的自定义文件或目录；未指定恢复路径时会安全落入沙箱
+    en: Extra files or directories to include; blank restore paths use a safe sandbox
+  custom_backup_entries:
+    zh-CN: 自定义备份条目
+    en: Custom Backup Entries
+  source_path_required:
+    zh-CN: 请输入源路径
+    en: source path required
+  add_custom_entry:
+    zh-CN: 添加自定义条目
+    en: Add Custom Entry
+  remove_entry:
+    zh-CN: 移除条目
+    en: Remove Entry
+  exclude_sensitive_or_unwanted:
+    zh-CN: 逐文件排除敏感或不需要打包到快照中的运行时配置文件
+    en: Exclude sensitive or unwanted runtime files individually from backup snapshots
+  cli_backup_file_filters:
+    zh-CN: CLI 备份文件过滤
+    en: CLI Backup File Filters
+  included:
+    zh-CN: 已包含
+    en: Included
+  excluded:
+    zh-CN: 已排除
+    en: Excluded
+  include_runtime_configs_prompt:
+    zh-CN: 包含 Claude Code、Codex、Gemini CLI、Pi 等工具的配置文件与 MCP 设置
+    en: Include runtime configs, prompts, and MCP settings for CLI tools
+  include_cli_config_files:
+    zh-CN: 包含各 CLI 运行时配置文件
+    en: Include CLI Config Files
+  choose_data_scope_when:
+    zh-CN: 选择创建备份快照时包含的数据范围
+    en: Choose data scope when generating backup snapshots
+  backup_scope_cli_configs:
+    zh-CN: 备份范围与 CLI 配置
+    en: Backup Scope & CLI Configs
+  allow_restoring_custom_files:
+    zh-CN: 恢复自定义备份条目时，允许写回原始绝对路径（关闭时落入安全沙箱）
+    en: Allow restoring custom files back to original paths (otherwise sandboxed)
+  allow_custom_absolute_paths:
+    zh-CN: 允许原绝对路径恢复
+    en: Allow Custom Absolute Paths
+  save_copy_restored:
+    zh-CN: 另存副本 (.restored)
+    en: Save Copy (.restored)
+  skip_existing:
+    zh-CN: 跳过同名文件
+    en: Skip Existing
+  overwrite:
+    zh-CN: 覆盖原文件
+    en: Overwrite
+  overwrite_target_skip_existing:
+    zh-CN: 覆盖已有文件、跳过同名文件或保存为 .restored 副本
+    en: Overwrite target, skip existing, or save copy as .restored
+  conflict_strategy:
+    zh-CN: 恢复同名冲突策略
+    en: Conflict Strategy
+  how_to_handle_existing:
+    zh-CN: 遇到同名文件时的恢复处理策略，以及是否允许恢复自定义绝对路径
+    en: How to handle existing files on restore, and whether to allow custom absolute
+      paths
+  restore_conflict_policy:
+    zh-CN: 恢复冲突处理策略
+    en: Restore Conflict Policy
+settings_backup:
+  rename_backup_snapshot:
+    zh-CN: 重命名备份快照
+    en: Rename Backup Snapshot
+  backup_renamed:
+    zh-CN: 备份已重命名
+    en: Backup renamed
+  backup_with_this_name:
+    zh-CN: 同名备份文件已存在
+    en: Backup with this name already exists
+  save:
+    zh-CN: 保存
+    en: Save
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  zip_bundles_include_app:
+    zh-CN: ZIP 备份包含应用数据、CLI 配置与中央 Skills 仓库
+    en: ZIP bundles include app data, CLI configs and the central Skills repo
+  backup_restore:
+    zh-CN: 备份与恢复
+    en: Backup & Restore
+  no_backup_found_in:
+    zh-CN: 云端暂无备份数据，请先上传
+    en: No backup found in cloud, please upload first
+  download_restore:
+    zh-CN: 从云端下载并恢复
+    en: Download & Restore
+  upload_succeeded_synced_to:
+    zh-CN: 上传成功！已同步至 S3 云端
+    en: 'Upload succeeded: Synced to S3 cloud'
+  upload_to_cloud:
+    zh-CN: 上传云端
+    en: Upload to Cloud
+  saved:
+    zh-CN: 已保存
+    en: saved
+  save_settings:
+    zh-CN: 保存设置
+    en: Save Settings
+  s3_connection_succeeded:
+    zh-CN: S3 连接成功
+    en: S3 connection succeeded
+  test_connection:
+    zh-CN: 测试连接
+    en: Test Connection
+  path_style:
+    zh-CN: 路径模式 (Path-Style)
+    en: Path-Style
+  upload_succeeded_synced_to_2:
+    zh-CN: 上传成功！已同步至 WebDAV 云端
+    en: 'Upload succeeded: Synced to WebDAV cloud'
+  webdav_connection_succeeded:
+    zh-CN: WebDAV 连接成功
+    en: WebDAV connection succeeded
+  configure_auto_backup_policy:
+    zh-CN: 配置自动备份策略，创建本地快照与从 ZIP 恢复数据
+    en: Configure auto-backup policy, create snapshot and restore
+  local_snapshots:
+    zh-CN: 本地快照
+    en: Local Snapshots
+  backup_file_deleted:
+    zh-CN: 本地备份文件已删除
+    en: Backup file deleted
+  delete:
+    zh-CN: 删除
+    en: Delete
+  saved_as_specified:
+    zh-CN: 文件已另存为指定位置
+    en: Saved as specified
+  save_as:
+    zh-CN: 另存为
+    en: Save As
+  rename:
+    zh-CN: 重命名
+    en: Rename
+  restore:
+    zh-CN: 恢复
+    en: Restore
+  no_local_backups_found:
+    zh-CN: 暂无本地备份文件，点击上方【立即备份】即可创建首个快照
+    en: No local backups found. Click 'Backup Now' to create one.
+  snapshots:
+    zh-CN: 个快照
+    en: snapshots
+  local_backup_list:
+    zh-CN: 本地备份列表
+    en: Local Backup List
+  open_backup_directory:
+    zh-CN: 打开备份目录
+    en: Open Backup Directory
+  restore_from_zip_backup:
+    zh-CN: 从zip恢复备份
+    en: Restore from ZIP Backup
+  backup_now:
+    zh-CN: 立即备份
+    en: Backup Now
+  maximum_number_of_backup:
+    zh-CN: 本地自动与手动快照最多保留的数量，超出将自动清理最旧快照
+    en: Maximum number of backup snapshots to keep before pruning oldest
+  backup_retention:
+    zh-CN: 备份保留数量
+    en: Backup Retention
+  time_interval_for_auto:
+    zh-CN: 定时自动在本地创建快照的时间间隔（设为禁用则关闭自动备份）
+    en: Time interval for auto backup (Disabled to turn off)
+  auto_backup_interval:
+    zh-CN: 自动备份间隔
+    en: Auto-backup Interval
+  k_50:
+    zh-CN: 50个
+    en: '50'
+  k_20:
+    zh-CN: 20个
+    en: '20'
+  k_10:
+    zh-CN: 10个
+    en: '10'
+  k_5:
+    zh-CN: 5个
+    en: '5'
+  k_7d:
+    zh-CN: 7天
+    en: 7d
+  k_24h:
+    zh-CN: 24小时
+    en: 24h
+  k_12h:
+    zh-CN: 12小时
+    en: 12h
+  k_6h:
+    zh-CN: 6小时
+    en: 6h
+  k_1h:
+    zh-CN: 1小时
+    en: 1h
+  disabled:
+    zh-CN: 禁用
+    en: Disabled
+  s3_storage:
+    zh-CN: S3 兼容存储
+    en: S3 Storage
+  webdav:
+    zh-CN: WebDAV 云端
+    en: WebDAV
+  local:
+    zh-CN: 本地快照
+    en: Local
+settings_general:
+  click_tool_chips_to:
+    zh-CN: 点击切换工具卡片，定制侧边栏中常驻显示的 AI 编码助手
+    en: Click tool chips to customize which AI coding tools appear in navigation
+  visible_sidebar_tools:
+    zh-CN: 侧边栏可见工具
+    en: Visible Sidebar Tools
+  configure_outbound_proxy_url:
+    zh-CN: 配置工作台发起网络请求时使用的代理方式与出口地址
+    en: Configure outbound proxy URL and connection behavior
+  network_proxy:
+    zh-CN: 网络与代理
+    en: Network & Proxy
+  testing_connection_latency:
+    zh-CN: 正在检测连接延时…
+    en: Testing connection latency…
+  proxy_settings_saved_and:
+    zh-CN: 代理网络设置已保存并立即生效
+    en: Proxy settings saved and applied
+  save_settings:
+    zh-CN: 保存设置
+    en: Save Settings
+  please_enter_proxy_port:
+    zh-CN: 请输入代理端口
+    en: Please enter proxy port
+  please_enter_proxy_server:
+    zh-CN: 请输入代理服务器地址
+    en: Please enter proxy server
+  test_connectivity:
+    zh-CN: 测试网络连接
+    en: Test Connectivity
+  test_proxy:
+    zh-CN: 测试代理
+    en: Test Proxy
+  testing:
+    zh-CN: 正在测试…
+    en: Testing…
+  system_mode_follow_system:
+    zh-CN: 跟随系统代理：自动检测并使用当前操作系统配置的系统代理
+    en: 'System mode: follow system proxy settings configured in OS'
+  direct_mode_no_proxy:
+    zh-CN: 直连模式：不使用任何网络代理，直接连接上游模型与更新服务器
+    en: 'Direct mode: no proxy, connects directly to target servers'
+  port:
+    zh-CN: 代理端口
+    en: Port
+  proxy_server:
+    zh-CN: 代理服务器
+    en: Proxy Server
+  proxy_protocol:
+    zh-CN: 代理协议
+    en: Proxy Protocol
+  automatically_scan_claude_code:
+    zh-CN: 自动追踪并扫描 Claude Code、Codex、Pi 等本地会话记录与 Token 消耗
+    en: Automatically scan Claude Code, Codex, Pi session files for token analytics
+  auto_scan_local_session:
+    zh-CN: 自动扫描本地会话用量
+    en: Auto-Scan Local Session Usage
+  launch_directly_into_tray:
+    zh-CN: 应用启动后静默进入系统托盘，不主动弹出主窗口
+    en: Launch directly into tray without showing main window
+  start_minimized:
+    zh-CN: 启动时直接最小化
+    en: Start Minimized
+  keep_running_in_system:
+    zh-CN: 点击主窗口关闭按钮时保留后台托盘运行，避免中断会话
+    en: Keep running in system tray when window is closed
+  minimize_to_tray_on:
+    zh-CN: 关闭时最小化到托盘
+    en: Minimize to Tray on Close
+  start_ai_toolplus_in:
+    zh-CN: 登录 Windows 后在后台自动启动 AI ToolPlus 守护服务
+    en: Start AI ToolPlus in background after Windows user login
+  launch_at_login:
+    zh-CN: 开机自动启动
+    en: Launch at Login
+  configure_startup_window_close:
+    zh-CN: 配置开机自启、关闭窗口策略与托盘驻留行为
+    en: Configure startup, window close, and background tray actions
+  system_launch_behavior:
+    zh-CN: 系统与启动行为
+    en: System & Launch Behavior
+  select_language_for_ui:
+    zh-CN: 切换应用内所有界面文案、提示与状态标签的语言
+    en: Select language for UI labels, notifications and buttons
+  interface_language:
+    zh-CN: 界面语言
+    en: Interface Language
+  dark_light_or_automatically:
+    zh-CN: 暗色、亮色或自动同步操作系统的深浅色偏好
+    en: Dark, light or automatically sync with OS preference
+  theme_mode:
+    zh-CN: 界面主题
+    en: Theme Mode
+  choose_workbench_color_theme:
+    zh-CN: 选择工作台的色彩主题风格与界面文本显示语言
+    en: Choose workbench color theme and interface language
+  appearance_language:
+    zh-CN: 外观与语言
+    en: Appearance & Language
+  en:
+    zh-CN: English
+    en: English
+  item:
+    zh-CN: 简体中文
+    en: 简体中文
+  system:
+    zh-CN: 跟随系统
+    en: System
+  light:
+    zh-CN: 亮色模式
+    en: Light
+  dark:
+    zh-CN: 暗色模式
+    en: Dark
+  zh_cn:
+    zh-CN: 简体中文
+    en: 简体中文
+  english:
+    zh-CN: English
+    en: English
+settings_import:
+  inspect_data_directory_or:
+    zh-CN: 查看核心配置存储路径，或自定义特定工具的配置文件与命令行程序位置
+    en: Inspect data directory or override config roots and CLI binary paths
+  storage_cli_paths:
+    zh-CN: 数据存储与 CLI 路径覆盖
+    en: Storage & CLI Paths
+  saved_applies_after_restart:
+    zh-CN: 已保存；重启后生效
+    en: saved; applies after restart
+  save_cli_path:
+    zh-CN: 保存 CLI 执行路径
+    en: Save CLI Path
+  save_root_override:
+    zh-CN: 保存根目录覆盖
+    en: Save Root Override
+  open_folder:
+    zh-CN: 打开数据目录
+    en: Open Folder
+  application_data_directory:
+    zh-CN: 应用数据存储目录
+    en: Application Data Directory
+  write_dual_parameters_for:
+    zh-CN: 同时写入推理模型参数以兼容旧版 OpenCode 插件
+    en: Write dual parameters for compatibility with older OpenCode
+  dual_reasoning_variant_write:
+    zh-CN: 双写 reasoning/variant 兼容模式
+    en: Dual Reasoning/Variant Write
+  allow_wiping_runtime_config:
+    zh-CN: 在重置或切换供应商时允许清空已应用的运行时配置
+    en: Allow wiping runtime config when resetting or switching
+  allow_clearing_omo_omos:
+    zh-CN: 允许清除 OMO/OMOS 运行配置
+    en: Allow Clearing OMO/OMOS Config
+  write_unified_config_to:
+    zh-CN: 使用现代统一的 ~/.omo 目录而非旧版分散配置文件
+    en: Write unified config to ~/.omo instead of legacy files
+  openagent_unified_omo_config:
+    zh-CN: OpenAgent 统一 ~/.omo 配置
+    en: OpenAgent Unified ~/.omo Config
+  keep_official_login_session:
+    zh-CN: 切换第三方供应商时保留 ~/.codex 的官方登录凭据与会话
+    en: Keep official login session in ~/.codex on provider switch
+  preserve_codex_official_auth:
+    zh-CN: Codex 保留官方登录态
+    en: Preserve Codex Official Auth
+  pass_dangerously_skip_permissi:
+    zh-CN: 启动 Claude Code 时自动附加全权限参数，跳过频繁的危险确认提示
+    en: Pass --dangerously-skip-permissions on Claude Code startup
+  claude_full_access_launch:
+    zh-CN: Claude 全权限启动 (--dangerously-skip-permissions)
+    en: Claude Full-Access Launch
+  security_auth_preservation_and:
+    zh-CN: 针对各命令行工具的环境变量与运行时配置写入安全策略
+    en: Security, auth preservation, and runtime policies for CLI tools
+  cli_launch_auth_policies:
+    zh-CN: CLI 运行与认证策略
+    en: CLI Launch & Auth Policies
+  ideal_for_quick_backup:
+    zh-CN: 适用于跨机器快速同步或备份配置
+    en: Ideal for quick backup or migrating settings between devices
+  single_file_config_transfer:
+    zh-CN: 单文件配置迁移
+    en: Single File Config Transfer
+  export_all_ai_toolplus:
+    zh-CN: 将 AI ToolPlus 的全量供应商配置、模型设置与环境参数导出为 JSON，或从现有 JSON 恢复
+    en: Export all AI ToolPlus providers and settings to JSON, or restore from a JSON
+      file
+  config_import_export:
+    zh-CN: 配置文件导入与导出
+    en: Config Import & Export
+  import_config_json:
+    zh-CN: 导入配置 (JSON)
+    en: Import Config (JSON)
+  export_config_json:
+    zh-CN: 导出配置 (JSON)
+    en: Export Config (JSON)
+  import_from_manager:
+    zh-CN: 从 Manager 迁移
+    en: Import from Manager
+  data_folder_not_found:
+    zh-CN: 未找到数据目录
+    en: Data folder not found
+  data_folder:
+    zh-CN: 数据目录
+    en: Data folder
+  read_accounts_from_antigravity:
+    zh-CN: 从本机 ~/.antigravity_tools 读取账号，按邮箱合并进 Antigravity 账号列表
+    en: Read accounts from ~/.antigravity_tools and merge them into the Antigravity
+      account list by email
+  antigravity_manager_import:
+    zh-CN: Antigravity Manager 迁移
+    en: Antigravity Manager Import
+  migrate_model_providers_usage:
+    zh-CN: 从本地 CC-Switch (cc-switch.db) 自动同步迁移模型供应商、使用统计与模型定价配置
+    en: Migrate model providers, usage analytics, and pricing from local CC-Switch
+      (cc-switch.db)
+  cc_switch_data_migration:
+    zh-CN: CC-Switch 数据迁移与导入
+    en: CC-Switch Data Migration & Import
+  safe_incremental_merge_will:
+    zh-CN: • 安全增量合并机制，不会覆盖或删除您在 AI ToolPlus 中现有的自定义改动
+    en: '• Safe incremental merge: will not overwrite or delete your existing custom
+      modifications in AI ToolPlus'
+  seamlessly_migrates_cc_switch:
+    zh-CN: • 支持将 CC-Switch 历史请求日志（3万+条）、详细 Token 消耗及模型计费定价完整迁移至 AI ToolPlus
+    en: • Seamlessly migrates CC-Switch historical request logs, token analytics,
+      and model pricing
+  supports_importing_provider_co:
+    zh-CN: • 支持一键导入 Claude Code、Codex、Pi、OpenCode、Gemini CLI 等所有工具的供应商配置
+    en: • Supports importing provider configurations for Claude Code, Codex, Pi, OpenCode,
+      Gemini CLI, etc.
+  database_file:
+    zh-CN: 数据库文件：
+    en: 'Database file: '
+  import_usage_pricing:
+    zh-CN: 导入使用统计与定价
+    en: Import Usage & Pricing
+  import_providers:
+    zh-CN: 导入供应商配置
+    en: Import Providers
+  select_database_file:
+    zh-CN: 选择数据库文件
+    en: Select Database File
+  cc_switch_database_not:
+    zh-CN: 未检测到 CC-Switch 数据库
+    en: CC-Switch database not detected
+  cc_switch_database_detected:
+    zh-CN: 已检测到 CC-Switch 数据库
+    en: CC-Switch database detected
+  cc_switch_database_file:
+    zh-CN: 已指定 CC-Switch 数据库文件
+    en: CC-Switch database file selected
+settings_tab:
+  about:
+    zh-CN: 关于
+    en: About
+  local_environment:
+    zh-CN: 本地环境
+    en: Local Environment
+  advanced:
+    zh-CN: 高级选项
+    en: Advanced
+  backup:
+    zh-CN: 备份
+    en: Backup
+  usage_statistics:
+    zh-CN: 使用统计
+    en: Usage Statistics
+  data_import:
+    zh-CN: 数据导入
+    en: Data Import
+  general:
+    zh-CN: 通用
+    en: General
+skills:
+  check_complete_all_skills:
+    zh-CN: 检查完成：所有已安装技能均为最新版本
+    en: 'Check complete: all skills are up to date'
+  scan_complete_all_tool:
+    zh-CN: 扫描完成：所有已知工具的技能已全部收录
+    en: 'Scan complete: all tool skills are already imported'
+  manage_skill_repositories:
+    zh-CN: 技能仓库管理
+    en: Manage Skill Repositories
+  done:
+    zh-CN: 完成
+    en: Done
+  configure_upstream_repositorie:
+    zh-CN: 配置常用技能源仓库。在「仓库」模式下可快速筛选和一键导入这些仓库中的 Skills。
+    en: Configure upstream repositories. You can filter and 1-click install skills
+      from these repos in Repos mode.
+  please_enter_a_valid:
+    zh-CN: 请输入合法的 GitHub 仓库地址 (如 owner/repo 或完整 GitHub URL)
+    en: Please enter a valid GitHub repository (owner/repo or URL)
+  add_repo:
+    zh-CN: 添加仓库
+    en: Add Repo
+  branch:
+    zh-CN: 默认分支 (默认 main)
+    en: Branch
+  repository_url:
+    zh-CN: 仓库地址 (URL 或 owner/repo)
+    en: Repository URL
+  add_github_skill_repository:
+    zh-CN: 添加自定义 GitHub 技能仓库
+    en: Add GitHub Skill Repository
+  install:
+    zh-CN: 一键安装
+    en: Install
+  installing:
+    zh-CN: 安装中…
+    en: Installing…
+  installed:
+    zh-CN: 已安装
+    en: Installed
+  view:
+    zh-CN: 查看
+    en: View
+  powered_by_skills_sh:
+    zh-CN: 由 skills.sh 提供公共检索
+    en: Powered by skills.sh
+  load_more:
+    zh-CN: 加载更多
+    en: Load More
+  loading:
+    zh-CN: 加载中…
+    en: Loading…
+  try_a_different_search:
+    zh-CN: 请尝试更换关键词，例如：git, review, rust, claude...
+    en: Try a different search query
+  no_skills_found:
+    zh-CN: 未找到匹配的技能
+    en: No skills found
+  retry_search:
+    zh-CN: 重试检索
+    en: Retry Search
+  failed_to_search_skills:
+    zh-CN: 检索技能库失败
+    en: Failed to search skills.sh
+  searching_skills_sh:
+    zh-CN: 正在从 skills.sh 检索技能库…
+    en: Searching skills.sh...
+  categories:
+    zh-CN: 热门分类：
+    en: 'Categories:'
+  reset:
+    zh-CN: 重置推荐
+    en: Reset
+  search:
+    zh-CN: 搜索
+    en: Search
+  uninstalled:
+    zh-CN: 未安装
+    en: Uninstalled
+  all_status:
+    zh-CN: 全部状态
+    en: All Status
+  all_repositories:
+    zh-CN: 全部仓库
+    en: All Repositories
+  click_manage_repos_to:
+    zh-CN: 点击【管理仓库】添加更多 GitHub 技能源
+    en: Click 'Manage Repos' to add GitHub repositories
+  no_skills_found_in:
+    zh-CN: 未找到匹配的仓库技能
+    en: No skills found in repositories
+  no_matching_skills_found:
+    zh-CN: 未在已配置的仓库中找到匹配技能
+    en: No matching skills found in configured repositories
+  reset_2:
+    zh-CN: 重置
+    en: Reset
+  manage_repos:
+    zh-CN: 管理仓库
+    en: Manage Repos
+  all_repos:
+    zh-CN: 全部仓库
+    en: All Repos
+  browse_community_repos_or:
+    zh-CN: 浏览社区仓库或检索公共技能库，一键安装至本地中心仓库并支持多工具同步
+    en: Browse community repos or search public skills, 1-click install & sync across
+      tools
+  discover_skills:
+    zh-CN: 发现技能
+    en: Discover Skills
+  repositories:
+    zh-CN: 仓库
+    en: Repositories
+  clone_install_git_skill:
+    zh-CN: 从 Git 克隆并安装技能
+    en: Clone & Install Git Skill
+  git_url_is_required:
+    zh-CN: 请输入 Git 仓库地址
+    en: Git URL is required
+  clone_install:
+    zh-CN: 克隆并安装
+    en: Clone & Install
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  git_repository_url:
+    zh-CN: Git 仓库地址 (URL)
+    en: Git Repository URL
+  enter_a_git_repository:
+    zh-CN: 输入 Git 仓库 URL，将自动克隆到中央仓库并收录 SKILL.md 技能定义。
+    en: Enter a Git repository URL to clone into central repo and discover SKILL.md.
+  cloning_and_installing_git:
+    zh-CN: 正在克隆并安装 Git 技能...
+    en: Cloning and installing Git skill...
+  close:
+    zh-CN: 关闭
+    en: Close
+  no_skill_md_found:
+    zh-CN: （未找到 SKILL.md 文档）
+    en: (no SKILL.md found)
+  reveal_in_file_manager:
+    zh-CN: 在文件管理器中定位
+    en: Reveal in File Manager
+  add_skill_tag:
+    zh-CN: 添加技能标签
+    en: Add Skill Tag
+  add:
+    zh-CN: 添加
+    en: Add
+  enter_new_tag_name:
+    zh-CN: 输入新标签名称
+    en: Enter new tag name
+  edit_skill_group_note:
+    zh-CN: 编辑技能分组与备注
+    en: Edit Skill Group & Note
+  metadata_saved:
+    zh-CN: 元数据已更新
+    en: Metadata saved
+  save:
+    zh-CN: 保存
+    en: Save
+  skill_note:
+    zh-CN: 技能备注 (Note)
+    en: Skill Note
+  skill_group:
+    zh-CN: 技能分组 (Group)
+    en: Skill Group
+  documents:
+    zh-CN: 文档预览
+    en: Documents
+  tool_sync_status:
+    zh-CN: 同步状态
+    en: Tool Sync Status
+  tags:
+    zh-CN: 标签
+    en: Tags
+  open_data_dir:
+    zh-CN: 打开数据目录
+    en: Open Data Dir
+  update:
+    zh-CN: 更新
+    en: Update
+  uninstall_skill:
+    zh-CN: 卸载 Skill
+    en: Uninstall Skill
+  delete:
+    zh-CN: 删除
+    en: Delete
+  skill_disabled:
+    zh-CN: 已停用技能
+    en: Skill disabled
+  skill_enabled:
+    zh-CN: 已启用技能
+    en: Skill enabled
+  enable_skill:
+    zh-CN: 启用技能
+    en: Enable Skill
+  disable_skill:
+    zh-CN: 停用技能
+    en: Disable Skill
+  kimi_skills_directory_kimi:
+    zh-CN: Kimi 技能目录 (~/.kimi-code/skills)
+    en: Kimi skills directory (~/.kimi-code/skills)
+  oh_my_pi_skills:
+    zh-CN: Oh My Pi 技能目录 (~/.config/oh-my-pi/skills)
+    en: Oh My Pi skills directory (~/.config/oh-my-pi/skills)
+  opencode_skills_directory_conf:
+    zh-CN: OpenCode 技能目录 (~/.config/opencode/skill)
+    en: OpenCode skills directory (~/.config/opencode/skill)
+  pi_skills_directory_pi:
+    zh-CN: Pi 技能目录 (~/.pi/agent/skills)
+    en: Pi skills directory (~/.pi/agent/skills)
+  codex_skills_directory_codex:
+    zh-CN: Codex 技能目录 (~/.codex/skills)
+    en: Codex skills directory (~/.codex/skills)
+  claude_code_skills_directory:
+    zh-CN: Claude Code 技能目录 (~/.claude/skills)
+    en: Claude Code skills directory (~/.claude/skills)
+  universal_agent_skills_directo:
+    zh-CN: 通用 Agent 技能目录 (~/.agents/skills)，一般支持除了 Claude 的所有 Agent 工具
+    en: Universal Agent skills directory (~/.agents/skills), generally supports all
+      Agent tools except Claude
+  add_tag:
+    zh-CN: 添加标签
+    en: Add Tag
+  edit:
+    zh-CN: 编辑
+    en: Edit
+  note:
+    zh-CN: 备注：
+    en: 'Note:'
+  ungrouped:
+    zh-CN: 未分组
+    en: Ungrouped
+  group:
+    zh-CN: 分组：
+    en: 'Group:'
+  reveal:
+    zh-CN: 定位
+    en: Reveal
+  path_copied:
+    zh-CN: 已复制路径
+    en: Path copied
+  copy:
+    zh-CN: 复制
+    en: Copy
+  open_skills_directory:
+    zh-CN: 打开Skill目录
+    en: Open Skills Directory
+  install_from_zip:
+    zh-CN: 从 ZIP 安装...
+    en: Install from ZIP...
+  import_directory:
+    zh-CN: 手动导入目录...
+    en: Import Directory...
+  are_you_sure_you:
+    zh-CN: |-
+      确定要将所有已同步工具目录中的技能超链（Junction）还原为独立的普通实体文件夹吗？
+      还原后各个工具目录将拥有独立的文件副本，不再依赖中央仓库。
+    en: |-
+      Are you sure you want to restore all skill junctions in tool directories to standalone plain folders?
+      After restoration, each tool directory will have independent file copies and will no longer depend on the central repository.
+  restore_to_plain_folders:
+    zh-CN: 还原为实体目录
+    en: Restore to Plain Folders
+  restore_to_plain:
+    zh-CN: 还原实体目录
+    en: Restore to Plain
+  sync_all:
+    zh-CN: 全部同步
+    en: Sync All
+  try_a_different_search_2:
+    zh-CN: 尝试更换搜索关键词
+    en: Try a different search query
+  click_scan_import_to:
+    zh-CN: 点击上方【扫描并导入现有技能】自动收录本地技能，或前往【发现技能】发现安装
+    en: Click 'Scan & Import' to discover local skills, or visit 'Discover Skills'
+  no_matching_skills:
+    zh-CN: 没有找到匹配的 Skill
+    en: No matching skills
+  no_installed_skills:
+    zh-CN: 暂无已安装技能
+    en: No installed skills
+  more_actions:
+    zh-CN: 其他操作
+    en: More Actions
+  install_from_git:
+    zh-CN: 从Git安装...
+    en: Install from Git...
+  update_all:
+    zh-CN: 更新全部
+    en: Update All
+  import_existing_skills:
+    zh-CN: 导入现有Skill
+    en: Import Existing Skills
+  central_repo:
+    zh-CN: 中央仓库
+    en: Central Repo
+  kimi_kimi_code_skills:
+    zh-CN: Kimi (~/.kimi-code/skills)
+    en: Kimi (~/.kimi-code/skills)
+  oh_my_pi_config:
+    zh-CN: Oh My Pi (~/.config/oh-my-pi/skills)
+    en: Oh My Pi (~/.config/oh-my-pi/skills)
+  opencode_config_opencode_skill:
+    zh-CN: OpenCode (~/.config/opencode/skill)
+    en: OpenCode (~/.config/opencode/skill)
+  pi_pi_agent_skills:
+    zh-CN: Pi (~/.pi/agent/skills)
+    en: Pi (~/.pi/agent/skills)
+  codex_codex_skills:
+    zh-CN: Codex (~/.codex/skills)
+    en: Codex (~/.codex/skills)
+  claude_code_claude_skills:
+    zh-CN: Claude Code (~/.claude/skills)
+    en: Claude Code (~/.claude/skills)
+  universal_agent_agents_skills:
+    zh-CN: 通用 Agent (~/.agents/skills，一般支持除了 Claude 的所有 Agent)
+    en: Universal Agent (~/.agents/skills, generally supports all agents except Claude)
+  copied_to_clipboard:
+    zh-CN: 已复制到剪贴板
+    en: Copied to clipboard
+  installed_skills:
+    zh-CN: 已安装技能
+    en: Installed Skills
+  just_now:
+    zh-CN: 刚刚
+    en: just now
+tool_dialog:
+  provider_saved:
+    zh-CN: 供应商已保存
+    en: Provider saved
+  failed_to_build_settings:
+    zh-CN: 构建配置失败
+    en: Failed to build settings
+  please_configure_at_least:
+    zh-CN: 请至少填写一个模型 ID
+    en: Please configure at least one model ID
+  provider_name_is_required:
+    zh-CN: 供应商名称不能为空
+    en: Provider name is required
+  save_configuration:
+    zh-CN: 保存配置
+    en: Save Configuration
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  selected_preset:
+    zh-CN: '已选用预设:'
+    en: 'Selected preset:'
+  underlying_config_merged_with:
+    zh-CN: 高级用户底层配置（保存时将与上方表单字段自动安全合并）
+    en: Underlying config (merged with form fields automatically on save)
+  raw_config_json_toml:
+    zh-CN: 原始底层配置代码 (Raw JSON / TOML)
+    en: Raw Config JSON / TOML
+  e_g_map_claude:
+    zh-CN: '例如: 将「claude-3-5-haiku-20241022」重定向至「deepseek-chat」或「gpt-4o-mini」，避免中转代理报错。'
+    en: e.g. Map 'claude-3-5-haiku-20241022' to 'deepseek-chat' or 'gpt-4o-mini' to
+      prevent 400 errors.
+  delete:
+    zh-CN: 删除
+    en: Delete
+  no_model_rewrites_configured:
+    zh-CN: 暂未配置模型重写映射。常用于将 CLI 内部硬编码的辅助模型（如 haiku、fast 模型）重定向至第三方中转站支持的模型。
+    en: No model rewrites configured. Useful to map hardcoded helper models (e.g.
+      haiku) to proxy models.
+  add_rewrite_rule:
+    zh-CN: 添加重写规则
+    en: Add Rewrite Rule
+  rules:
+    zh-CN: 条规则
+    en: rules
+  model_rewrites:
+    zh-CN: 模型重写映射 (Model Rewrites)
+    en: Model Rewrites
+  pricing_model_source:
+    zh-CN: 计费基准模型源 (Pricing Model Source)
+    en: Pricing Model Source
+  follows_global_default_billing:
+    zh-CN: 继承系统的全局默认计费策略与费率规则
+    en: Follows global default billing rules
+  calculates_cost_using_response:
+    zh-CN: 按服务端返回的真实模型单价计费（推荐在配置了模型重写映射时选用）
+    en: Calculates cost using response model pricing (recommended with rewrites)
+  calculates_cost_using_requeste:
+    zh-CN: 按客户端请求的模型单价进行计费换算
+    en: Calculates cost using requested model pricing
+  by_response_model:
+    zh-CN: 按响应模型 (Response)
+    en: By Response Model
+  by_request_model:
+    zh-CN: 按请求模型 (Request)
+    en: By Request Model
+  inherit_global:
+    zh-CN: 继承全局 (Global)
+    en: Inherit Global
+  k_2_0_double:
+    zh-CN: 2.0 (双倍)
+    en: 2.0 (Double)
+  k_1_5_proxy:
+    zh-CN: 1.5 (中转)
+    en: 1.5 (Proxy)
+  k_0_7_30_off:
+    zh-CN: 0.7 (七折)
+    en: 0.7 (30% off)
+  k_1_0_standard:
+    zh-CN: 1.0 (原价)
+    en: 1.0 (Standard)
+  cost_multiplier:
+    zh-CN: 成本倍率 (Cost Multiplier)
+    en: Cost Multiplier
+  billing_is_disabled_using:
+    zh-CN: 计费配置已禁用（遵循官方默认标准价格与全局规则）。点击右上角开关启用自定义计费。
+    en: Billing is disabled (using standard pricing). Click toggle above to enable.
+  compatible_with_cc_switch:
+    zh-CN: 兼容 cc-switch / ai-toolbox 计费倍率与价格换算规则
+    en: Compatible with cc-switch / ai-toolbox cost multiplier and billing
+  billing_multiplier:
+    zh-CN: 计费与成本倍率 (Billing & Multiplier)
+    en: Billing & Multiplier
+  note_automatically_written_to:
+    zh-CN: '说明: 保存时将自动写入 Claude Code 的 CUSTOM_HEADERS 环境变量及 Pi / Codex 的对应协议请求头中。'
+    en: 'Note: Automatically written to Claude Code''s CUSTOM_HEADERS env and Pi /
+      Codex request headers.'
+  quick_header_presets:
+    zh-CN: '常用 Header 快速填入:'
+    en: 'Quick Header presets:'
+  no_custom_headers_configured:
+    zh-CN: 暂未配置自定义 Header。可点击上方按钮添加，或点击下方常用预设快速填入。
+    en: No custom headers configured. Click button above or use quick presets below.
+  add_header:
+    zh-CN: 添加 Header
+    en: Add Header
+  items:
+    zh-CN: 项
+    en: items
+  custom_http_headers:
+    zh-CN: 自定义 HTTP 请求头 (Custom HTTP Headers)
+    en: Custom HTTP Headers
+  tip_some_third_party:
+    zh-CN: '提示: 部分中转站（如 Kimi / 火山 / GLM）仅允许官方白名单 User-Agent。若请求报 403 Forbidden，请直接套用「Claude
+      Code 官方指纹」。'
+    en: 'Tip: Some third-party proxies only allow official User-Agents. If you hit
+      403 Forbidden, apply the official fingerprint above.'
+  clear:
+    zh-CN: 清空
+    en: Clear
+  claude_code_official:
+    zh-CN: Claude Code 官方指纹
+    en: Claude Code Official
+  quick_presets:
+    zh-CN: '常用指纹预设:'
+    en: 'Quick presets:'
+  custom_user_agent_for:
+    zh-CN: 自定义 User-Agent（用于国内聚合代理 403 白名单校验）
+    en: Custom User-Agent (for proxy 403 allowlist checks)
+  client_user_agent:
+    zh-CN: 客户端 User-Agent (User-Agent 指纹)
+    en: Client User-Agent
+  network_billing:
+    zh-CN: 网络、请求头与计费
+    en: Network & Billing
+  connection_models:
+    zh-CN: 核心连接与模型
+    en: Connection & Models
+  wire_api:
+    zh-CN: 传输协议 (Wire API)
+    en: Wire API
+  reasoning_effort:
+    zh-CN: 推理强度 (Reasoning Effort)
+    en: Reasoning Effort
+  chat_compatible:
+    zh-CN: Chat 兼容
+    en: Chat Compatible
+  responses_native:
+    zh-CN: Responses 原生
+    en: Responses Native
+  high:
+    zh-CN: 高 (High)
+    en: High
+  medium:
+    zh-CN: 中 (Medium)
+    en: Medium
+  low:
+    zh-CN: 低 (Low)
+    en: Low
+  default:
+    zh-CN: 默认
+    en: Default
+  used_for_requests_not:
+    zh-CN: 用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方中转代理时建议填写。
+    en: Used for requests not mapped to specific roles. Recommended for third-party
+      proxies.
+  models:
+    zh-CN: 个上游模型
+    en: models
+  fetched:
+    zh-CN: 已获取
+    en: Fetched
+  default_fallback_model:
+    zh-CN: 默认 / 兜底模型 (Fallback Model)
+    en: Default / Fallback Model
+  subagent_not_in_menu:
+    zh-CN: 后台子代理，不显示在菜单
+    en: Subagent (not in menu)
+  k_1m_mode:
+    zh-CN: 1M 模式
+    en: 1M Mode
+  request_model:
+    zh-CN: 实际请求模型
+    en: Request Model
+  display_name:
+    zh-CN: 显示名称
+    en: Display Name
+  role:
+    zh-CN: 模型角色
+    en: Role
+  fetch_models_failed:
+    zh-CN: 获取模型失败
+    en: Fetch models failed
+  close:
+    zh-CN: 关闭
+    en: Close
+  fetch_models:
+    zh-CN: 获取上游模型
+    en: Fetch Models
+  refresh:
+    zh-CN: 重新获取
+    en: Refresh
+  fetching:
+    zh-CN: 获取中...
+    en: Fetching...
+  please_enter_a_model:
+    zh-CN: 请先填写任一模型
+    en: Please enter a model name first
+  model_applied_to_all:
+    zh-CN: 已一键将模型应用到所有角色
+    en: Model applied to all roles
+  quick_set:
+    zh-CN: 一键设置
+    en: Quick Set
+  configure_request_models_displ:
+    zh-CN: 配置各角色的请求模型与显示名称
+    en: Configure request models & display names for each role
+  model_mapping:
+    zh-CN: 模型角色映射 (Model Mapping)
+    en: Model Mapping
+  model_removed:
+    zh-CN: 已移除模型
+    en: Model removed
+  remove_model:
+    zh-CN: 移除模型
+    en: Remove model
+  not_set:
+    zh-CN: 未设置
+    en: Not set
+  reasoning_levels:
+    zh-CN: 思考等级
+    en: Reasoning Levels
+  context_window:
+    zh-CN: 上下文窗口
+    en: Context Window
+  actual_request_model:
+    zh-CN: 实际请求模型 *
+    en: Actual Request Model *
+  menu_display_name:
+    zh-CN: 菜单显示名
+    en: Menu Display Name
+  no_model_mapping_configured:
+    zh-CN: 暂无模型映射配置（非必填），点击右上角【添加模型】或【获取上游模型】进行多模型映射
+    en: No model mapping configured. Click Add Model or Fetch Models.
+  e_g_128000:
+    zh-CN: 如 128000
+    en: e.g. 128000
+  model_e_g_deepseek:
+    zh-CN: 实际模型如 deepseek-chat
+    en: Model e.g. deepseek-chat
+  e_g_deepseek_v3:
+    zh-CN: 例如 DeepSeek V3
+    en: e.g. DeepSeek V3
+  add_model:
+    zh-CN: 添加模型
+    en: Add Model
+  configure_model_mapping_betwee:
+    zh-CN: 配置 Codex 菜单显示名与实际请求模型的映射（多模型支持）
+    en: Configure model mapping between menu display name and actual upstream model
+  model_mapping_2:
+    zh-CN: 模型映射 (Model Mapping)
+    en: Model Mapping
+  default_model_for_codex:
+    zh-CN: Codex 默认请求的模型，随时可改。留空且配置了模型映射时，默认使用映射第一行。
+    en: Default model for Codex. Leave empty to use the first mapped model.
+  default_model:
+    zh-CN: 默认模型 (Default Model)
+    en: Default Model
+  keep_at_least_one:
+    zh-CN: 至少保留一个模型配置
+    en: Keep at least one model
+  expand:
+    zh-CN: 展开高级参数
+    en: Expand
+  collapse:
+    zh-CN: 收起参数
+    en: Collapse
+  model_id:
+    zh-CN: 模型 ID *
+    en: Model ID *
+  no_models_configured_click:
+    zh-CN: 暂无模型配置，请点击右上角【添加模型】或【获取上游模型】
+    en: No models configured. Click Add Model or Fetch Models.
+  model_row_added:
+    zh-CN: 已添加模型行
+    en: Model row added
+  models_2:
+    zh-CN: 个模型
+    en: models
+  imported:
+    zh-CN: 已导入
+    en: Imported
+  import_all:
+    zh-CN: 导入全部
+    en: Import All
+  models_configuration:
+    zh-CN: 模型配置与列表 (Models)
+    en: Models Configuration
+  select:
+    zh-CN: 选择
+    en: Select
+  no_matching_models_found:
+    zh-CN: 未找到匹配的模型
+    en: No matching models found
+  models_click_to_select:
+    zh-CN: 个模型（点击条目直接填入）
+    en: models (click to select)
+  matched:
+    zh-CN: 匹配
+    en: Matched
+  select_2:
+    zh-CN: 选择模型
+    en: Select
+  close_2:
+    zh-CN: 收起下拉
+    en: Close
+  reasoning_effort_2:
+    zh-CN: 思考等级 (Reasoning Effort)
+    en: Reasoning Effort
+  upstream_format:
+    zh-CN: 上游协议格式 (Upstream Format)
+    en: Upstream Format
+  api_format:
+    zh-CN: API 协议格式 (API Format)
+    en: API Format
+  show_api_key:
+    zh-CN: 显示密钥
+    en: Show API Key
+  hide_api_key:
+    zh-CN: 隐藏密钥
+    en: Hide API Key
+  get_api_key:
+    zh-CN: 获取 API Key ->
+    en: Get API key ->
+  api_key_token:
+    zh-CN: API Key / 访问密钥
+    en: API Key / Token
+  e_g_https_api:
+    zh-CN: '例如: https://api.anthropic.com 或第三方中转地址'
+    en: e.g. https://api.anthropic.com or reverse proxy URL
+  base_url:
+    zh-CN: 接口地址 (Base URL)
+    en: Base URL
+  using_official_direct_connecti:
+    zh-CN: 💡 当前使用的是官方直连模式。无需填写 Base URL 或自定义 API Key，CLI 将直接使用官方认证/订阅登录。
+    en: 💡 Using official direct connection mode. No Base URL or custom API Key required.
+  connection_credentials:
+    zh-CN: 接口与凭据
+    en: Connection & Credentials
+  category:
+    zh-CN: 分类
+    en: Category
+  provider_name:
+    zh-CN: 供应商名称 *
+    en: Provider Name *
+  provider_key:
+    zh-CN: Provider Key (配置标识) *
+    en: Provider Key *
+  basic_information:
+    zh-CN: 基础信息
+    en: Basic Information
+  notes_optional:
+    zh-CN: 备注（可选）
+    en: Notes (optional)
+  open:
+    zh-CN: 打开官网
+    en: Open
+  website_optional:
+    zh-CN: 官网地址（可选）
+    en: Website (optional)
+  other:
+    zh-CN: 其他
+    en: Other
+  subscription:
+    zh-CN: 订阅
+    en: Subscription
+  proxy:
+    zh-CN: 代理
+    en: Proxy
+  custom:
+    zh-CN: 自定义
+    en: Custom
+  official:
+    zh-CN: 官方
+    en: Official
+  quick_presets_auto_fills:
+    zh-CN: 快速套用服务商预设（自动填入地址与模型参数）：
+    en: 'Quick Presets (auto-fills endpoints & models):'
+  blank_custom:
+    zh-CN: 空白 / Blank
+    en: Blank / Custom
+  add_provider:
+    zh-CN: 新增供应商
+    en: Add Provider
+  edit_provider:
+    zh-CN: 编辑供应商
+    en: Edit Provider
+  no_models_returned:
+    zh-CN: 未返回可用模型
+    en: No models returned
+  parse_error:
+    zh-CN: 响应解析失败
+    en: Parse error
+  network_error:
+    zh-CN: 网络连接错误
+    en: Network error
+  authentication_failed_401_403:
+    zh-CN: 身份认证失败 (401/403)，请检查 API Key 是否正确
+    en: Authentication failed (401/403), check your API key
+  please_enter_base_url:
+    zh-CN: 请先填写 Base URL 接口地址
+    en: Please enter Base URL first
+  model_name_e_g:
+    zh-CN: 实际模型如 deepseek-chat
+    en: Model name e.g. deepseek-chat
+  forward_model:
+    zh-CN: 转发模型 (To)
+    en: Forward Model
+  request_model_2:
+    zh-CN: 请求模型 (From)
+    en: Request Model
+  k_1_0_default:
+    zh-CN: 1.0 (留空默认为 1.0)
+    en: 1.0 (default)
+  header_value:
+    zh-CN: Header 对应值
+    en: Header Value
+  header_name:
+    zh-CN: Header 名称 (如 X-Title)
+    en: Header Name
+  e_g_claude_cli:
+    zh-CN: 例如 claude-cli/2.1.237 (external, cli)
+    en: e.g. claude-cli/2.1.237
+  search_models_by_id:
+    zh-CN: 搜索模型名称或厂商 (模糊过滤)...
+    en: Search models by ID or provider...
+  max_tokens:
+    zh-CN: 最大输出，如 128000
+    en: Max tokens
+  context_window_2:
+    zh-CN: 上下文窗口，如 1000000
+    en: Context window
+  display_name_2:
+    zh-CN: 显示名称，如 DeepSeek-V3
+    en: Display name
+  model_id_2:
+    zh-CN: 模型 ID，如 deepseek-chat
+    en: Model ID
+  provider_key_e_g:
+    zh-CN: Provider Key (如 kimi / deepseek)
+    en: Provider Key (e.g. kimi)
+  website_optional_2:
+    zh-CN: 网址（可选）
+    en: Website (optional)
+  custom_headers_e_g:
+    zh-CN: '自定义请求头（例如 X-Custom-Header: value）'
+    en: 'Custom headers (e.g. X-Custom-Header: value)'
+  e_g_claude_3:
+    zh-CN: 例如 Claude 3.5 Fable
+    en: e.g. Claude 3.5 Fable
+  e_g_claude_3_2:
+    zh-CN: 例如 Claude 3.5 Haiku
+    en: e.g. Claude 3.5 Haiku
+  e_g_claude_3_3:
+    zh-CN: 例如 Claude 3.7 Opus
+    en: e.g. Claude 3.7 Opus
+  e_g_deepseek_v4:
+    zh-CN: 例如 DeepSeek V4 Pro
+    en: e.g. DeepSeek V4 Pro
+  https_api_anthropic_com:
+    zh-CN: https://api.anthropic.com 或第三方中转代理
+    en: https://api.anthropic.com or proxy
+  name:
+    zh-CN: 名称
+    en: Name
+tool_extensions:
+  clear_runtime:
+    zh-CN: 清除运行时
+    en: Clear Runtime
+  apply_directly:
+    zh-CN: 直接应用
+    en: Apply Directly
+  save_as_profile:
+    zh-CN: 保存为档案
+    en: Save as Profile
+  delete:
+    zh-CN: 删除
+    en: Delete
+  apply:
+    zh-CN: 应用
+    en: Apply
+  oh_my_openagent_and:
+    zh-CN: Oh My OpenAgent 与 Oh My OpenCode Slim 配置档案
+    en: Oh My OpenAgent and Oh My OpenCode Slim profiles
+  opencode_add_ons:
+    zh-CN: OpenCode 附加工具
+    en: OpenCode Add-ons
+  extensions_read_failed:
+    zh-CN: 扩展读取失败
+    en: Extensions read failed
+  failed_to_list_extensions:
+    zh-CN: 扩展列表获取失败
+    en: Failed to list extensions
+  source_required:
+    zh-CN: 请输入来源
+    en: source required
+  install:
+    zh-CN: 安装
+    en: Install
+  update:
+    zh-CN: 有更新
+    en: Update!
+  delete_local_extension:
+    zh-CN: 删除本地扩展
+    en: Delete Local Extension
+  remove:
+    zh-CN: 移除
+    en: Remove
+  update_2:
+    zh-CN: 更新
+    en: Update
+  enter_a_source_below:
+    zh-CN: 在下方输入来源并安装
+    en: Enter a source below and install
+  no_extensions_installed:
+    zh-CN: 没有已安装扩展
+    en: No extensions installed
+  omp_cli_not_found:
+    zh-CN: 未找到 omp CLI
+    en: omp CLI not found
+  pi_cli_not_found:
+    zh-CN: 未找到 pi CLI
+    en: pi CLI not found
+  loading_extensions:
+    zh-CN: 正在查询扩展列表…
+    en: Loading extensions…
+  omp_plugin_list_is:
+    zh-CN: omp plugin list 为事实源：包扩展走 OMP CLI，本地扩展来自 <root>/extensions
+    en: omp plugin list is the source of truth; locals come from <root>/extensions
+  pi_list_is_the:
+    zh-CN: pi list 为事实源：包扩展走 Pi CLI，本地扩展来自 <root>/extensions
+    en: 'pi list is the source of truth: packages via the Pi CLI, locals from <root>/extensions'
+  extensions:
+    zh-CN: 扩展管理
+    en: Extensions
+  refresh:
+    zh-CN: 刷新
+    en: Refresh
+tool_page:
+  sessions:
+    zh-CN: 会话管理
+    en: Sessions
+  add_ons:
+    zh-CN: 附加工具
+    en: Add-ons
+  marketplace:
+    zh-CN: 插件市场
+    en: Marketplace
+  installed_plugins:
+    zh-CN: 已安装插件
+    en: Installed Plugins
+  other_settings:
+    zh-CN: 其他设置
+    en: Other Settings
+  extensions:
+    zh-CN: 扩展
+    en: Extensions
+  runtime_files:
+    zh-CN: 运行时文件
+    en: Runtime Files
+  prompts:
+    zh-CN: 全局提示词
+    en: Prompts
+  providers:
+    zh-CN: 供应商
+    en: Providers
+tool_plugins:
+  homepage:
+    zh-CN: 主页
+    en: Homepage
+  install:
+    zh-CN: 安装
+    en: Install
+  installed:
+    zh-CN: 已安装
+    en: Installed
+  installed_other_scope:
+    zh-CN: 项目级已安装
+    en: Installed (other scope)
+  no_matching_marketplace_plugin:
+    zh-CN: 未找到匹配的市场插件
+    en: No matching marketplace plugins found
+  no_marketplace_plugins_availab:
+    zh-CN: 暂无市场插件
+    en: No marketplace plugins available
+  source_required:
+    zh-CN: 请输入来源
+    en: source required
+  add:
+    zh-CN: 添加市场
+    en: Add
+  remove:
+    zh-CN: 移除
+    en: Remove
+  update:
+    zh-CN: 更新
+    en: Update
+  auto_update_disabled:
+    zh-CN: 已关闭自动更新
+    en: Auto-update disabled
+  auto_update_enabled:
+    zh-CN: 已开启自动更新
+    en: Auto-update enabled
+  collapse_sources:
+    zh-CN: 收起市场源 ▴
+    en: Collapse Sources ▴
+  plugins:
+    zh-CN: 个插件
+    en: plugins
+  matched:
+    zh-CN: 匹配到
+    en: Matched
+  marketplace_read_failed:
+    zh-CN: 插件市场读取失败
+    en: marketplace read failed
+  loading_marketplace_plugins:
+    zh-CN: 正在读取插件市场…
+    en: Loading marketplace plugins…
+  refresh:
+    zh-CN: 刷新
+    en: Refresh
+  path:
+    zh-CN: 路径
+    en: Path
+  scopes:
+    zh-CN: 作用域
+    en: Scopes
+  uninstall:
+    zh-CN: 卸载
+    en: Uninstall
+  plugin_disabled:
+    zh-CN: 已停用插件
+    en: Plugin disabled
+  plugin_enabled:
+    zh-CN: 已启用插件
+    en: Plugin enabled
+  enable:
+    zh-CN: 启用
+    en: Enable
+  disable:
+    zh-CN: 停用
+    en: Disable
+  non_user_scope:
+    zh-CN: 非用户级
+    en: Non-user scope
+  disabled:
+    zh-CN: 已停用
+    en: Disabled
+  enabled:
+    zh-CN: 已启用
+    en: Enabled
+  no_matching_plugins_found:
+    zh-CN: 未找到匹配的插件
+    en: No matching plugins found
+  switch_to_marketplaces_tab:
+    zh-CN: 可切换至「插件市场」标签页浏览并一键安装插件
+    en: Switch to Marketplaces tab to discover and install plugins
+  no_installed_plugins:
+    zh-CN: 没有已安装插件
+    en: No installed plugins
+  plugins_read_failed:
+    zh-CN: 插件读取失败
+    en: plugins read failed
+  loading_plugins:
+    zh-CN: 正在读取插件信息…
+    en: Loading plugins…
+  installed_plugins:
+    zh-CN: 已安装插件
+    en: Installed Plugins
+  docs:
+    zh-CN: 插件文档
+    en: Docs
+  disable_all:
+    zh-CN: 全部停用
+    en: Disable All
+  enable_all:
+    zh-CN: 全部启用
+    en: Enable All
+  plugin_installed:
+    zh-CN: 插件已安装
+    en: plugin installed
+  loading_codex_marketplace_plug:
+    zh-CN: 正在读取 Codex 插件市场…
+    en: Loading Codex marketplace plugins…
+  plugin_uninstalled:
+    zh-CN: 插件已卸载
+    en: plugin uninstalled
+  plugin_disabled_2:
+    zh-CN: 插件已停用
+    en: plugin disabled
+  plugin_enabled_2:
+    zh-CN: 插件已启用
+    en: plugin enabled
+  switch_to_marketplace_tab:
+    zh-CN: 可切换至「插件市场」标签页浏览并一键安装插件
+    en: Switch to Marketplace tab to discover and install plugins
+  loading_codex_plugins:
+    zh-CN: 正在读取 Codex 插件…
+    en: Loading Codex plugins…
+  install_trust:
+    zh-CN: 安装并信任
+    en: Install & Trust
+  loading_grok_marketplace_plugi:
+    zh-CN: 正在读取 Grok 插件市场…
+    en: Loading Grok marketplace plugins…
+  loading_grok_plugins:
+    zh-CN: 正在读取 Grok 插件…
+    en: Loading Grok plugins…
+tool_prompts:
+  saved:
+    zh-CN: 已保存
+    en: saved
+  name_is_required:
+    zh-CN: 名称不能为空
+    en: name is required
+  save:
+    zh-CN: 保存
+    en: Save
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  prompt_content_markdown:
+    zh-CN: 提示词内容（Markdown）
+    en: Prompt Content (Markdown)
+  prompt_name:
+    zh-CN: 提示词名称
+    en: Prompt Name
+  quick_presets:
+    zh-CN: 快捷填入预设：
+    en: 'Quick Presets:'
+  add_global_prompt:
+    zh-CN: 添加全局提示词
+    en: Add Global Prompt
+  edit_global_prompt:
+    zh-CN: 编辑全局提示词
+    en: Edit Global Prompt
+  prompt_content:
+    zh-CN: Prompt 内容…
+    en: Prompt content…
+  name:
+    zh-CN: 名称
+    en: Name
+  tool_has_no_prompt:
+    zh-CN: 该工具没有 Prompt 文件
+    en: tool has no prompt file
+  global_prompt_disabled:
+    zh-CN: 已停用全局提示词
+    en: Global prompt disabled
+  expand:
+    zh-CN: 展开 ▾
+    en: Expand ▾
+  collapse:
+    zh-CN: 收起 ▴
+    en: Collapse ▴
+  delete_this_prompt:
+    zh-CN: 确定要删除这条提示词吗？
+    en: Delete this prompt?
+  delete_prompt:
+    zh-CN: 删除提示词
+    en: Delete Prompt
+  delete:
+    zh-CN: 删除
+    en: Delete
+  edit:
+    zh-CN: 编辑
+    en: Edit
+  prompt_duplicate_created:
+    zh-CN: 已创建提示词副本
+    en: prompt duplicate created
+  duplicate:
+    zh-CN: 创建副本
+    en: Duplicate
+  prompt_copied_to_clipboard:
+    zh-CN: 提示词内容已复制到剪贴板
+    en: prompt copied to clipboard
+  copy_content:
+    zh-CN: 复制内容
+    en: Copy Content
+  apply:
+    zh-CN: 应用
+    en: Apply
+  disable:
+    zh-CN: 停用
+    en: Disable
+  applied:
+    zh-CN: 已应用
+    en: Applied
+  try_a_different_search:
+    zh-CN: 尝试更换搜索关键词
+    en: Try a different search term
+  click_a_preset_above:
+    zh-CN: 点击上方快捷预设模板，或新增一条可一键应用的全局提示词
+    en: Click a preset above or add a new global prompt
+  no_matching_prompts:
+    zh-CN: 没有找到匹配的提示词
+    en: No matching prompts
+  no_prompts_yet:
+    zh-CN: 还没有全局提示词
+    en: No prompts yet
+  global_prompts:
+    zh-CN: 全局提示词
+    en: Global Prompts
+  global_prompts_will_be:
+    zh-CN: 全局提示词将在与 AI 对话时自动作为系统提示词或前置上下文生效。您可以创建多个提示词模板并随时切换或启用。
+    en: Global prompts will be injected as system instructions or leading context
+      during conversations. You can create multiple templates and switch or enable
+      them at any time.
+  quick_presets_2:
+    zh-CN: 快捷预设模板：
+    en: 'Quick Presets:'
+  add_prompt:
+    zh-CN: 新增提示词
+    en: Add Prompt
+tool_providers:
+  auth_failed_401_403:
+    zh-CN: 认证失败（401/403）
+    en: auth failed (401/403)
+  provider_config_lacks_baseurl:
+    zh-CN: 供应商配置缺少 baseUrl
+    en: provider config lacks baseUrl
+  no_providers_to_test:
+    zh-CN: 没有可测试的供应商
+    en: no providers to test
+  delete_this_provider:
+    zh-CN: 确定要删除这条供应商配置吗？
+    en: Delete this provider?
+  delete_provider:
+    zh-CN: 删除供应商
+    en: Delete Provider
+  move_down:
+    zh-CN: 下移
+    en: Move Down
+  move_up:
+    zh-CN: 上移
+    en: Move Up
+  cli_launched:
+    zh-CN: CLI 已启动
+    en: CLI launched
+  launch_cli:
+    zh-CN: 启动 CLI 终端
+    en: Launch CLI
+  fetch_models:
+    zh-CN: 拉取可用模型
+    en: Fetch Models
+  test_connection:
+    zh-CN: 连通测试
+    en: Test Connection
+  edit_provider:
+    zh-CN: 编辑供应商
+    en: Edit Provider
+  enable:
+    zh-CN: 启用
+    en: Enable
+  in_use:
+    zh-CN: 使用中
+    en: In Use
+  disabled:
+    zh-CN: 未启用
+    en: Disabled
+  enabled:
+    zh-CN: 已启用
+    en: Enabled
+  website:
+    zh-CN: 官网
+    en: Website
+  disabled_2:
+    zh-CN: 已停用
+    en: Disabled
+  official:
+    zh-CN: 官方直连
+    en: Official
+  failed:
+    zh-CN: 连通失败
+    en: Failed
+  click_add_provider_to:
+    zh-CN: 点击右上角「新增供应商」创建第一条配置
+    en: Click "Add Provider" to create your first config
+  no_providers_yet:
+    zh-CN: 还没有供应商
+    en: No providers yet
+  providers_configured:
+    zh-CN: 个供应商配置
+    en: providers configured
+  test_all:
+    zh-CN: 批量测试
+    en: Test All
+  memory_disabled:
+    zh-CN: 记忆已停用
+    en: memory disabled
+  memory_enabled:
+    zh-CN: 记忆已启用
+    en: memory enabled
+  memory:
+    zh-CN: 记忆系统
+    en: Memory
+  add_provider:
+    zh-CN: 新增供应商
+    en: Add Provider
+tool_runtime:
+  failed_to_read_settings:
+    zh-CN: 读取 settings.json 失败
+    en: Failed to read settings.json
+  note_the_packages_field:
+    zh-CN: 提示：packages 字段由「扩展」页签统一维护管理，此处修改时会自动合并保留已安装扩展配置。
+    en: 'Note: the packages field is maintained by the Extensions tab and will be
+      preserved automatically.'
+  settings_file_pi_agent:
+    zh-CN: 设置文件：~/.pi/agent/settings.json
+    en: 'Settings file: ~/.pi/agent/settings.json'
+  other_settings_saved:
+    zh-CN: 已保存其他设置
+    en: Other settings saved
+  save_settings:
+    zh-CN: 保存设置
+    en: Save Settings
+  reloaded_settings_from_disk:
+    zh-CN: 已从磁盘重新加载设置
+    en: Reloaded settings from disk
+  reload:
+    zh-CN: 重新加载
+    en: Reload
+  formatted_json:
+    zh-CN: 已格式化 JSON
+    en: Formatted JSON
+  format_json:
+    zh-CN: 格式化 JSON
+    en: Format JSON
+  all_settings_in_pi:
+    zh-CN: 管理 ~/.pi/agent/settings.json 中除 packages 以外的所有顶层字段（如 default_provider、theme
+      等）
+    en: All settings in ~/.pi/agent/settings.json outside packages (e.g. default_provider,
+      theme, etc.)
+  pi_other_settings_settings:
+    zh-CN: Pi 其他设置 (settings.json)
+    en: Pi Other Settings (settings.json)
+  no_matches_found:
+    zh-CN: 无匹配项
+    en: No matches found
+  config_read_failed:
+    zh-CN: 配置读取失败
+    en: Config read failed
+  model_settings_saved:
+    zh-CN: 模型设置已保存
+    en: Model settings saved
+  save_model_settings:
+    zh-CN: 保存模型设置
+    en: Save Model Settings
+  writes_settings_json_defaultpr:
+    zh-CN: 写入 settings.json 的 defaultProvider / defaultModel / defaultThinkingLevel
+    en: writes settings.json defaultProvider / defaultModel / defaultThinkingLevel
+  model_settings:
+    zh-CN: 模型设置
+    en: Model Settings
+  file_does_not_exist:
+    zh-CN: 文件当前不存在，点击右上角“创建文件”或“在线编辑”可直接初始化保存。
+    en: File does not exist yet. Click Create or Edit above to initialize it.
+  create:
+    zh-CN: 创建文件
+    en: Create
+  edit:
+    zh-CN: 在线编辑
+    en: Edit
+  path_copied:
+    zh-CN: 路径已复制
+    en: path copied
+  copy_path:
+    zh-CN: 复制路径
+    en: Copy Path
+  open:
+    zh-CN: 打开
+    en: Open
+  reveal:
+    zh-CN: 定位
+    en: Reveal
+  missing:
+    zh-CN: 缺失
+    en: missing
+  exists:
+    zh-CN: 存在
+    en: exists
+  no_known_config_files:
+    zh-CN: 该工具没有已知配置文件
+    en: No known config files
+  refresh:
+    zh-CN: 刷新
+    en: Refresh
+  inspect_reveal_open_in:
+    zh-CN: 查看、在外部编辑器打开或在线直接编辑工具的真实配置文件
+    en: Inspect, reveal, open in editor, or edit real tool config files
+  runtime_files:
+    zh-CN: 运行时文件
+    en: Runtime Files
+  config_file_saved_successfully:
+    zh-CN: 配置文件已成功保存
+    en: config file saved successfully
+  save_changes:
+    zh-CN: 保存更改
+    en: Save Changes
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  saved_and_applied:
+    zh-CN: 已保存并应用
+    en: saved and applied
+  read_failed:
+    zh-CN: 读取失败
+    en: read failed
+  common_config_merged_with:
+    zh-CN: 通用配置（与供应商配置合并）
+    en: Common Config (merged with provider)
+  read_current_file:
+    zh-CN: 从当前文件读取
+    en: Read Current File
+  format:
+    zh-CN: 格式化
+    en: Format
+  save_apply_common_config:
+    zh-CN: 保存并应用通用配置
+    en: Save & Apply Common Config
+tool_sessions:
+  rename_session:
+    zh-CN: 重命名会话
+    en: Rename Session
+  renamed:
+    zh-CN: 已重命名
+    en: renamed
+  save:
+    zh-CN: 保存
+    en: Save
+  cancel:
+    zh-CN: 取消
+    en: Cancel
+  delete:
+    zh-CN: 删除
+    en: Delete
+  delete_this_session_this:
+    zh-CN: 确定要删除这条会话记录吗？此操作无法恢复。
+    en: Delete this session? This action cannot be undone.
+  delete_session:
+    zh-CN: 删除会话
+    en: Delete Session
+  delete_antigravity_session:
+    zh-CN: 删除 Antigravity 会话
+    en: Delete Antigravity Session
+  rename:
+    zh-CN: 重命名
+    en: Rename
+  resume:
+    zh-CN: 恢复命令
+    en: Resume
+  resume_not_supported_for:
+    zh-CN: 该会话暂不支持恢复命令
+    en: Resume not supported for this session
+  copied_resume_command:
+    zh-CN: 已复制恢复命令
+    en: Copied resume command
+  this_agent_s_session:
+    zh-CN: 该 Agent 的会话目录可能为空或没有匹配的搜索结果
+    en: This agent's session directory may be empty or no results matched
+  no_sessions_found:
+    zh-CN: 没有找到会话
+    en: No sessions found
+  scanning_session_history_files:
+    zh-CN: 后台正在快速扫描会话历史文件，请稍候
+    en: Scanning session history files in background, please wait
+  loading_sessions:
+    zh-CN: 正在加载会话列表…
+    en: Loading sessions…
+  refresh:
+    zh-CN: 刷新
+    en: Refresh
+  sessions:
+    zh-CN: 个会话
+    en: sessions
+  total:
+    zh-CN: 共
+    en: Total
+usage:
+  periodically_scan_local_sessio:
+    zh-CN: 定期扫描各客户端的本地会话记录以统计用量；关闭后仅在手动同步时扫描
+    en: Periodically scan local session logs from CLI clients to aggregate usage;
+      when disabled, scan only on manual sync
+  auto_scan_session_records:
+    zh-CN: 自动扫描会话记录
+    en: Auto-Scan Session Records
+  auto_scan_session_history:
+    zh-CN: 已关闭本地会话历史自动扫描同步
+    en: Auto-scan session history disabled
+  auto_scan_session_history_2:
+    zh-CN: 已开启本地会话历史自动扫描同步
+    en: Auto-scan session history enabled
+  sync_now:
+    zh-CN: 立即同步
+    en: Sync Now
+  model_pricing_rules:
+    zh-CN: 模型定价规则库
+    en: Model Pricing Rules
+  no_pricing_models_registered:
+    zh-CN: 定价库为空
+    en: No pricing models registered
+  cache_write_1m:
+    zh-CN: 缓存写 $/1M
+    en: Cache Write $/1M
+  cache_read_1m:
+    zh-CN: 缓存读 $/1M
+    en: Cache Read $/1M
+  output_1m:
+    zh-CN: 输出 $/1M
+    en: Output $/1M
+  input_1m:
+    zh-CN: 输入 $/1M
+    en: Input $/1M
+  model_name:
+    zh-CN: 模型名称
+    en: Model Name
+  configure_default_cost_multipl:
+    zh-CN: 设置各应用的基础计费倍率与模型解析来源 (对标 CC-Switch pricing config)
+    en: Configure default cost multipliers and pricing model sources per application
+      (CC-Switch parity)
+  global_pricing_defaults:
+    zh-CN: 全局计费默认配置
+    en: Global Pricing Defaults
+  uses_client_request_model:
+    zh-CN: 强制按客户端发起请求时填写的模型单价 × 倍率计费
+    en: Uses client request model price × multiplier
+  uses_upstream_response_model:
+    zh-CN: 优先按服务端响应中实际调用的模型单价 × 倍率计费
+    en: Uses upstream response model price × multiplier
+  request_model:
+    zh-CN: 请求模型
+    en: Request Model
+  response_priority:
+    zh-CN: 响应模型 (优先)
+    en: Response (Priority)
+  billing_behavior:
+    zh-CN: 计费解析说明
+    en: Billing Behavior
+  pricing_model_source:
+    zh-CN: 定价模型来源
+    en: Pricing Model Source
+  cost_multiplier:
+    zh-CN: 成本倍率
+    en: Cost Multiplier
+  application:
+    zh-CN: 应用名称
+    en: Application
+  global_pricing_configuration_s:
+    zh-CN: 全局计费默认配置已保存
+    en: Global pricing configuration saved
+  multiplier_must_be_a:
+    zh-CN: 倍率必须是非负有效数字
+    en: Multiplier must be a valid non-negative number
+  save_configuration:
+    zh-CN: 保存全局配置
+    en: Save Configuration
+  no_model_statistics_available:
+    zh-CN: 暂无模型统计数据
+    en: No model statistics available
+  avg_cost_req:
+    zh-CN: 每次请求均价
+    en: Avg Cost / Req
+  total_cost:
+    zh-CN: 总成本 (USD)
+    en: Total Cost
+  tokens:
+    zh-CN: 消耗 Tokens
+    en: Tokens
+  requests:
+    zh-CN: 请求次数
+    en: Requests
+  no_provider_statistics_availab:
+    zh-CN: 暂无 Provider 统计数据
+    en: No provider statistics available
+  avg_latency:
+    zh-CN: 平均延迟
+    en: Avg Latency
+  success_rate:
+    zh-CN: 成功率
+    en: Success Rate
+  total_cost_2:
+    zh-CN: 成本 (USD)
+    en: Total Cost
+  provider_name:
+    zh-CN: Provider 来源
+    en: Provider Name
+  showing:
+    zh-CN: 当前页展示
+    en: Showing
+  next:
+    zh-CN: 下一页
+    en: Next
+  previous:
+    zh-CN: 上一页
+    en: Previous
+  total_records:
+    zh-CN: 总记录数
+    en: Total records
+  no_request_logs_found:
+    zh-CN: 暂无请求日志记录
+    en: No request logs found
+  source:
+    zh-CN: 渠道
+    en: Source
+  status:
+    zh-CN: 状态
+    en: Status
+  latency:
+    zh-CN: 耗时
+    en: Latency
+  cost:
+    zh-CN: 费用 (USD)
+    en: Cost
+  output:
+    zh-CN: 输出
+    en: Output
+  input:
+    zh-CN: 输入
+    en: Input
+  model:
+    zh-CN: 计费模型
+    en: Model
+  provider:
+    zh-CN: 来源 (Provider)
+    en: Provider
+  time:
+    zh-CN: 请求时间
+    en: Time
+  all_status:
+    zh-CN: 全部状态
+    en: All Status
+  usage_trends:
+    zh-CN: 使用趋势
+    en: Usage Trends
+  cache_read:
+    zh-CN: 缓存命中
+    en: Cache Read
+  cache_write:
+    zh-CN: 缓存创建
+    en: Cache Write
+  cost_2:
+    zh-CN: 成本
+    en: Cost
+  all_time:
+    zh-CN: 全部
+    en: All Time
+  k_30_days:
+    zh-CN: 近 30 天
+    en: 30 Days
+  k_7_days:
+    zh-CN: 近 7 天
+    en: 7 Days
+  today:
+    zh-CN: 当天
+    en: Today
+  no_trend_data_available:
+    zh-CN: 所选时间范围内暂无用量趋势数据
+    en: No trend data available for selected range
+  cache_write_2:
+    zh-CN: 缓存写入
+    en: Cache Write
+  output_2:
+    zh-CN: 输出 Tokens
+    en: Output
+  fresh_input:
+    zh-CN: 新增输入
+    en: Fresh Input
+  cache_hit_rate:
+    zh-CN: 缓存命中率
+    en: Cache Hit Rate
+  estimated_cost:
+    zh-CN: 预估总成本
+    en: ESTIMATED COST
+  total_requests:
+    zh-CN: 总请求数
+    en: TOTAL REQUESTS
+  real_consumption_tokens:
+    zh-CN: 真实消耗 Tokens
+    en: Real Consumption Tokens
+  all_tools:
+    zh-CN: 全部工具
+    en: All Tools
+  complete_parity_with_cc:
+    zh-CN: 全面对标 CC-Switch：实时统计各 AI 工具的 Token 消耗、缓存命中与调用成本
+    en: 'Complete parity with CC-Switch: real-time analytics of token consumption,
+      cache hits, and costs'
+  usage_statistics:
+    zh-CN: 使用统计
+    en: Usage Statistics
+  all_models:
+    zh-CN: 全部模型
+    en: All Models
+  all_sources:
+    zh-CN: 全部来源
+    en: All Sources
+  auto_scan:
+    zh-CN: 自动扫描
+    en: Auto Scan
+  auto_scan_local_cli:
+    zh-CN: 自动扫描本地会话历史 (Claude Code、Codex、Pi 等) 并统计 Token
+    en: Auto-scan local CLI session logs and token usage
+  sync_sessions:
+    zh-CN: 同步会话
+    en: Sync Sessions
+  refresh:
+    zh-CN: 刷新
+    en: Refresh
+  auto_refresh_turned_off:
+    zh-CN: 已关闭自动刷新
+    en: Auto refresh turned off
+  refresh_interval_set_to:
+    zh-CN: 已设置刷新频率
+    en: Refresh interval set to
+  auto_60s:
+    zh-CN: '自动: 60s'
+    en: 'Auto: 60s'
+  auto_30s:
+    zh-CN: '自动: 30s'
+    en: 'Auto: 30s'
+  auto_10s:
+    zh-CN: '自动: 10s'
+    en: 'Auto: 10s'
+  auto_off:
+    zh-CN: '自动: 关'
+    en: 'Auto: Off'
+workspace:
+  provider_disabled:
+    zh-CN: 供应商已停用
+    en: Provider disabled
+  provider_enabled:
+    zh-CN: 供应商已启用
+    en: Provider enabled
+  provider_not_found:
+    zh-CN: 未找到该供应商
+    en: provider not found
+gpui_component:
+  Dialog:
+    ok:
+      zh-CN: 确定
+      en: OK
+    cancel:
+      zh-CN: 取消
+      en: Cancel

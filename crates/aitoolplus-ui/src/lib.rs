@@ -4,6 +4,8 @@
 
 extern crate gpui_kit as gpui;
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod components;
 pub mod i18n;
 pub mod icons;
@@ -14,7 +16,7 @@ pub mod text_input;
 pub mod theme;
 pub mod workspace;
 
-pub use i18n::I18n;
+pub use i18n::{init_i18n, I18n};
 pub use theme::Theme;
 pub use workspace::{Workspace, WorkspaceCallbacks};
 

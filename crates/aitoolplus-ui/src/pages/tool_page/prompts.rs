@@ -86,7 +86,7 @@ pub(super) fn prompts_section(
         .and_then(|p| p.file_name().map(|f| f.to_string_lossy().to_string()))
         .unwrap_or_else(|| "Prompt".into());
 
-    let add_label = i.t("新增提示词", "Add Prompt");
+    let add_label = i.t("tool_prompts.add_prompt");
 
     // Presets quick-add bar
     let mut presets_bar = div()
@@ -99,7 +99,7 @@ pub(super) fn prompts_section(
                 .text_size(px(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(t.text_secondary)
-                .child(i.t("快捷预设模板：", "Quick Presets:")),
+                .child(i.t("tool_prompts.quick_presets_2")),
         );
 
     for preset in BUILTIN_PROMPTS {
@@ -146,10 +146,7 @@ pub(super) fn prompts_section(
         .border_color(t.accent)
         .text_size(px(12.5))
         .text_color(t.text_secondary)
-        .child(i.t(
-            "全局提示词将在与 AI 对话时自动作为系统提示词或前置上下文生效。您可以创建多个提示词模板并随时切换或启用。",
-            "Global prompts will be injected as system instructions or leading context during conversations. You can create multiple templates and switch or enable them at any time.",
-        ));
+        .child(i.t("tool_prompts.global_prompts_will_be"));
 
     let header = div()
         .flex()
@@ -157,8 +154,8 @@ pub(super) fn prompts_section(
         .justify_between()
         .child(section_title(
             &t,
-            i.t("全局提示词", "Global Prompts"),
-            Some(i.t(
+            i.t("tool_prompts.global_prompts"),
+            Some(i.raw(
                 &format!("应用后写入工具的提示词文件（{}）", target_file_str),
                 &format!("Applied prompts are written to {}", target_file_str),
             )),
@@ -199,17 +196,14 @@ pub(super) fn prompts_section(
             &t,
             crate::icons::FILE_TEXT_SVG,
             if query.is_empty() {
-                i.t("还没有全局提示词", "No prompts yet")
+                i.t("tool_prompts.no_prompts_yet")
             } else {
-                i.t("没有找到匹配的提示词", "No matching prompts")
+                i.t("tool_prompts.no_matching_prompts")
             },
             if query.is_empty() {
-                i.t(
-                    "点击上方快捷预设模板，或新增一条可一键应用的全局提示词",
-                    "Click a preset above or add a new global prompt",
-                )
+                i.t("tool_prompts.click_a_preset_above")
             } else {
-                i.t("尝试更换搜索关键词", "Try a different search term")
+                i.t("tool_prompts.try_a_different_search")
             },
         ));
     } else {
@@ -257,7 +251,7 @@ pub(super) fn prompts_section(
                         .child(p.name.clone()),
                 )
                 .children(p.is_applied.then(|| {
-                    badge(&t, i.t("已应用", "Applied"), BadgeKind::Success)
+                    badge(&t, i.t("tool_prompts.applied"), BadgeKind::Success)
                 }))
                 .child(badge(
                     &t,
@@ -271,7 +265,7 @@ pub(super) fn prompts_section(
                 actions = actions.child(button_with_icon_l(
                     gpui::SharedString::from(format!("prompt-unapply-{pid_unapply}")),
                     crate::icons::EYE_OFF_SVG,
-                    i.t("停用", "Disable"),
+                    i.t("tool_prompts.disable"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -282,7 +276,7 @@ pub(super) fn prompts_section(
                 actions = actions.child(button_with_icon_l(
                     gpui::SharedString::from(format!("prompt-apply-{pid_apply}")),
                     crate::icons::CHECK_SVG,
-                    i.t("应用", "Apply"),
+                    i.t("tool_prompts.apply"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -294,7 +288,7 @@ pub(super) fn prompts_section(
                 .child(crate::components::icon_button_svg(
                     gpui::SharedString::from(format!("prompt-copy-{pid4}")),
                     crate::icons::COPY_SVG,
-                    i.t("复制内容", "Copy Content"),
+                    i.t("tool_prompts.copy_content"),
                     false,
                     &t,
                     cx,
@@ -306,10 +300,7 @@ pub(super) fn prompts_section(
                             ));
                             let msg = ws
                                 .i18n
-                                .t(
-                                    "提示词内容已复制到剪贴板",
-                                    "prompt copied to clipboard",
-                                )
+                                .t("tool_prompts.prompt_copied_to_clipboard")
                                 .to_string();
                             ws.ui.toast(msg, false);
                             cx.notify();
@@ -319,7 +310,7 @@ pub(super) fn prompts_section(
                 .child(crate::components::icon_button_svg(
                     gpui::SharedString::from(format!("prompt-dup-{pid5}")),
                     crate::icons::SPARKLES_SVG,
-                    i.t("创建副本", "Duplicate"),
+                    i.t("tool_prompts.duplicate"),
                     false,
                     &t,
                     cx,
@@ -338,7 +329,7 @@ pub(super) fn prompts_section(
                             ws.persist_store();
                             let msg = ws
                                 .i18n
-                                .t("已创建提示词副本", "prompt duplicate created")
+                                .t("tool_prompts.prompt_duplicate_created")
                                 .to_string();
                             ws.ui.toast(msg, false);
                             cx.notify();
@@ -348,7 +339,7 @@ pub(super) fn prompts_section(
                 .child(crate::components::icon_button_svg(
                     gpui::SharedString::from(format!("prompt-edit-{pid2}")),
                     crate::icons::PENCIL_SVG,
-                    i.t("编辑", "Edit"),
+                    i.t("tool_prompts.edit"),
                     false,
                     &t,
                     cx,
@@ -366,16 +357,16 @@ pub(super) fn prompts_section(
                 .child(crate::components::icon_button_svg(
                     gpui::SharedString::from(format!("prompt-del-{pid3}")),
                     crate::icons::TRASH_SVG,
-                    i.t("删除", "Delete"),
+                    i.t("tool_prompts.delete"),
                     true,
                     &t,
                     cx,
                     move |ws, _, _, cx| {
                         ws.ui.confirm = Some(crate::pages::ConfirmState {
-                            title: ws.i18n.t("删除提示词", "Delete Prompt").to_string(),
+                            title: ws.i18n.t("tool_prompts.delete_prompt").to_string(),
                             message: ws
                                 .i18n
-                                .t("确定要删除这条提示词吗？", "Delete this prompt?")
+                                .t("tool_prompts.delete_this_prompt")
                                 .to_string(),
                             action: crate::pages::ConfirmAction::DeletePrompt {
                                 tool,
@@ -415,7 +406,7 @@ pub(super) fn prompts_section(
                                 button_with_icon_l(
                                     gpui::SharedString::from(format!("prompt-collapse-{pid_toggle}")),
                                     crate::icons::CHEVRON_UP_SVG,
-                                    i.t("收起 ▴", "Collapse ▴"),
+                                    i.t("tool_prompts.collapse"),
                                     ButtonVariant::Ghost,
                                     &t,
                                     cx,
@@ -457,7 +448,7 @@ pub(super) fn prompts_section(
                         button_with_icon_l(
                             gpui::SharedString::from(format!("prompt-expand-{pid_toggle}")),
                             crate::icons::CHEVRON_DOWN_SVG,
-                            i.t("展开 ▾", "Expand ▾"),
+                            i.t("tool_prompts.expand"),
                             ButtonVariant::Ghost,
                             &t,
                             cx,
@@ -508,7 +499,7 @@ pub(super) fn unapply_prompt(tool: ToolId, _id: &str, ws: &mut Workspace, cx: &m
         if file.exists() {
             let _ = std::fs::remove_file(&file);
         }
-        let msg = i.t("已停用全局提示词", "Global prompt disabled").to_string();
+        let msg = i.t("tool_prompts.global_prompt_disabled").to_string();
         ws.ui.toast(msg, false);
     }
     ws.persist_store();
@@ -534,7 +525,7 @@ pub(super) fn apply_prompt(tool: ToolId, id: &str, ws: &mut Workspace, cx: &mut 
                 ws.ui.toast(msg, true);
             } else {
                 let msg = i
-                    .t(
+                    .raw(
                         &format!("已应用 Prompt 到 {}", file.display()),
                         &format!("prompt applied to {}", file.display()),
                     )
@@ -543,7 +534,7 @@ pub(super) fn apply_prompt(tool: ToolId, id: &str, ws: &mut Workspace, cx: &mut 
             }
         } else {
             let msg = i
-                .t("该工具没有 Prompt 文件", "tool has no prompt file")
+                .t("tool_prompts.tool_has_no_prompt")
                 .to_string();
             ws.ui.toast(msg, true);
         }
@@ -574,14 +565,14 @@ pub fn open_prompt_dialog(
     });
 
     let name = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("名称", "Name"), cx);
+        let mut input = TextInput::new(i.t("tool_prompts.name"), cx);
         if let Some(p) = &existing {
             input.set_text_silent(p.name.clone(), cx);
         }
         input
     });
     let content = cx.new(|cx| {
-        let mut ta = TextArea::new(i.t("Prompt 内容…", "Prompt content…"), cx);
+        let mut ta = TextArea::new(i.t("tool_prompts.prompt_content"), cx);
         if let Some(p) = &existing {
             ta.set_text_silent(p.content.clone(), cx);
         }
@@ -612,9 +603,9 @@ pub fn render_prompt_dialog(
     } = state;
 
     let title = if editing_id.is_some() {
-        i.t("编辑全局提示词", "Edit Global Prompt")
+        i.t("tool_prompts.edit_global_prompt")
     } else {
-        i.t("添加全局提示词", "Add Global Prompt")
+        i.t("tool_prompts.add_global_prompt")
     };
 
     let field_label = |label: gpui::SharedString| -> gpui::AnyElement {
@@ -633,7 +624,7 @@ pub fn render_prompt_dialog(
         .gap(px(12.0))
         .children((editing_id.is_none()).then(|| {
             let mut row = div().flex().items_center().gap(px(6.0)).flex_wrap();
-            row = row.child(div().text_size(px(11.5)).text_color(t.text_secondary).child(i.t("快捷填入预设：", "Quick Presets:")));
+            row = row.child(div().text_size(px(11.5)).text_color(t.text_secondary).child(i.t("tool_prompts.quick_presets")));
             for preset in BUILTIN_PROMPTS {
                 let p_name = preset.name;
                 let p_content = preset.content;
@@ -659,7 +650,7 @@ pub fn render_prompt_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("提示词名称", "Prompt Name")))
+                .child(field_label(i.t("tool_prompts.prompt_name")))
                 .child(input_container(&t, name.clone())),
         )
         .child(
@@ -667,7 +658,7 @@ pub fn render_prompt_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t("提示词内容（Markdown）", "Prompt Content (Markdown)")))
+                .child(field_label(i.t("tool_prompts.prompt_content_markdown")))
                 .child({
                     let scroll_handle = content.read(cx).scroll_handle.clone();
                     let focus_handle = content.read(cx).focus_handle.clone();
@@ -689,7 +680,7 @@ pub fn render_prompt_dialog(
                 .gap(px(8.0))
                 .child(button_l(
                     "prompt-dlg-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("tool_prompts.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -700,7 +691,7 @@ pub fn render_prompt_dialog(
                 ))
                 .child(button_l(
                     "prompt-dlg-save",
-                    i.t("保存", "Save"),
+                    i.t("tool_prompts.save"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -708,7 +699,7 @@ pub fn render_prompt_dialog(
                         let name_txt: String = name.update(cx, |inp, _| inp.text().to_string());
                         let content_txt: String = content.update(cx, |ta, _| ta.text().to_string());
                         if name_txt.trim().is_empty() {
-                            let msg = ws.i18n.t("名称不能为空", "name is required").to_string();
+                            let msg = ws.i18n.t("tool_prompts.name_is_required").to_string();
                             ws.ui.toast(msg, true);
                             cx.notify();
                             return;
@@ -738,7 +729,7 @@ pub fn render_prompt_dialog(
                         });
                         ws.persist_store();
                         ws.ui.prompt_dialog = None;
-                        let msg = ws.i18n.t("已保存", "saved").to_string();
+                        let msg = ws.i18n.t("tool_prompts.saved").to_string();
                         ws.ui.toast(msg, false);
                         cx.notify();
                     },
@@ -762,6 +753,8 @@ pub fn render_prompt_dialog(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::provider_dialog::{build_provider_settings, ProviderFormData};
+    use aitoolplus_core::tools::ToolId;
     use serde_json::Value;
 
     #[test]
