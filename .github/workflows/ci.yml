@@ -35,7 +35,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,7 +48,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
+            build-essential pkg-config libssl-dev \
+            libgtk-3-dev libayatana-appindicator3-dev libxdo-dev \
+            libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libzstd-dev libvulkan1
 
       - name: Cargo Check
         run: cargo check --workspace
