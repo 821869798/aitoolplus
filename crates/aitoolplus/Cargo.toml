@@ -24,6 +24,7 @@ gpui-kit.workspace = true
 async-channel.workspace = true
 rfd.workspace = true
 notify = "7"
+rust-i18n.workspace = true
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 tray-icon = { version = "0.24", default-features = false }

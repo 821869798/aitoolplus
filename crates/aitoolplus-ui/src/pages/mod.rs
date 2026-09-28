@@ -323,8 +323,8 @@ pub enum UsageChartType {
 impl UsageChartType {
     pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
         match self {
-            Self::Area => i18n.t("走势图", "Area"),
-            Self::Bar => i18n.t("柱状图", "Bar"),
+            Self::Area => i18n.t("pages.area"),
+            Self::Bar => i18n.t("pages.bar"),
         }
     }
 }
@@ -340,9 +340,9 @@ pub enum UsageChartMetric {
 impl UsageChartMetric {
     pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
         match self {
-            Self::Tokens => i18n.t("Token 趋势", "Tokens"),
-            Self::Requests => i18n.t("请求量趋势", "Requests"),
-            Self::Cost => i18n.t("费用趋势", "Cost"),
+            Self::Tokens => i18n.t("pages.tokens"),
+            Self::Requests => i18n.t("pages.requests"),
+            Self::Cost => i18n.t("pages.cost"),
         }
     }
 }
@@ -422,10 +422,10 @@ pub enum UsageRangePreset {
 impl UsageRangePreset {
     pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
         match self {
-            Self::Today => i18n.t("今天", "Today"),
-            Self::Days7 => i18n.t("近 7 天", "7 Days"),
-            Self::Days30 => i18n.t("近 30 天", "30 Days"),
-            Self::All => i18n.t("全部", "All Time"),
+            Self::Today => i18n.t("pages.today"),
+            Self::Days7 => i18n.t("pages.k_7_days"),
+            Self::Days30 => i18n.t("pages.k_30_days"),
+            Self::All => i18n.t("pages.all_time"),
         }
     }
 
@@ -459,10 +459,10 @@ pub enum UsageSubTab {
 impl UsageSubTab {
     pub fn label(self, i18n: &crate::i18n::I18n) -> gpui::SharedString {
         match self {
-            Self::Logs => i18n.t("请求日志", "Request Logs"),
-            Self::Providers => i18n.t("来源统计", "Provider Stats"),
-            Self::Models => i18n.t("模型统计", "Model Stats"),
-            Self::Pricing => i18n.t("价格设置", "Model Pricing"),
+            Self::Logs => i18n.t("pages.request_logs"),
+            Self::Providers => i18n.t("pages.provider_stats"),
+            Self::Models => i18n.t("pages.model_stats"),
+            Self::Pricing => i18n.t("pages.model_pricing"),
         }
     }
 }
@@ -1405,8 +1405,8 @@ pub fn render_confirm_dialog(
         action,
     } = state;
     let i = ws.i18n;
-    let danger_label = i.t("删除", "Delete");
-    let cancel_label = i.t("取消", "Cancel");
+    let danger_label = i.t("pages.delete");
+    let cancel_label = i.t("pages.cancel");
 
     let body = div()
         .flex()
@@ -1461,7 +1461,7 @@ pub fn render_update_install_dialog(
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    let title = i.t("安装新版本更新", "Install Application Update");
+    let title = i.t("pages.install_application_update");
     let version_text = if let Some(info) = &ws.ui.update_info {
         format!("v{} → v{}", info.current_version, info.latest_version)
     } else {
@@ -1509,10 +1509,7 @@ pub fn render_update_install_dialog(
                                 .text_size(px(14.0))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t(
-                                    "新版本更新包已下载完成",
-                                    "Update Package Downloaded Successfully",
-                                )),
+                                .child(i.t("pages.update_package_downloaded_succ")),
                         )
                         .when(!version_text.is_empty(), |s| {
                             s.child(
@@ -1539,25 +1536,19 @@ pub fn render_update_install_dialog(
                         .text_size(px(12.5))
                         .line_height(gpui::relative(1.5))
                         .text_color(t.text_secondary)
-                        .child(i.t(
-                            "安装包已通过 SHA-256 安全校验，是否立即退出当前应用并运行安装程序进行升级？",
-                            "The update package has passed SHA-256 verification. Would you like to exit the app and launch the installer now?",
-                        )),
+                        .child(i.t("pages.the_update_package_has")),
                 )
                 .child(
                     div()
                         .text_size(px(11.5))
                         .text_color(t.text_muted)
-                        .child(format!("{}: {}", i.t("安装包文件", "File"), filename)),
+                        .child(format!("{}: {}", i.t("pages.file"), filename)),
                 )
                 .child(
                     div()
                         .text_size(px(11.5))
                         .text_color(t.success)
-                        .child(i.t(
-                            "✓ 个人数据与配置统一保存在 ~/.aitoolplus，升级不受任何影响",
-                            "✓ All configurations in ~/.aitoolplus are safe and will be preserved",
-                        )),
+                        .child(i.t("pages.all_configurations_in_aitoolpl")),
                 ),
         )
         .child(
@@ -1568,7 +1559,7 @@ pub fn render_update_install_dialog(
                 .gap(px(8.0))
                 .child(button_l(
                     "install-update-later-btn",
-                    i.t("稍后安装", "Install Later"),
+                    i.t("pages.install_later"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1579,7 +1570,7 @@ pub fn render_update_install_dialog(
                 ))
                 .child(button_l(
                     "install-update-now-btn",
-                    i.t("立即安装并重启", "Install and Restart Now"),
+                    i.t("pages.install_and_restart_now"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -1619,7 +1610,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 aitoolplus_core::providers::delete(&mut section.providers, &id);
             });
             ws.persist_store();
-            let msg = i.t("供应商已删除", "provider deleted").to_string();
+            let msg = i.t("pages.provider_deleted").to_string();
             ws.ui.toast(msg, false);
         }
         ConfirmAction::DeletePrompt { tool, id } => {
@@ -1628,7 +1619,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 aitoolplus_core::prompt::delete(&mut section.prompts, &id);
             });
             ws.persist_store();
-            let msg = i.t("Prompt 已删除", "prompt deleted").to_string();
+            let msg = i.t("pages.prompt_deleted").to_string();
             ws.ui.toast(msg, false);
         }
         ConfirmAction::DeleteSession { tool, id } => {
@@ -1650,7 +1641,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 if ws.ui.open_session.as_ref().map(|(t, sid)| *t == tool && sid == &id).unwrap_or(false) {
                     ws.ui.open_session = None;
                 }
-                let msg = i.t("会话已删除", "session deleted").to_string();
+                let msg = i.t("pages.session_deleted_2").to_string();
                 ws.ui.toast(msg, false);
             }
         }
@@ -1659,7 +1650,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 aitoolplus_core::mcp::delete(&mut store.mcp, &id);
             });
             ws.persist_store();
-            let msg = i.t("MCP 服务器已删除", "MCP server deleted").to_string();
+            let msg = i.t("pages.mcp_server_deleted").to_string();
             ws.ui.toast(msg, false);
         }
         ConfirmAction::DeleteSkill { id } => {
@@ -1678,7 +1669,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 store.skills.remove(pos);
                 let _ = ws.store.update(|db| db.skills = store);
                 ws.persist_store();
-                let msg = i.t("Skill 已卸载删除", "skill deleted").to_string();
+                let msg = i.t("pages.skill_deleted").to_string();
                 ws.ui.toast(msg, false);
             }
         }
@@ -1687,7 +1678,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 if store.remove_account(&id) {
                     let _ = aitoolplus_core::antigravity::save_store(&ws.paths.app_data, &store);
                     ws.ui.antigravity_store = Some(store);
-                    let msg = i.t("Antigravity 账号已删除", "Account deleted").to_string();
+                    let msg = i.t("pages.account_deleted").to_string();
                     ws.ui.toast(msg, false);
                 }
             }
@@ -1702,7 +1693,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 if ws.ui.antigravity_open_session.as_ref().map(|s| &s.session_id) == Some(&session.session_id) {
                     ws.ui.antigravity_open_session = None;
                 }
-                let msg = i.t("Antigravity 会话已删除", "Session deleted").to_string();
+                let msg = i.t("pages.session_deleted").to_string();
                 ws.ui.toast(msg, false);
             }
         }
@@ -1712,12 +1703,12 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
             let _ = ws.store.update(|db| db.skills = store);
             ws.persist_store();
             let msg = if errors == 0 {
-                i.t(
+                i.raw(
                     &format!("已成功将 {restored} 个技能超链还原为独立实体目录"),
                     &format!("Successfully restored {restored} skill junctions to plain directories"),
                 ).to_string()
             } else {
-                i.t(
+                i.raw(
                     &format!("已还原 {restored} 个技能为独立实体目录，{errors} 个失败"),
                     &format!("Restored {restored} skills to plain directories, {errors} failed"),
                 ).to_string()
@@ -1761,9 +1752,9 @@ pub fn render_toast(ws: &mut Workspace, cx: &mut Context<Workspace>) -> Option<g
     let t = &ws.theme;
     let is_error = toast.error;
     let (accent_color, icon_data, default_title) = if is_error {
-        (t.danger, crate::icons::ALERT_SVG, ws.i18n.t("操作失败", "Operation Failed"))
+        (t.danger, crate::icons::ALERT_SVG, ws.i18n.t("pages.operation_failed"))
     } else {
-        (t.success, crate::icons::CHECK_SVG, ws.i18n.t("操作成功", "Success"))
+        (t.success, crate::icons::CHECK_SVG, ws.i18n.t("pages.success"))
     };
 
     Some(

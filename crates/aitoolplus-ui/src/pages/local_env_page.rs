@@ -85,7 +85,7 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
             div()
                 .text_size(px(13.0))
                 .text_color(t.text_muted)
-                .child(i.t("正在检查…", "Checking…")),
+                .child(i.t("local_env.checking_2")),
         );
     }
     for tool in ws.ui.local_env_tools.clone() {
@@ -97,25 +97,25 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         let tool_busy = busy.as_deref() == Some(tool.id.as_str()) || busy.as_deref() == Some("*");
         let checking = loading && tool.version.is_none() && tool.error.is_none();
         let current = if checking {
-            i.t("检查中", "Checking").to_string()
+            i.t("local_env.checking").to_string()
         } else if tool.installed_but_broken {
-            i.t("已安装但无法运行", "Installed but cannot run").to_string()
+            i.t("local_env.installed_but_cannot_run").to_string()
         } else {
             tool.version
                 .clone()
-                .unwrap_or_else(|| i.t("未安装", "Not installed").to_string())
+                .unwrap_or_else(|| i.t("local_env.not_installed").to_string())
         };
         let latest = tool
             .latest_version
             .clone()
-            .unwrap_or_else(|| i.t("未知", "Unknown").to_string());
+            .unwrap_or_else(|| i.t("local_env.unknown").to_string());
         let id = tool.id.clone();
         let action = if checking || tool.installed_but_broken {
             None
         } else if tool.version.is_none() {
-            Some((true, i.t("安装", "Install")))
+            Some((true, i.t("local_env.install")))
         } else if outdated {
-            Some((false, i.t("升级", "Update")))
+            Some((false, i.t("local_env.update")))
         } else {
             None
         };
@@ -207,8 +207,8 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                     .flex()
                     .flex_col()
                     .gap(px(6.0))
-                    .child(version_line(&t, i.t("当前版本", "Current"), current))
-                    .child(version_line(&t, i.t("最新版本", "Latest"), latest)),
+                    .child(version_line(&t, i.t("local_env.current"), current))
+                    .child(version_line(&t, i.t("local_env.latest"), latest)),
             );
         if let Some(error) = tool.error.clone().filter(|_| tool.version.is_none() && !checking) {
             card = card.child(
@@ -222,7 +222,7 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
             div()
                 .text_size(px(12.0))
                 .text_color(t.warning)
-                .child(i.t("请检查运行环境", "Check the runtime"))
+                .child(i.t("local_env.check_the_runtime"))
                 .into_any_element()
         } else if let Some((install, label)) = action {
             button_with_icon_loading_l(
@@ -254,7 +254,7 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
             div()
                 .text_size(px(12.0))
                 .text_color(t.text_muted)
-                .child(i.t("已是最新", "Up to date"))
+                .child(i.t("local_env.up_to_date"))
                 .into_any_element()
         } else {
             div().into_any_element()
@@ -290,16 +290,13 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                                 .text_size(px(14.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
-                                .child(i.t("本地环境检查", "Local Environment")),
+                                .child(i.t("local_env.local_environment")),
                         )
                         .child(
                             div()
                                 .text_size(px(12.0))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "检查本机 Agent CLI，并按安装来源升级。",
-                                    "Check local Agent CLIs and update them in place.",
-                                )),
+                                .child(i.t("local_env.check_local_agent_clis")),
                         ),
                 )
                 .child(
@@ -309,7 +306,7 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                         .child(button_with_icon_loading_l(
                             "local-env-refresh",
                             crate::icons::REFRESH_SVG,
-                            i.t("刷新", "Refresh"),
+                            i.t("local_env.refresh"),
                             ButtonVariant::Secondary,
                             loading,
                             &t,
@@ -326,7 +323,7 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
                         .child(button_with_icon_loading_l(
                             "local-env-update-all",
                             crate::icons::REFRESH_SVG,
-                            i.t(
+                            i.raw(
                                 &format!("全部升级 ({updatable})"),
                                 &format!("Update all ({updatable})"),
                             ),

@@ -103,7 +103,7 @@ pub(super) fn extensions_section(
         ws.ui.omp_extensions.as_ref()
     };
 
-    let refresh_label = i.t("刷新", "Refresh");
+    let refresh_label = i.t("tool_extensions.refresh");
 
     let mut section = div().flex().flex_col().gap(px(12.0)).child(
         div()
@@ -112,17 +112,11 @@ pub(super) fn extensions_section(
             .justify_between()
             .child(page_header(
                 &t,
-                i.t("扩展管理", "Extensions"),
+                i.t("tool_extensions.extensions"),
                 if is_pi {
-                    i.t(
-                        "pi list 为事实源：包扩展走 Pi CLI，本地扩展来自 <root>/extensions",
-                        "pi list is the source of truth: packages via the Pi CLI, locals from <root>/extensions",
-                    )
+                    i.t("tool_extensions.pi_list_is_the")
                 } else {
-                    i.t(
-                        "omp plugin list 为事实源：包扩展走 OMP CLI，本地扩展来自 <root>/extensions",
-                        "omp plugin list is the source of truth; locals come from <root>/extensions",
-                    )
+                    i.t("tool_extensions.omp_plugin_list_is")
                 },
             ))
             .child(button_with_icon_loading_l(
@@ -166,7 +160,7 @@ pub(super) fn extensions_section(
                     .border_color(t.card_border)
                     .text_size(px(13.0))
                     .text_color(t.text_secondary)
-                    .child(i.t("正在查询扩展列表…", "Loading extensions…")),
+                    .child(i.t("tool_extensions.loading_extensions")),
             )
             .into_any_element();
     };
@@ -178,9 +172,9 @@ pub(super) fn extensions_section(
                 (Some(p), None) => format!("pi_cli={p}"),
                 _ => {
                     if is_pi {
-                        i.t("未找到 pi CLI", "pi CLI not found").to_string()
+                        i.t("tool_extensions.pi_cli_not_found").to_string()
                     } else {
-                        i.t("未找到 omp CLI", "omp CLI not found").to_string()
+                        i.t("tool_extensions.omp_cli_not_found").to_string()
                     }
                 }
             };
@@ -200,8 +194,8 @@ pub(super) fn extensions_section(
                 section = section.child(crate::components::empty_state_svg(
                     &t,
                     crate::icons::PACKAGE_SVG,
-                    i.t("没有已安装扩展", "No extensions installed"),
-                    i.t("在下方输入来源并安装", "Enter a source below and install"),
+                    i.t("tool_extensions.no_extensions_installed"),
+                    i.t("tool_extensions.enter_a_source_below"),
                 ));
             } else {
                 let mut list_el = div().flex().flex_col().gap(px(6.0));
@@ -241,7 +235,7 @@ pub(super) fn extensions_section(
                             .child(crate::components::icon_button_svg(
                                 gpui::SharedString::from(format!("ext-upd-{}", ext.id)),
                                 crate::icons::REFRESH_SVG,
-                                i.t("更新", "Update"),
+                                i.t("tool_extensions.update_2"),
                                 false,
                                 &t,
                                 cx,
@@ -275,7 +269,7 @@ pub(super) fn extensions_section(
                             .child(crate::components::icon_button_svg(
                                 gpui::SharedString::from(format!("ext-del-{}", ext.id)),
                                 crate::icons::TRASH_SVG,
-                                i.t("移除", "Remove"),
+                                i.t("tool_extensions.remove"),
                                 true,
                                 &t,
                                 cx,
@@ -313,7 +307,7 @@ pub(super) fn extensions_section(
                         let local_kind = ext.kind;
                         actions = actions.child(button_l(
                             gpui::SharedString::from(format!("omp-local-del-{}", ext.id)),
-                            i.t("删除本地扩展", "Delete Local Extension"),
+                            i.t("tool_extensions.delete_local_extension"),
                             ButtonVariant::Danger,
                             &t,
                             cx,
@@ -395,7 +389,7 @@ pub(super) fn extensions_section(
                                     }),
                             )
                             .when(ext.update_available, |el| {
-                                el.child(badge(&t, i.t("有更新", "Update!"), BadgeKind::Warning))
+                                el.child(badge(&t, i.t("tool_extensions.update"), BadgeKind::Warning))
                             })
                             .child(actions),
                     );
@@ -418,7 +412,7 @@ pub(super) fn extensions_section(
                     .child(div().flex_1().min_w(px(0.0)).child(input_entity.clone()))
                     .child(button_l(
                         "pi-ext-install-btn",
-                        i.t("安装", "Install"),
+                        i.t("tool_extensions.install"),
                         ButtonVariant::Primary,
                         &t,
                         cx,
@@ -430,7 +424,7 @@ pub(super) fn extensions_section(
                                     val
                                 });
                             if src.is_empty() {
-                                let msg = ws.i18n.t("请输入来源", "source required").to_string();
+                                let msg = ws.i18n.t("tool_extensions.source_required").to_string();
                                 ws.ui.toast(msg, true);
                                 cx.notify();
                                 return;
@@ -455,12 +449,12 @@ pub(super) fn extensions_section(
                 .child(crate::components::empty_state_svg(
                     &t,
                     crate::icons::ALERT_SVG,
-                    i.t("扩展列表获取失败", "Failed to list extensions"),
+                    i.t("tool_extensions.failed_to_list_extensions"),
                     "",
                 ))
                 .child(crate::components::error_strip(
                     "claude-plugins-read-err",
-                    i.t("扩展读取失败", "Extensions read failed"),
+                    i.t("tool_extensions.extensions_read_failed"),
                     &e,
                     &t,
                     cx,
@@ -478,11 +472,8 @@ pub(super) fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Works
     let allow_clear = ws.settings.opencode_allow_clear_applied_oh_my_config;
     let mut section = div().flex().flex_col().gap(px(12.0)).child(page_header(
         &t,
-        i.t("OpenCode 附加工具", "OpenCode Add-ons"),
-        i.t(
-            "Oh My OpenAgent 与 Oh My OpenCode Slim 配置档案",
-            "Oh My OpenAgent and Oh My OpenCode Slim profiles",
-        ),
+        i.t("tool_extensions.opencode_add_ons"),
+        i.t("tool_extensions.oh_my_openagent_and"),
     ));
 
     for (kind, label) in [
@@ -556,7 +547,7 @@ pub(super) fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Works
                             .gap(px(8.0))
                             .child(button_l(
                                 gpui::SharedString::from(format!("addon-apply-{apply_id}")),
-                                i.t("应用", "Apply"),
+                                i.t("tool_extensions.apply"),
                                 ButtonVariant::Primary,
                                 &t,
                                 cx,
@@ -584,7 +575,7 @@ pub(super) fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Works
                             ))
                             .child(button_l(
                                 gpui::SharedString::from(format!("addon-delete-{delete_id}")),
-                                i.t("删除", "Delete"),
+                                i.t("tool_extensions.delete"),
                                 ButtonVariant::Danger,
                                 &t,
                                 cx,
@@ -618,7 +609,7 @@ pub(super) fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Works
                     .gap(px(8.0))
                     .child(button_l(
                         gpui::SharedString::from(format!("addon-save-{}", kind.key())),
-                        i.t("保存为档案", "Save as Profile"),
+                        i.t("tool_extensions.save_as_profile"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -650,7 +641,7 @@ pub(super) fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Works
                     ))
                     .child(button_l(
                         gpui::SharedString::from(format!("addon-quick-apply-{}", kind.key())),
-                        i.t("直接应用", "Apply Directly"),
+                        i.t("tool_extensions.apply_directly"),
                         ButtonVariant::Primary,
                         &t,
                         cx,
@@ -694,7 +685,7 @@ pub(super) fn opencode_addons_section(ws: &mut Workspace, cx: &mut Context<Works
                     .children(allow_clear.then(|| {
                         button_l(
                             gpui::SharedString::from(format!("addon-clear-{}", kind.key())),
-                            i.t("清除运行时", "Clear Runtime"),
+                            i.t("tool_extensions.clear_runtime"),
                             ButtonVariant::Danger,
                             &t,
                             cx,

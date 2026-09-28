@@ -19,25 +19,19 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     // 1. Conflict strategy card
     let conflict_card = settings_card(
         &t,
-        i.t("恢复冲突处理策略", "Restore Conflict Policy"),
-        Some(i.t(
-            "遇到同名文件时的恢复处理策略，以及是否允许恢复自定义绝对路径",
-            "How to handle existing files on restore, and whether to allow custom absolute paths",
-        )),
+        i.t("settings_advanced.restore_conflict_policy"),
+        Some(i.t("settings_advanced.how_to_handle_existing")),
         vec![
             settings_row(
                 &t,
-                i.t("恢复同名冲突策略", "Conflict Strategy"),
-                Some(i.t(
-                    "覆盖已有文件、跳过同名文件或保存为 .restored 副本",
-                    "Overwrite target, skip existing, or save copy as .restored",
-                )),
+                i.t("settings_advanced.conflict_strategy"),
+                Some(i.t("settings_advanced.overwrite_target_skip_existing")),
                 div()
                     .flex()
                     .gap(px(8.0))
                     .child(button_l(
                         "conflict-strategy-overwrite",
-                        i.t("覆盖原文件", "Overwrite"),
+                        i.t("settings_advanced.overwrite"),
                         if ws.ui.restore_conflict_strategy
                             == aitoolplus_core::backup::ConflictStrategy::Overwrite
                         {
@@ -55,7 +49,7 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                     ))
                     .child(button_l(
                         "conflict-strategy-skip",
-                        i.t("跳过同名文件", "Skip Existing"),
+                        i.t("settings_advanced.skip_existing"),
                         if ws.ui.restore_conflict_strategy
                             == aitoolplus_core::backup::ConflictStrategy::Skip
                         {
@@ -73,7 +67,7 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                     ))
                     .child(button_l(
                         "conflict-strategy-savecopy",
-                        i.t("另存副本 (.restored)", "Save Copy (.restored)"),
+                        i.t("settings_advanced.save_copy_restored"),
                         if ws.ui.restore_conflict_strategy
                             == aitoolplus_core::backup::ConflictStrategy::SaveCopy
                         {
@@ -93,11 +87,8 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
             ),
             settings_row(
                 &t,
-                i.t("允许原绝对路径恢复", "Allow Custom Absolute Paths"),
-                Some(i.t(
-                    "恢复自定义备份条目时，允许写回原始绝对路径（关闭时落入安全沙箱）",
-                    "Allow restoring custom files back to original paths (otherwise sandboxed)",
-                )),
+                i.t("settings_advanced.allow_custom_absolute_paths"),
+                Some(i.t("settings_advanced.allow_restoring_custom_files")),
                 toggle(
                     "restore-custom-absolute-toggle",
                     ws.ui.restore_allow_custom_absolute,
@@ -116,19 +107,13 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     // 2. Backup scope card (Include CLI Configs)
     let scope_card = settings_card(
         &t,
-        i.t("备份范围与 CLI 配置", "Backup Scope & CLI Configs"),
-        Some(i.t(
-            "选择创建备份快照时包含的数据范围",
-            "Choose data scope when generating backup snapshots",
-        )),
+        i.t("settings_advanced.backup_scope_cli_configs"),
+        Some(i.t("settings_advanced.choose_data_scope_when")),
         vec![
             settings_row(
                 &t,
-                i.t("包含各 CLI 运行时配置文件", "Include CLI Config Files"),
-                Some(i.t(
-                    "包含 Claude Code、Codex、Gemini CLI、Pi 等工具的配置文件与 MCP 设置",
-                    "Include runtime configs, prompts, and MCP settings for CLI tools",
-                )),
+                i.t("settings_advanced.include_cli_config_files"),
+                Some(i.t("settings_advanced.include_runtime_configs_prompt")),
                 toggle(
                     "backup-cli-toggle",
                     ws.settings.backup_cli_config_files_enabled,
@@ -176,9 +161,9 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
             .child(button_l(
                 gpui::SharedString::from(format!("backup-filter-{rule_path}")),
                 if excluded {
-                    i.t("已排除", "Excluded")
+                    i.t("settings_advanced.excluded")
                 } else {
-                    i.t("已包含", "Included")
+                    i.t("settings_advanced.included")
                 },
                 if excluded {
                     ButtonVariant::Danger
@@ -215,11 +200,8 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
 
     let filter_card = settings_card(
         &t,
-        i.t("CLI 备份文件过滤", "CLI Backup File Filters"),
-        Some(i.t(
-            "逐文件排除敏感或不需要打包到快照中的运行时配置文件",
-            "Exclude sensitive or unwanted runtime files individually from backup snapshots",
-        )),
+        i.t("settings_advanced.cli_backup_file_filters"),
+        Some(i.t("settings_advanced.exclude_sensitive_or_unwanted")),
         vec![
             div()
                 .flex()
@@ -272,7 +254,7 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
             )
             .child(button_l(
                 gpui::SharedString::from(format!("custom-backup-remove-{id}")),
-                i.t("移除条目", "Remove Entry"),
+                i.t("settings_advanced.remove_entry"),
                 ButtonVariant::Danger,
                 &t,
                 cx,
@@ -303,7 +285,7 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
         .child(custom_restore)
         .child(button_l(
             "custom-backup-add",
-            i.t("添加自定义条目", "Add Custom Entry"),
+            i.t("settings_advanced.add_custom_entry"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -314,7 +296,7 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                 if source.is_empty() {
                     ws.ui.toast(
                         ws.i18n
-                            .t("请输入源路径", "source path required")
+                            .t("settings_advanced.source_path_required")
                             .to_string(),
                         true,
                     );
@@ -334,11 +316,8 @@ pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
 
     let custom_card = settings_card(
         &t,
-        i.t("自定义备份条目", "Custom Backup Entries"),
-        Some(i.t(
-            "额外指定包含在备份中的自定义文件或目录；未指定恢复路径时会安全落入沙箱",
-            "Extra files or directories to include; blank restore paths use a safe sandbox",
-        )),
+        i.t("settings_advanced.custom_backup_entries"),
+        Some(i.t("settings_advanced.extra_files_or_directories")),
         vec![
             div()
                 .flex()

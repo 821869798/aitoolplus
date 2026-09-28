@@ -710,6 +710,7 @@ impl Workspace {
         };
         self.i18n = I18n::new(self.settings.language);
         (self.callbacks.save_settings)(&self.settings);
+        cx.refresh_windows();
         cx.notify();
     }
 
@@ -845,7 +846,7 @@ impl Workspace {
             .cloned();
 
         let Some(provider) = provider else {
-            let msg = i.t("未找到该供应商", "provider not found").to_string();
+            let msg = i.t("workspace.provider_not_found").to_string();
             (self.callbacks.notify)(msg);
             cx.notify();
             return;
@@ -861,14 +862,14 @@ impl Workspace {
         };
         match adapter.apply(&ctx) {
             Ok(report) => {
-                let msg = i.t(
+                let msg = i.raw(
                     &format!("已应用 {}（{} 个文件）", provider.name, report.files.len()),
                     &format!("applied {} ({} files)", provider.name, report.files.len()),
                 );
                 (self.callbacks.notify)(msg.to_string());
             }
             Err(e) => {
-                let msg = i.t(&format!("应用失败：{e}"), &format!("apply failed: {e}"));
+                let msg = i.raw(&format!("应用失败：{e}"), &format!("apply failed: {e}"));
                 (self.callbacks.notify)(msg.to_string());
             }
         }
@@ -889,7 +890,7 @@ impl Workspace {
             .cloned();
 
         let Some(provider) = provider else {
-            let msg = i.t("未找到该供应商", "provider not found").to_string();
+            let msg = i.t("workspace.provider_not_found").to_string();
             (self.callbacks.notify)(msg);
             cx.notify();
             return;
@@ -905,9 +906,9 @@ impl Workspace {
                 });
                 self.persist_store();
                 let msg = if enabled {
-                    i.t("供应商已启用", "Provider enabled").to_string()
+                    i.t("workspace.provider_enabled").to_string()
                 } else {
-                    i.t("供应商已停用", "Provider disabled").to_string()
+                    i.t("workspace.provider_disabled").to_string()
                 };
                 self.ui.toast(msg, false);
                 for f in files {
@@ -973,7 +974,7 @@ impl gpui::Focusable for Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar(cx);
         let is_session_open = self.ui.open_session.is_some();
         let topbar = if is_session_open {
@@ -1002,12 +1003,6 @@ impl Render for Workspace {
             .text_color(self.theme.text_primary)
             .child(sidebar)
             .child(right_col);
-
-        // Standard gpui-kit Root overlay layers: dialogs, sheets, notifications
-        let overlays = div()
-            .children(gpui_kit::component::Root::render_dialog_layer(window, cx))
-            .children(gpui_kit::component::Root::render_sheet_layer(window, cx))
-            .children(gpui_kit::component::Root::render_notification_layer(window, cx));
 
         // Modals render at the root as overlays (flyclip GPUI guideline #3).
         let modal_open = self.ui.modal_active();
@@ -1143,7 +1138,6 @@ impl Render for Workspace {
         if modal_open {
             root = root.children(modals);
         }
-        root = root.child(overlays);
         if let Some(toast) = toast_el {
             root = root.child(toast);
         }

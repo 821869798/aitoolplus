@@ -172,7 +172,7 @@ pub fn init_tray(initial_groups: ToolGroupSnapshot, cx: &mut GpuiApp) -> TrayMen
                                         ws.apply_provider(tool_id, &provider_id, cx);
                                         let i = ws.i18n;
                                         let msg = i
-                                            .t(
+                                            .raw(
                                                 &format!("已从托盘切换：{provider_name}"),
                                                 &format!("switched via tray: {provider_name}"),
                                             )

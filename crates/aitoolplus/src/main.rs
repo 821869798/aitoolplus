@@ -85,6 +85,7 @@ fn main() {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
+        aitoolplus_ui::init_i18n();
         gpui_kit::init(cx);
 
         // Keep running with no windows: GPUI must not quit when the

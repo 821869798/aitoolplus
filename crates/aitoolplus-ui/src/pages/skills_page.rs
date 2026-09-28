@@ -36,19 +36,19 @@ fn format_relative_time(timestamp_ms: i64, i: &crate::i18n::I18n) -> String {
     let diff_secs = if diff_ms < 0 { 0 } else { diff_ms / 1000 };
 
     if diff_secs < 60 {
-        i.t("刚刚", "just now").to_string()
+        i.t("skills.just_now").to_string()
     } else if diff_secs < 3600 {
         let mins = diff_secs / 60;
-        i.t(&format!("{mins} 分钟前"), &format!("{mins}m ago")).to_string()
+        i.raw(&format!("{mins} 分钟前"), &format!("{mins}m ago")).to_string()
     } else if diff_secs < 86400 {
         let hours = diff_secs / 3600;
-        i.t(&format!("{hours} 小时前"), &format!("{hours}h ago")).to_string()
+        i.raw(&format!("{hours} 小时前"), &format!("{hours}h ago")).to_string()
     } else if diff_secs < 30 * 86400 {
         let days = diff_secs / 86400;
-        i.t(&format!("{days} 天前"), &format!("{days}d ago")).to_string()
+        i.raw(&format!("{days} 天前"), &format!("{days}d ago")).to_string()
     } else {
         let months = diff_secs / (30 * 86400);
-        i.t(&format!("{months} 个月前"), &format!("{months}mo ago")).to_string()
+        i.raw(&format!("{months} 个月前"), &format!("{months}mo ago")).to_string()
     }
 }
 
@@ -138,12 +138,12 @@ pub fn render_skills_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             (
                 SkillsPageTab::Installed,
                 Some(crate::icons::PACKAGE_SVG),
-                i.t("已安装技能", "Installed Skills"),
+                i.t("skills.installed_skills"),
             ),
             (
                 SkillsPageTab::Store,
                 Some(crate::icons::SPARKLES_SVG),
-                i.t("发现技能", "Discover Skills"),
+                i.t("skills.discover_skills"),
             ),
         ],
         ws.ui.skills_page_tab,
@@ -313,7 +313,7 @@ fn render_virtual_skill_card(
             cx.stop_propagation();
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val.clone()));
             let _ = ws_entity_copy.update(cx, |ws, cx| {
-                ws.ui.toast(ws.i18n.t("已复制到剪贴板", "Copied to clipboard").to_string(), false);
+                ws.ui.toast(ws.i18n.t("skills.copied_to_clipboard").to_string(), false);
                 cx.notify();
             });
         });
@@ -387,10 +387,10 @@ fn render_virtual_skill_card(
             let sname = s_name_for_del.clone();
             let _ = ws_entity_del.update(cx, |ws, cx| {
                 ws.ui.confirm = Some(super::ConfirmState {
-                    title: ws.i18n.t("卸载 Skill", "Uninstall Skill").to_string(),
+                    title: ws.i18n.t("skills.uninstall_skill").to_string(),
                     message: ws
                         .i18n
-                        .t(
+                        .raw(
                             &format!("确定要彻底卸载删除 Skill “{}” 吗？", sname),
                             &format!("Are you sure you want to uninstall and delete “{}”?", sname),
                         )
@@ -528,17 +528,14 @@ fn render_virtual_skill_card(
             let ws_entity_tool = ws_entity.clone();
             let tool_icon_svg = tool_icon(*tool);
             let tooltip_msg = match *tool {
-                ToolId::Agents => i.t(
-                    "通用 Agent (~/.agents/skills，一般支持除了 Claude 的所有 Agent)",
-                    "Universal Agent (~/.agents/skills, generally supports all agents except Claude)",
-                ),
-                ToolId::ClaudeCode => i.t("Claude Code (~/.claude/skills)", "Claude Code (~/.claude/skills)"),
-                ToolId::Codex => i.t("Codex (~/.codex/skills)", "Codex (~/.codex/skills)"),
-                ToolId::Pi => i.t("Pi (~/.pi/agent/skills)", "Pi (~/.pi/agent/skills)"),
-                ToolId::OpenCode => i.t("OpenCode (~/.config/opencode/skill)", "OpenCode (~/.config/opencode/skill)"),
-                ToolId::OhMyPi => i.t("Oh My Pi (~/.config/oh-my-pi/skills)", "Oh My Pi (~/.config/oh-my-pi/skills)"),
-                ToolId::Kimi => i.t("Kimi (~/.kimi-code/skills)", "Kimi (~/.kimi-code/skills)"),
-                _ => i.t(tool.name_zh(), tool.name_en()),
+                ToolId::Agents => i.t("skills.universal_agent_agents_skills"),
+                ToolId::ClaudeCode => i.t("skills.claude_code_claude_skills"),
+                ToolId::Codex => i.t("skills.codex_codex_skills"),
+                ToolId::Pi => i.t("skills.pi_pi_agent_skills"),
+                ToolId::OpenCode => i.t("skills.opencode_config_opencode_skill"),
+                ToolId::OhMyPi => i.t("skills.oh_my_pi_config"),
+                ToolId::Kimi => i.t("skills.kimi_kimi_code_skills"),
+                _ => i.raw(tool.name_zh(), tool.name_en()),
             };
             let pill = div()
                 .id(gpui::SharedString::from(format!("vcard-tool-{}-{}", sid, tool.key())))
@@ -728,7 +725,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .gap(px(8.0))
                 .child(section_title(
                     &t,
-                    i.t("中央仓库", "Central Repo"),
+                    i.t("skills.central_repo"),
                     Some(gpui::SharedString::from(repo.display().to_string())),
                 ))
                 .child({
@@ -743,7 +740,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     actions_bar = actions_bar.child(button_with_icon_l(
                         "skills-scan-import",
                         crate::icons::SPARKLES_SVG,
-                        i.t("导入现有Skill", "Import Existing Skills"),
+                        i.t("skills.import_existing_skills"),
                         ButtonVariant::Primary,
                         &t,
                         cx,
@@ -754,7 +751,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     actions_bar = actions_bar.child(button_with_icon_loading_l(
                         "skills-check-update",
                         crate::icons::REFRESH_SVG,
-                        i.t("更新全部", "Update All"),
+                        i.t("skills.update_all"),
                         ButtonVariant::Secondary,
                         ws.ui.skills_busy,
                         &t,
@@ -766,7 +763,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     actions_bar = actions_bar.child(button_with_icon_l(
                         "skills-git-modal-btn",
                         crate::icons::GITHUB_SVG,
-                        i.t("从Git安装...", "Install from Git..."),
+                        i.t("skills.install_from_git"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -790,7 +787,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                     actions_bar = actions_bar.child(button_with_icon_l(
                         "skills-more-actions-btn",
                         if is_more_open { crate::icons::CHEVRON_UP_SVG } else { crate::icons::CHEVRON_DOWN_SVG },
-                        i.t("其他操作", "More Actions"),
+                        i.t("skills.more_actions"),
                         ButtonVariant::Secondary,
                         &t,
                         cx,
@@ -846,17 +843,14 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
             &t,
             crate::icons::SPARKLES_SVG,
             if query.is_empty() {
-                i.t("暂无已安装技能", "No installed skills")
+                i.t("skills.no_installed_skills")
             } else {
-                i.t("没有找到匹配的 Skill", "No matching skills")
+                i.t("skills.no_matching_skills")
             },
             if query.is_empty() {
-                i.t(
-                    "点击上方【扫描并导入现有技能】自动收录本地技能，或前往【发现技能】发现安装",
-                    "Click 'Scan & Import' to discover local skills, or visit 'Discover Skills'",
-                )
+                i.t("skills.click_scan_import_to")
             } else {
-                i.t("尝试更换搜索关键词", "Try a different search query")
+                i.t("skills.try_a_different_search_2")
             },
         ));
     } else {
@@ -985,7 +979,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .text_color(t.text_primary)
                 .hover(|h| h.bg(t.card_hover))
                 .child(crate::icons::svg_icon(crate::icons::REFRESH_SVG, px(13.0), t.text_secondary))
-                .child(i.t("全部同步", "Sync All"))
+                .child(i.t("skills.sync_all"))
                 .on_click(cx.listener(|ws, _, _, cx| {
                     ws.ui.skills_more_actions_open = false;
                     sync_all_action(ws, cx);
@@ -1007,15 +1001,12 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .text_color(t.text_primary)
                 .hover(|h| h.bg(t.card_hover))
                 .child(crate::icons::svg_icon(crate::icons::REPEAT_SVG, px(13.0), t.text_secondary))
-                .child(i.t("还原实体目录", "Restore to Plain"))
+                .child(i.t("skills.restore_to_plain"))
                 .on_click(cx.listener(|ws, _, _, cx| {
                     ws.ui.skills_more_actions_open = false;
                     ws.ui.confirm = Some(super::ConfirmState {
-                        title: ws.i18n.t("还原为实体目录", "Restore to Plain Folders").to_string(),
-                        message: ws.i18n.t(
-                            "确定要将所有已同步工具目录中的技能超链（Junction）还原为独立的普通实体文件夹吗？\n还原后各个工具目录将拥有独立的文件副本，不再依赖中央仓库。",
-                            "Are you sure you want to restore all skill junctions in tool directories to standalone plain folders?\nAfter restoration, each tool directory will have independent file copies and will no longer depend on the central repository.",
-                        ).to_string(),
+                        title: ws.i18n.t("skills.restore_to_plain_folders").to_string(),
+                        message: ws.i18n.t("skills.are_you_sure_you").to_string(),
                         action: super::ConfirmAction::RestoreSkillsToPlain,
                     });
                     cx.notify();
@@ -1037,7 +1028,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .text_color(t.text_primary)
                 .hover(|h| h.bg(t.card_hover))
                 .child(crate::icons::svg_icon(crate::icons::FOLDER_SVG, px(13.0), t.text_secondary))
-                .child(i.t("手动导入目录...", "Import Directory..."))
+                .child(i.t("skills.import_directory"))
                 .on_click(cx.listener(|ws, _, _, cx| {
                     ws.ui.skills_more_actions_open = false;
                     import_skill_dir(ws, cx);
@@ -1059,7 +1050,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .text_color(t.text_primary)
                 .hover(|h| h.bg(t.card_hover))
                 .child(crate::icons::svg_icon(crate::icons::FILE_TEXT_SVG, px(13.0), t.text_secondary))
-                .child(i.t("从 ZIP 安装...", "Install from ZIP..."))
+                .child(i.t("skills.install_from_zip"))
                 .on_click(cx.listener(|ws, _, _, cx| {
                     ws.ui.skills_more_actions_open = false;
                     install_from_zip_action(ws, cx);
@@ -1081,7 +1072,7 @@ fn render_installed_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .text_color(t.text_primary)
                 .hover(|h| h.bg(t.card_hover))
                 .child(crate::icons::svg_icon(crate::icons::EXTERNAL_LINK_SVG, px(13.0), t.text_secondary))
-                .child(i.t("打开Skill目录", "Open Skills Directory"))
+                .child(i.t("skills.open_skills_directory"))
                 .on_click(cx.listener(move |ws, _, _, cx| {
                     ws.ui.skills_more_actions_open = false;
                     super::open_path_in_default_manager(&repo_for_open);
@@ -1142,7 +1133,7 @@ pub(crate) fn render_skill_detail_drawer(
             if skill_folder.join("SKILL.md").exists() {
                 std::fs::read_to_string(skill_folder.join("SKILL.md")).unwrap_or_default()
             } else {
-                i.t("（未找到 SKILL.md 文档）", "(no SKILL.md found)").to_string()
+                i.t("skills.no_skill_md_found").to_string()
             }
         });
 
@@ -1277,20 +1268,20 @@ pub(crate) fn render_skill_detail_drawer(
                 .child(button_with_icon_l(
                     "drawer-copy-path",
                     crate::icons::COPY_SVG,
-                    i.t("复制", "Copy"),
+                    i.t("skills.copy"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
                     move |ws, _, _, cx| {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_path_val.clone()));
-                        ws.ui.toast(ws.i18n.t("已复制路径", "Path copied").to_string(), false);
+                        ws.ui.toast(ws.i18n.t("skills.path_copied").to_string(), false);
                         cx.notify();
                     },
                 ))
                 .child(button_with_icon_l(
                     "drawer-reveal-path",
                     crate::icons::EXTERNAL_LINK_SVG,
-                    i.t("定位", "Reveal"),
+                    i.t("skills.reveal"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1327,7 +1318,7 @@ pub(crate) fn render_skill_detail_drawer(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_muted)
-                                .child(i.t("分组：", "Group:")),
+                                .child(i.t("skills.group")),
                         )
                         .child(
                             div()
@@ -1335,7 +1326,7 @@ pub(crate) fn render_skill_detail_drawer(
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
                                 .child(if group_str.is_empty() {
-                                    i.t("未分组", "Ungrouped").to_string()
+                                    i.t("skills.ungrouped").to_string()
                                 } else {
                                     group_str.clone()
                                 }),
@@ -1350,7 +1341,7 @@ pub(crate) fn render_skill_detail_drawer(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_muted)
-                                .child(i.t("备注：", "Note:")),
+                                .child(i.t("skills.note")),
                         )
                         .child(
                             div()
@@ -1363,7 +1354,7 @@ pub(crate) fn render_skill_detail_drawer(
         .child(button_with_icon_l(
             "drawer-edit-meta",
             crate::icons::PENCIL_SVG,
-            i.t("编辑", "Edit"),
+            i.t("skills.edit"),
             ButtonVariant::Secondary,
             &t,
             cx,
@@ -1426,7 +1417,7 @@ pub(crate) fn render_skill_detail_drawer(
     tags_section = tags_section.child(button_with_icon_l(
         "drawer-add-tag-btn",
         crate::icons::PLUS_SVG,
-        i.t("添加标签", "Add Tag"),
+        i.t("skills.add_tag"),
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -1441,21 +1432,18 @@ pub(crate) fn render_skill_detail_drawer(
     let mut tool_grid = div().flex().flex_wrap().gap(px(8.0));
     for tool in tools {
         let is_on = skill.is_enabled_in(tool);
-        let tool_name = i.t(tool.name_zh(), tool.name_en());
+        let tool_name = i.raw(tool.name_zh(), tool.name_en());
         let sid_tool = skill.id.clone();
         let grid_pill_id = format!("drawer-tool-cell-{}-{}", skill.id, tool.key());
         let tooltip_msg = match tool {
-            ToolId::Agents => i.t(
-                "通用 Agent 技能目录 (~/.agents/skills)，一般支持除了 Claude 的所有 Agent 工具",
-                "Universal Agent skills directory (~/.agents/skills), generally supports all Agent tools except Claude",
-            ),
-            ToolId::ClaudeCode => i.t("Claude Code 技能目录 (~/.claude/skills)", "Claude Code skills directory (~/.claude/skills)"),
-            ToolId::Codex => i.t("Codex 技能目录 (~/.codex/skills)", "Codex skills directory (~/.codex/skills)"),
-            ToolId::Pi => i.t("Pi 技能目录 (~/.pi/agent/skills)", "Pi skills directory (~/.pi/agent/skills)"),
-            ToolId::OpenCode => i.t("OpenCode 技能目录 (~/.config/opencode/skill)", "OpenCode skills directory (~/.config/opencode/skill)"),
-            ToolId::OhMyPi => i.t("Oh My Pi 技能目录 (~/.config/oh-my-pi/skills)", "Oh My Pi skills directory (~/.config/oh-my-pi/skills)"),
-            ToolId::Kimi => i.t("Kimi 技能目录 (~/.kimi-code/skills)", "Kimi skills directory (~/.kimi-code/skills)"),
-            _ => i.t(tool.name_zh(), tool.name_en()),
+            ToolId::Agents => i.t("skills.universal_agent_skills_directo"),
+            ToolId::ClaudeCode => i.t("skills.claude_code_skills_directory"),
+            ToolId::Codex => i.t("skills.codex_skills_directory_codex"),
+            ToolId::Pi => i.t("skills.pi_skills_directory_pi"),
+            ToolId::OpenCode => i.t("skills.opencode_skills_directory_conf"),
+            ToolId::OhMyPi => i.t("skills.oh_my_pi_skills"),
+            ToolId::Kimi => i.t("skills.kimi_skills_directory_kimi"),
+            _ => i.raw(tool.name_zh(), tool.name_en()),
         };
 
         let dot_color = if is_on {
@@ -1565,7 +1553,7 @@ pub(crate) fn render_skill_detail_drawer(
     let toggle_btn = button_with_icon_l(
         "drawer-toggle-mgmt",
         if is_enabled { crate::icons::POWER_OFF_SVG } else { crate::icons::POWER_SVG },
-        if is_enabled { i.t("停用技能", "Disable Skill") } else { i.t("启用技能", "Enable Skill") },
+        if is_enabled { i.t("skills.disable_skill") } else { i.t("skills.enable_skill") },
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -1592,9 +1580,9 @@ pub(crate) fn render_skill_detail_drawer(
             ws.persist_store();
             ws.ui.toast(
                 if new_state {
-                    ws.i18n.t("已启用技能", "Skill enabled").to_string()
+                    ws.i18n.t("skills.skill_enabled").to_string()
                 } else {
-                    ws.i18n.t("已停用技能", "Skill disabled").to_string()
+                    ws.i18n.t("skills.skill_disabled").to_string()
                 },
                 false,
             );
@@ -1607,16 +1595,16 @@ pub(crate) fn render_skill_detail_drawer(
     let del_btn = button_with_icon_l(
         "drawer-del-skill",
         crate::icons::TRASH_SVG,
-        i.t("删除", "Delete"),
+        i.t("skills.delete"),
         ButtonVariant::Danger,
         &t,
         cx,
         move |ws, _, _, cx| {
             ws.ui.confirm = Some(super::ConfirmState {
-                title: ws.i18n.t("卸载 Skill", "Uninstall Skill").to_string(),
+                title: ws.i18n.t("skills.uninstall_skill").to_string(),
                 message: ws
                     .i18n
-                    .t(
+                    .raw(
                         &format!("确定要彻底卸载删除 Skill “{}” 吗？", s_name_for_del),
                         &format!(
                             "Are you sure you want to uninstall and delete “{}”?",
@@ -1638,7 +1626,7 @@ pub(crate) fn render_skill_detail_drawer(
     let update_btn = button_with_icon_l(
         "drawer-update-skill",
         crate::icons::REFRESH_SVG,
-        i.t("更新", "Update"),
+        i.t("skills.update"),
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -1669,7 +1657,7 @@ pub(crate) fn render_skill_detail_drawer(
     let open_data_dir = button_with_icon_l(
         "drawer-open-data-dir",
         crate::icons::FOLDER_SVG,
-        i.t("打开数据目录", "Open Data Dir"),
+        i.t("skills.open_data_dir"),
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -1728,7 +1716,7 @@ pub(crate) fn render_skill_detail_drawer(
                                 .text_size(px(12.5))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_primary)
-                                .child(i.t("标签", "Tags")),
+                                .child(i.t("skills.tags")),
                         )
                         .child(tags_section),
                 )
@@ -1747,7 +1735,7 @@ pub(crate) fn render_skill_detail_drawer(
                                         .text_size(px(12.5))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(t.text_primary)
-                                        .child(i.t("同步状态", "Tool Sync Status")),
+                                        .child(i.t("skills.tool_sync_status")),
                                 )
                                 .child(
                                     div()
@@ -1773,7 +1761,7 @@ pub(crate) fn render_skill_detail_drawer(
                                         .text_size(px(12.5))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(t.text_primary)
-                                        .child(i.t("文档预览", "Documents")),
+                                        .child(i.t("skills.documents")),
                                 )
                                 .child(doc_tabs),
                         )
@@ -1864,7 +1852,7 @@ pub(crate) fn render_skill_metadata_modal(
                         .text_size(px(12.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_primary)
-                        .child(i.t("技能分组 (Group)", "Skill Group")),
+                        .child(i.t("skills.skill_group")),
                 )
                 .child(input_container(&t, group_input)),
         )
@@ -1878,7 +1866,7 @@ pub(crate) fn render_skill_metadata_modal(
                         .text_size(px(12.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_primary)
-                        .child(i.t("技能备注 (Note)", "Skill Note")),
+                        .child(i.t("skills.skill_note")),
                 )
                 .child(input_container(&t, note_input)),
         )
@@ -1889,7 +1877,7 @@ pub(crate) fn render_skill_metadata_modal(
                 .gap(px(8.0))
                 .child(button_l(
                     "skill-meta-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("skills.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1900,7 +1888,7 @@ pub(crate) fn render_skill_metadata_modal(
                 ))
                 .child(button_l(
                     "skill-meta-save",
-                    i.t("保存", "Save"),
+                    i.t("skills.save"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -1918,7 +1906,7 @@ pub(crate) fn render_skill_metadata_modal(
                         let _ = ws.store.update(|db| db.skills = store);
                         ws.persist_store();
                         ws.ui.skill_editing_metadata = None;
-                        ws.ui.toast(ws.i18n.t("元数据已更新", "Metadata saved").to_string(), false);
+                        ws.ui.toast(ws.i18n.t("skills.metadata_saved").to_string(), false);
                         cx.notify();
                     },
                 )),
@@ -1926,7 +1914,7 @@ pub(crate) fn render_skill_metadata_modal(
 
     modal_scaffold_sized(
         &t,
-        &i.t("编辑技能分组与备注", "Edit Skill Group & Note"),
+        &i.t("skills.edit_skill_group_note"),
         px(440.0),
         None,
         body.into_any_element(),
@@ -1966,7 +1954,7 @@ pub(crate) fn render_skill_add_tag_modal(
                         .text_size(px(12.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_primary)
-                        .child(i.t("输入新标签名称", "Enter new tag name")),
+                        .child(i.t("skills.enter_new_tag_name")),
                 )
                 .child(input_container(&t, tag_input)),
         )
@@ -1977,7 +1965,7 @@ pub(crate) fn render_skill_add_tag_modal(
                 .gap(px(8.0))
                 .child(button_l(
                     "skill-tag-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("skills.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -1988,7 +1976,7 @@ pub(crate) fn render_skill_add_tag_modal(
                 ))
                 .child(button_l(
                     "skill-tag-save",
-                    i.t("添加", "Add"),
+                    i.t("skills.add"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2013,7 +2001,7 @@ pub(crate) fn render_skill_add_tag_modal(
 
     modal_scaffold_sized(
         &t,
-        &i.t("添加技能标签", "Add Skill Tag"),
+        &i.t("skills.add_skill_tag"),
         px(360.0),
         None,
         body.into_any_element(),
@@ -2033,7 +2021,7 @@ pub fn render_skill_detail_dialog(
 ) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
-    let title = i.t(
+    let title = i.raw(
         &format!("Skill 详情 - {}", detail.name),
         &format!("Skill Details - {}", detail.name),
     );
@@ -2059,7 +2047,7 @@ pub fn render_skill_detail_dialog(
                 )
                 .child(button_l(
                     "skill-dlg-reveal",
-                    i.t("在文件管理器中定位", "Reveal in File Manager"),
+                    i.t("skills.reveal_in_file_manager"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2086,7 +2074,7 @@ pub fn render_skill_detail_dialog(
                         .text_size(px(12.0))
                         .text_color(t.text_primary)
                         .child(if detail.skill_md.is_empty() {
-                            i.t("（未找到 SKILL.md 文档）", "(no SKILL.md found)").to_string()
+                            i.t("skills.no_skill_md_found").to_string()
                         } else {
                             detail.skill_md
                         }),
@@ -2098,7 +2086,7 @@ pub fn render_skill_detail_dialog(
                 .justify_end()
                 .child(button_l(
                     "skill-dlg-close",
-                    i.t("关闭", "Close"),
+                    i.t("skills.close"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2119,7 +2107,7 @@ fn install_git_skill_action(ws: &mut Workspace, url: String, cx: &mut Context<Wo
     ws.ui.skill_git_modal = None;
     ws.ui.toast(
         ws.i18n
-            .t("正在克隆并安装 Git 技能...", "Cloning and installing Git skill...")
+            .t("skills.cloning_and_installing_git")
             .to_string(),
         false,
     );
@@ -2183,10 +2171,7 @@ pub(crate) fn render_skill_git_modal(
                 .text_size(px(12.5))
                 .text_color(t.text_secondary)
                 .line_height(gpui::relative(1.4))
-                .child(i.t(
-                    "输入 Git 仓库 URL，将自动克隆到中央仓库并收录 SKILL.md 技能定义。",
-                    "Enter a Git repository URL to clone into central repo and discover SKILL.md.",
-                )),
+                .child(i.t("skills.enter_a_git_repository")),
         )
         .child(
             div()
@@ -2198,7 +2183,7 @@ pub(crate) fn render_skill_git_modal(
                         .text_size(px(12.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_primary)
-                        .child(i.t("Git 仓库地址 (URL)", "Git Repository URL")),
+                        .child(i.t("skills.git_repository_url")),
                 )
                 .child(input_container(&t, git_input)),
         )
@@ -2210,7 +2195,7 @@ pub(crate) fn render_skill_git_modal(
                 .pt(px(4.0))
                 .child(button_l(
                     "skill-git-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("skills.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2222,7 +2207,7 @@ pub(crate) fn render_skill_git_modal(
                 .child(button_with_icon_l(
                     "skill-git-submit",
                     crate::icons::DOWNLOAD_SVG,
-                    i.t("克隆并安装", "Clone & Install"),
+                    i.t("skills.clone_install"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2231,7 +2216,7 @@ pub(crate) fn render_skill_git_modal(
                         if url.is_empty() {
                             ws.ui.toast(
                                 ws.i18n
-                                    .t("请输入 Git 仓库地址", "Git URL is required")
+                                    .t("skills.git_url_is_required")
                                     .to_string(),
                                 true,
                             );
@@ -2245,7 +2230,7 @@ pub(crate) fn render_skill_git_modal(
 
     modal_scaffold_sized(
         &t,
-        &i.t("从 Git 克隆并安装技能", "Clone & Install Git Skill"),
+        &i.t("skills.clone_install_git_skill"),
         px(500.0),
         None,
         body.into_any_element(),
@@ -2307,7 +2292,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
         .border_color(t.card_border)
         .child(button_l(
             "store-source-repos",
-            i.t("仓库", "Repositories"),
+            i.t("skills.repositories"),
             if current_source == SkillStoreSource::Repos {
                 ButtonVariant::Primary
             } else {
@@ -2351,11 +2336,8 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
         .justify_between()
         .child(section_title(
             &t,
-            i.t("发现技能", "Discover Skills"),
-            Some(i.t(
-                "浏览社区仓库或检索公共技能库，一键安装至本地中心仓库并支持多工具同步",
-                "Browse community repos or search public skills, 1-click install & sync across tools",
-            )),
+            i.t("skills.discover_skills"),
+            Some(i.t("skills.browse_community_repos_or")),
         ))
         .child(
             div()
@@ -2374,15 +2356,15 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
             let status_filter_val = ws.ui.skill_store_status_filter.clone();
 
             let repo_btn_label = if repo_filter_val == "all" {
-                i.t("全部仓库", "All Repos").to_string()
+                i.t("skills.all_repos").to_string()
             } else {
                 repo_filter_val.clone()
             };
 
             let status_btn_label = match status_filter_val.as_str() {
-                "installed" => i.t("已安装", "Installed").to_string(),
-                "uninstalled" => i.t("未安装", "Uninstalled").to_string(),
-                _ => i.t("全部状态", "All Status").to_string(),
+                "installed" => i.t("skills.installed").to_string(),
+                "uninstalled" => i.t("skills.uninstalled").to_string(),
+                _ => i.t("skills.all_status").to_string(),
             };
 
             let is_repo_open = ws.ui.skill_store_repo_dropdown_open;
@@ -2435,7 +2417,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
             let manage_repos_btn = button_with_icon_l(
                 "store-manage-repos-btn",
                 crate::icons::SETTINGS_SVG,
-                i.t("管理仓库", "Manage Repos"),
+                i.t("skills.manage_repos"),
                 ButtonVariant::Secondary,
                 &t,
                 cx,
@@ -2448,7 +2430,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
             let refresh_btn = button_with_icon_l(
                 "store-repos-refresh-btn",
                 crate::icons::REFRESH_SVG,
-                i.t("重置", "Reset"),
+                i.t("skills.reset_2"),
                 ButtonVariant::Secondary,
                 &t,
                 cx,
@@ -2497,8 +2479,8 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                         .child(crate::components::empty_state_svg(
                             &t,
                             crate::icons::SEARCH_SVG,
-                            i.t("未在已配置的仓库中找到匹配技能", "No matching skills found in configured repositories"),
-                            i.t(
+                            i.t("skills.no_matching_skills_found"),
+                            i.raw(
                                 &format!("当前仅在已添加的 GitHub 仓库中检索；若要查找全球公开发布的“{}”，请切换至 skills.sh", query_str),
                                 &format!("Only configured repositories were searched. To find \"{}\" worldwide, switch to skills.sh", query_str),
                             ),
@@ -2506,7 +2488,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                         .child(button_with_icon_l(
                             "switch-to-skillssh-btn",
                             crate::icons::SEARCH_SVG,
-                            i.t(
+                            i.raw(
                                 &format!("前往 skills.sh 全球技能库搜索 “{}”", query_str),
                                 &format!("Search \"{}\" on skills.sh", query_str),
                             ),
@@ -2523,8 +2505,8 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                     empty_container = empty_container.child(crate::components::empty_state_svg(
                         &t,
                         crate::icons::SEARCH_SVG,
-                        i.t("未找到匹配的仓库技能", "No skills found in repositories"),
-                        i.t("点击【管理仓库】添加更多 GitHub 技能源", "Click 'Manage Repos' to add GitHub repositories"),
+                        i.t("skills.no_skills_found_in"),
+                        i.t("skills.click_manage_repos_to"),
                     ));
                 }
 
@@ -2669,7 +2651,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                         .text_color(if is_all { t.accent } else { t.text_primary })
                         .bg(if is_all { t.card_hover } else { gpui::rgba(0x00000000) })
                         .hover(|h| h.bg(t.card_hover))
-                        .child(i.t("全部仓库", "All Repositories"))
+                        .child(i.t("skills.all_repositories"))
                         .children(is_all.then(|| crate::icons::svg_icon(crate::icons::CHECK_SVG, px(12.0), t.accent)))
                         .on_click(cx.listener(|ws, _, _, cx| {
                             ws.ui.skill_store_repo_filter = "all".to_string();
@@ -2741,9 +2723,9 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                     .gap(px(2.0));
 
                 let status_options = [
-                    ("all", i.t("全部状态", "All Status")),
-                    ("installed", i.t("已安装", "Installed")),
-                    ("uninstalled", i.t("未安装", "Uninstalled")),
+                    ("all", i.t("skills.all_status")),
+                    ("installed", i.t("skills.installed")),
+                    ("uninstalled", i.t("skills.uninstalled")),
                 ];
 
                 for (opt_val, opt_label) in status_options {
@@ -2793,7 +2775,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                 .child(button_with_icon_l(
                     "store-search-btn",
                     crate::icons::SEARCH_SVG,
-                    i.t("搜索", "Search"),
+                    i.t("skills.search"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -2805,7 +2787,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                 .child(button_with_icon_l(
                     "store-refresh-btn",
                     crate::icons::REFRESH_SVG,
-                    i.t("重置推荐", "Reset"),
+                    i.t("skills.reset"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2834,7 +2816,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                     .text_size(px(12.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(t.text_secondary)
-                    .child(i.t("热门分类：", "Categories:")),
+                    .child(i.t("skills.categories")),
             );
 
             for (chip_label, chip_query) in STORE_CHIPS {
@@ -2843,7 +2825,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                 let is_active = ws.ui.skill_store_query == q_str;
                 chips_bar = chips_bar.child(button_l(
                     gpui::SharedString::from(chip_id),
-                    i.t(chip_label, chip_label),
+                    i.raw(chip_label, chip_label),
                     if is_active {
                         ButtonVariant::Primary
                     } else {
@@ -2874,7 +2856,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                                 .gap(px(8.0))
                                 .text_size(px(13.5))
                                 .text_color(t.text_secondary)
-                                .child(i.t("正在从 skills.sh 检索技能库…", "Searching skills.sh...").to_string()),
+                                .child(i.t("skills.searching_skills_sh").to_string()),
                         ),
                 );
             } else if let Some(ref err_msg) = ws.ui.skill_store_error {
@@ -2891,13 +2873,13 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                         .child(crate::components::empty_state_svg(
                             &t,
                             crate::icons::INFO_SVG,
-                            i.t("检索技能库失败", "Failed to search skills.sh"),
+                            i.t("skills.failed_to_search_skills"),
                             err_display,
                         ))
                         .child(button_with_icon_l(
                             "store-retry-search-btn",
                             crate::icons::REFRESH_SVG,
-                            i.t("重试检索", "Retry Search"),
+                            i.t("skills.retry_search"),
                             ButtonVariant::Primary,
                             &t,
                             cx,
@@ -2910,8 +2892,8 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                 section = section.child(crate::components::empty_state_svg(
                     &t,
                     crate::icons::SEARCH_SVG,
-                    i.t("未找到匹配的技能", "No skills found"),
-                    i.t("请尝试更换关键词，例如：git, review, rust, claude...", "Try a different search query"),
+                    i.t("skills.no_skills_found"),
+                    i.t("skills.try_a_different_search"),
                 ));
             } else {
                 let results = ws.ui.skill_store_results.clone();
@@ -3017,9 +2999,9 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                         "store-load-more-btn",
                         crate::icons::CHEVRON_DOWN_SVG,
                         if ws.ui.skill_store_loading {
-                            i.t("加载中…", "Loading…")
+                            i.t("skills.loading")
                         } else {
-                            i.t("加载更多", "Load More")
+                            i.t("skills.load_more")
                         },
                         ButtonVariant::Secondary,
                         &t,
@@ -3036,7 +3018,7 @@ fn render_store_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::An
                     div()
                         .text_size(px(11.5))
                         .text_color(t.text_muted)
-                        .child(i.t("由 skills.sh 提供公共检索", "Powered by skills.sh")),
+                        .child(i.t("skills.powered_by_skills_sh")),
                 );
 
                 section = section.child(footer);
@@ -3081,7 +3063,7 @@ fn render_virtual_store_skill_card(
             .border_color(t.card_border)
             .hover(|h| h.bg(t.input_bg))
             .child(crate::icons::svg_icon(crate::icons::EXTERNAL_LINK_SVG, px(12.0), t.text_secondary))
-            .child(i.t("查看", "View"))
+            .child(i.t("skills.view"))
             .on_click(move |_, _, _| {
                 #[cfg(target_os = "windows")]
                 {
@@ -3118,7 +3100,7 @@ fn render_virtual_store_skill_card(
                 .border_1()
                 .border_color(crate::rgba_const(0x10b98140))
                 .child(crate::icons::svg_icon(crate::icons::CHECK_SVG, px(11.0), crate::rgba_const(0x10b981ff)))
-                .child(i.t("已安装", "Installed")),
+                .child(i.t("skills.installed")),
         );
     } else if is_installing {
         action_btns = action_btns.child(
@@ -3132,7 +3114,7 @@ fn render_virtual_store_skill_card(
                 .text_size(px(11.5))
                 .text_color(t.text_muted)
                 .bg(t.card_hover)
-                .child(i.t("安装中…", "Installing…")),
+                .child(i.t("skills.installing")),
         );
     } else {
         let ws_entity_install = ws_entity.clone();
@@ -3153,7 +3135,7 @@ fn render_virtual_store_skill_card(
                 .bg(t.accent)
                 .hover(|h| h.opacity(0.9))
                 .child(crate::icons::svg_icon(crate::icons::PLUS_SVG, px(12.0), gpui::rgb(0xffffff)))
-                .child(i.t("一键安装", "Install"))
+                .child(i.t("skills.install"))
                 .on_click(move |_, _, cx| {
                     let item_to_install = item_for_install.clone();
                     ws_entity_install.update(cx, |ws, cx| {
@@ -3318,7 +3300,7 @@ pub(crate) fn render_skill_repo_manager_modal(
                 .text_size(px(13.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_primary)
-                .child(i.t("添加自定义 GitHub 技能仓库", "Add GitHub Skill Repository")),
+                .child(i.t("skills.add_github_skill_repository")),
         )
         .child(
             div()
@@ -3329,7 +3311,7 @@ pub(crate) fn render_skill_repo_manager_modal(
                     div()
                         .text_size(px(12.0))
                         .text_color(t.text_secondary)
-                        .child(i.t("仓库地址 (URL 或 owner/repo)", "Repository URL")),
+                        .child(i.t("skills.repository_url")),
                 )
                 .child(input_container(&t, url_input)),
         )
@@ -3348,7 +3330,7 @@ pub(crate) fn render_skill_repo_manager_modal(
                             div()
                                 .text_size(px(12.0))
                                 .text_color(t.text_secondary)
-                                .child(i.t("默认分支 (默认 main)", "Branch")),
+                                .child(i.t("skills.branch")),
                         )
                         .child(input_container(&t, branch_input)),
                 )
@@ -3358,7 +3340,7 @@ pub(crate) fn render_skill_repo_manager_modal(
                         .child(button_with_icon_l(
                             "add-repo-btn",
                             crate::icons::PLUS_SVG,
-                            i.t("添加仓库", "Add Repo"),
+                            i.t("skills.add_repo"),
                             ButtonVariant::Primary,
                             &t,
                             cx,
@@ -3386,10 +3368,7 @@ pub(crate) fn render_skill_repo_manager_modal(
                                     cx.notify();
                                 } else {
                                     ws.ui.toast(
-                                        ws.i18n.t(
-                                            "请输入合法的 GitHub 仓库地址 (如 owner/repo 或完整 GitHub URL)",
-                                            "Please enter a valid GitHub repository (owner/repo or URL)",
-                                        ).to_string(),
+                                        ws.i18n.t("skills.please_enter_a_valid").to_string(),
                                         true,
                                     );
                                     cx.notify();
@@ -3550,10 +3529,7 @@ pub(crate) fn render_skill_repo_manager_modal(
                 .text_size(px(12.5))
                 .text_color(t.text_secondary)
                 .line_height(gpui::relative(1.4))
-                .child(i.t(
-                    "配置常用技能源仓库。在「仓库」模式下可快速筛选和一键导入这些仓库中的 Skills。",
-                    "Configure upstream repositories. You can filter and 1-click install skills from these repos in Repos mode.",
-                )),
+                .child(i.t("skills.configure_upstream_repositorie")),
         )
         .child(add_form)
         .child(repos_list_card)
@@ -3564,7 +3540,7 @@ pub(crate) fn render_skill_repo_manager_modal(
                 .pt(px(4.0))
                 .child(button_l(
                     "repo-manager-close-btn",
-                    i.t("完成", "Done"),
+                    i.t("skills.done"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -3577,7 +3553,7 @@ pub(crate) fn render_skill_repo_manager_modal(
 
     modal_scaffold_sized(
         &t,
-        &i.t("技能仓库管理", "Manage Skill Repositories"),
+        &i.t("skills.manage_skill_repositories"),
         px(560.0),
         None,
         body.into_any_element(),
@@ -3598,10 +3574,7 @@ fn scan_and_import_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
             ws.persist_store();
             if imported.is_empty() {
                 ws.ui.toast(
-                    i.t(
-                        "扫描完成：所有已知工具的技能已全部收录",
-                        "Scan complete: all tool skills are already imported",
-                    )
+                    i.t("skills.scan_complete_all_tool")
                     .to_string(),
                     false,
                 );
@@ -3613,7 +3586,7 @@ fn scan_and_import_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
                     imported.join(", ")
                 };
                 ws.ui.toast(
-                    i.t(
+                    i.raw(
                         &format!("成功自动扫描并导入 {count} 个技能：{sample}"),
                         &format!("Discovered and imported {count} skills: {sample}"),
                     )
@@ -3916,12 +3889,12 @@ fn sync_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
             let total_ok: usize = report.iter().map(|(_, ok, _)| ok).sum();
             let total_failed: usize = report.iter().map(|(_, _, f)| f).sum();
             let msg = if total_failed > 0 {
-                ws.i18n.t(
+                ws.i18n.raw(
                     &format!("同步完成：成功 {total_ok}，失败 {total_failed}"),
                     &format!("sync done: {total_ok} ok, {total_failed} failed"),
                 )
             } else {
-                ws.i18n.t(
+                ws.i18n.raw(
                     &format!("同步完成：所有已启用工具同步成功 ({total_ok})"),
                     &format!("sync done: {total_ok} ok"),
                 )
@@ -3959,24 +3932,21 @@ fn check_and_update_all_action(ws: &mut Workspace, cx: &mut Context<Workspace>) 
             ws.persist_store();
             let msg = if updated > 0 {
                 ws.i18n
-                    .t(
+                    .raw(
                         &format!("检查完成：已更新 {updated} 个技能"),
                         &format!("Check complete: updated {updated} skills"),
                     )
                     .to_string()
             } else if failed > 0 {
                 ws.i18n
-                    .t(
+                    .raw(
                         &format!("检查完成：{failed} 个技能更新失败，请检查网络"),
                         &format!("Check complete: {failed} skills failed to update"),
                     )
                     .to_string()
             } else {
                 ws.i18n
-                    .t(
-                        "检查完成：所有已安装技能均为最新版本",
-                        "Check complete: all skills are up to date",
-                    )
+                    .t("skills.check_complete_all_skills")
                     .to_string()
             };
             ws.ui.toast(msg, failed > 0);

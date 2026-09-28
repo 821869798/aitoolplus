@@ -343,7 +343,7 @@ pub fn open_provider_dialog(
     }
 
     let name = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("名称", "Name"), cx);
+        let mut input = TextInput::new(i.t("tool_dialog.name"), cx);
         if let Some(p) = &existing {
             input.set_text_silent(p.name.clone(), cx);
         }
@@ -352,10 +352,7 @@ pub fn open_provider_dialog(
 
     let base_url = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t(
-                "https://api.anthropic.com 或第三方中转代理",
-                "https://api.anthropic.com or proxy",
-            ),
+            i.t("tool_dialog.https_api_anthropic_com"),
             cx,
         );
         input.set_text_silent(extracted.base_url, cx);
@@ -363,7 +360,7 @@ pub fn open_provider_dialog(
     });
 
     let api_key = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("API Key / 访问密钥", "API Key / Token"), cx);
+        let mut input = TextInput::new(i.t("tool_dialog.api_key_token"), cx);
         input.set_secret(true, cx);
         input.set_text_silent(extracted.api_key, cx);
         input
@@ -383,7 +380,7 @@ pub fn open_provider_dialog(
 
     let sonnet_name = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t("例如 DeepSeek V4 Pro", "e.g. DeepSeek V4 Pro"),
+            i.t("tool_dialog.e_g_deepseek_v4"),
             cx,
         );
         input.set_text_silent(extracted.sonnet_name, cx);
@@ -398,7 +395,7 @@ pub fn open_provider_dialog(
 
     let opus_name = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t("例如 Claude 3.7 Opus", "e.g. Claude 3.7 Opus"),
+            i.t("tool_dialog.e_g_claude_3_3"),
             cx,
         );
         input.set_text_silent(extracted.opus_name, cx);
@@ -413,7 +410,7 @@ pub fn open_provider_dialog(
 
     let haiku_name = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t("例如 Claude 3.5 Haiku", "e.g. Claude 3.5 Haiku"),
+            i.t("tool_dialog.e_g_claude_3_2"),
             cx,
         );
         input.set_text_silent(extracted.haiku_name, cx);
@@ -428,7 +425,7 @@ pub fn open_provider_dialog(
 
     let fable_name = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t("例如 Claude 3.5 Fable", "e.g. Claude 3.5 Fable"),
+            i.t("tool_dialog.e_g_claude_3"),
             cx,
         );
         input.set_text_silent(extracted.fable_name, cx);
@@ -443,10 +440,7 @@ pub fn open_provider_dialog(
 
     let custom_headers = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t(
-                "自定义请求头（例如 X-Custom-Header: value）",
-                "Custom headers (e.g. X-Custom-Header: value)",
-            ),
+            i.t("tool_dialog.custom_headers_e_g"),
             cx,
         );
         input.set_text_silent(extracted.custom_headers, cx);
@@ -454,7 +448,7 @@ pub fn open_provider_dialog(
     });
 
     let notes = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("备注（可选）", "Notes (optional)"), cx);
+        let mut input = TextInput::new(i.t("tool_dialog.notes_optional"), cx);
         if let Some(p) = &existing {
             input.set_text_silent(p.notes.clone().unwrap_or_default(), cx);
         }
@@ -462,7 +456,7 @@ pub fn open_provider_dialog(
     });
 
     let website = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("网址（可选）", "Website (optional)"), cx);
+        let mut input = TextInput::new(i.t("tool_dialog.website_optional_2"), cx);
         if let Some(p) = &existing {
             input.set_text_silent(p.website_url.clone().unwrap_or_default(), cx);
         }
@@ -493,7 +487,7 @@ pub fn open_provider_dialog(
         String::new()
     };
     let pi_provider_key = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("Provider Key (如 kimi / deepseek)", "Provider Key (e.g. kimi)"), cx);
+        let mut input = TextInput::new(i.t("tool_dialog.provider_key_e_g"), cx);
         input.set_text_silent(pi_key_val, cx);
         input
     });
@@ -520,22 +514,22 @@ pub fn open_provider_dialog(
             let mt_str = item.get("maxTokens").map(|v| v.to_string()).unwrap_or_else(|| "128000".into());
 
             let id_ent = cx.new(|cx| {
-                let mut inp = TextInput::new(i.t("模型 ID，如 deepseek-chat", "Model ID"), cx);
+                let mut inp = TextInput::new(i.t("tool_dialog.model_id_2"), cx);
                 inp.set_text_silent(m_id, cx);
                 inp
             });
             let name_ent = cx.new(|cx| {
-                let mut inp = TextInput::new(i.t("显示名称，如 DeepSeek-V3", "Display name"), cx);
+                let mut inp = TextInput::new(i.t("tool_dialog.display_name_2"), cx);
                 inp.set_text_silent(m_name, cx);
                 inp
             });
             let cw_ent = cx.new(|cx| {
-                let mut inp = TextInput::new(i.t("上下文窗口，如 1000000", "Context window"), cx);
+                let mut inp = TextInput::new(i.t("tool_dialog.context_window_2"), cx);
                 inp.set_text_silent(cw_str, cx);
                 inp
             });
             let mt_ent = cx.new(|cx| {
-                let mut inp = TextInput::new(i.t("最大输出，如 128000", "Max tokens"), cx);
+                let mut inp = TextInput::new(i.t("tool_dialog.max_tokens"), cx);
                 inp.set_text_silent(mt_str, cx);
                 inp
             });
@@ -552,15 +546,15 @@ pub fn open_provider_dialog(
         }
     }
     if pi_models.is_empty() && matches!(tool, ToolId::Pi | ToolId::OhMyPi) {
-        let id_ent = cx.new(|cx| TextInput::new(i.t("模型 ID，如 deepseek-chat", "Model ID"), cx));
-        let name_ent = cx.new(|cx| TextInput::new(i.t("显示名称，如 DeepSeek-V3", "Display name"), cx));
+        let id_ent = cx.new(|cx| TextInput::new(i.t("tool_dialog.model_id_2"), cx));
+        let name_ent = cx.new(|cx| TextInput::new(i.t("tool_dialog.display_name_2"), cx));
         let cw_ent = cx.new(|cx| {
-            let mut inp = TextInput::new(i.t("上下文窗口，如 1000000", "Context window"), cx);
+            let mut inp = TextInput::new(i.t("tool_dialog.context_window_2"), cx);
             inp.set_text_silent("1000000", cx);
             inp
         });
         let mt_ent = cx.new(|cx| {
-            let mut inp = TextInput::new(i.t("最大输出，如 128000", "Max tokens"), cx);
+            let mut inp = TextInput::new(i.t("tool_dialog.max_tokens"), cx);
             inp.set_text_silent("128000", cx);
             inp
         });
@@ -578,10 +572,7 @@ pub fn open_provider_dialog(
 
     let model_search = cx.new(|cx| {
         TextInput::new(
-            i.t(
-                "搜索模型名称或厂商 (模糊过滤)...",
-                "Search models by ID or provider...",
-            ),
+            i.t("tool_dialog.search_models_by_id"),
             cx,
         )
     });
@@ -590,7 +581,7 @@ pub fn open_provider_dialog(
 
     let custom_user_agent = cx.new(|cx| {
         let mut input = TextInput::new(
-            i.t("例如 claude-cli/2.1.237 (external, cli)", "e.g. claude-cli/2.1.237"),
+            i.t("tool_dialog.e_g_claude_cli"),
             cx,
         );
         if let Some(ua) = &meta.custom_user_agent {
@@ -603,12 +594,12 @@ pub fn open_provider_dialog(
     if let Some(headers) = &meta.custom_headers {
         for h in headers {
             let key = cx.new(|cx| {
-                let mut input = TextInput::new(i.t("Header 名称 (如 X-Title)", "Header Name"), cx);
+                let mut input = TextInput::new(i.t("tool_dialog.header_name"), cx);
                 input.set_text_silent(h.name.clone(), cx);
                 input
             });
             let value = cx.new(|cx| {
-                let mut input = TextInput::new(i.t("Header 对应值", "Header Value"), cx);
+                let mut input = TextInput::new(i.t("tool_dialog.header_value"), cx);
                 input.set_text_silent(h.value.clone(), cx);
                 input
             });
@@ -621,7 +612,7 @@ pub fn open_provider_dialog(
             || (meta.pricing_model_source.as_deref().unwrap_or("inherit") != "inherit")
     });
     let cost_multiplier = cx.new(|cx| {
-        let mut input = TextInput::new(i.t("1.0 (留空默认为 1.0)", "1.0 (default)"), cx);
+        let mut input = TextInput::new(i.t("tool_dialog.k_1_0_default"), cx);
         if let Some(cm) = &meta.cost_multiplier {
             input.set_text_silent(cm.clone(), cx);
         }
@@ -633,12 +624,12 @@ pub fn open_provider_dialog(
     if let Some(rewrites) = &meta.model_rewrites {
         for r in rewrites {
             let from = cx.new(|cx| {
-                let mut input = TextInput::new(i.t("请求模型 (From)", "Request Model"), cx);
+                let mut input = TextInput::new(i.t("tool_dialog.request_model_2"), cx);
                 input.set_text_silent(r.from.clone(), cx);
                 input
             });
             let to = cx.new(|cx| {
-                let mut input = TextInput::new(i.t("转发模型 (To)", "Forward Model"), cx);
+                let mut input = TextInput::new(i.t("tool_dialog.forward_model"), cx);
                 input.set_text_silent(r.to.clone(), cx);
                 input
             });
@@ -678,17 +669,17 @@ pub fn open_provider_dialog(
                     };
 
                     let display_name = cx.new(|cx| {
-                        let mut inp = TextInput::new(i.t("例如 DeepSeek V3", "e.g. DeepSeek V3"), cx);
+                        let mut inp = TextInput::new(i.t("tool_dialog.e_g_deepseek_v3"), cx);
                         inp.set_text_silent(d_name.to_string(), cx);
                         inp
                     });
                     let model_ent = cx.new(|cx| {
-                        let mut inp = TextInput::new(i.t("实际模型如 deepseek-chat", "Model name e.g. deepseek-chat"), cx);
+                        let mut inp = TextInput::new(i.t("tool_dialog.model_name_e_g"), cx);
                         inp.set_text_silent(m_name.to_string(), cx);
                         inp
                     });
                     let cw_ent = cx.new(|cx| {
-                        let mut inp = TextInput::new(i.t("如 128000", "e.g. 128000"), cx);
+                        let mut inp = TextInput::new(i.t("tool_dialog.e_g_128000"), cx);
                         inp.set_text_silent(cw, cx);
                         inp
                     });
@@ -765,7 +756,7 @@ pub fn fetch_upstream_models_for_dialog(ws: &mut Workspace, cx: &mut Context<Wor
     let custom_headers_raw = dialog.custom_headers.read(cx).text().trim().to_string();
 
     if base_url.is_empty() {
-        let msg = ws.i18n.t("请先填写 Base URL 接口地址", "Please enter Base URL first").to_string();
+        let msg = ws.i18n.t("tool_dialog.please_enter_base_url").to_string();
         ws.ui.toast(msg, true);
         cx.notify();
         return;
@@ -811,7 +802,7 @@ pub fn fetch_upstream_models_for_dialog(ws: &mut Workspace, cx: &mut Context<Wor
                         d.fetched_models = fetch_res.models;
                         d.active_model_dropdown = None;
                         d.fetch_error = None;
-                        let msg = i.t(
+                        let msg = i.raw(
                             &format!("成功获取到 {count} 个可用模型，可点击下拉按钮选择"),
                             &format!("Successfully fetched {count} models, click dropdown to select"),
                         ).to_string();
@@ -822,20 +813,20 @@ pub fn fetch_upstream_models_for_dialog(ws: &mut Workspace, cx: &mut Context<Wor
                         d.active_model_dropdown = None;
                         let err_msg = match err {
                             aitoolplus_core::api_hub::ModelsFetchError::Auth => {
-                                i.t("身份认证失败 (401/403)，请检查 API Key 是否正确", "Authentication failed (401/403), check your API key").to_string()
+                                i.t("tool_dialog.authentication_failed_401_403").to_string()
                             }
                             aitoolplus_core::api_hub::ModelsFetchError::Network(s) => {
-                                format!("{}: {s}", i.t("网络连接错误", "Network error"))
+                                format!("{}: {s}", i.t("tool_dialog.network_error"))
                             }
                             aitoolplus_core::api_hub::ModelsFetchError::Parse(s) => {
-                                format!("{}: {s}", i.t("响应解析失败", "Parse error"))
+                                format!("{}: {s}", i.t("tool_dialog.parse_error"))
                             }
                             aitoolplus_core::api_hub::ModelsFetchError::Unsupported(s) => {
-                                format!("{}: {s}", i.t("未返回可用模型", "No models returned"))
+                                format!("{}: {s}", i.t("tool_dialog.no_models_returned"))
                             }
                         };
                         d.fetch_error = Some(err_msg.clone());
-                        ws.ui.toast(format!("{}: {err_msg}", i.t("获取模型失败", "Fetch models failed")), true);
+                        ws.ui.toast(format!("{}: {err_msg}", i.t("tool_dialog.fetch_models_failed")), true);
                     }
                 }
             }
@@ -904,9 +895,9 @@ pub fn render_provider_dialog(
     } = state;
 
     let title = if editing_id.is_some() {
-        format!("{} · {}", i.t("编辑供应商", "Edit Provider"), tool.name_zh())
+        format!("{} · {}", i.t("tool_dialog.edit_provider"), tool.name_zh())
     } else {
-        format!("{} · {}", i.t("新增供应商", "Add Provider"), tool.name_zh())
+        format!("{} · {}", i.t("tool_dialog.add_provider"), tool.name_zh())
     };
 
     let field_label = |label: gpui::SharedString| -> gpui::AnyElement {
@@ -945,7 +936,7 @@ pub fn render_provider_dialog(
 
     let presets = aitoolplus_core::presets::presets_for(tool);
     let preset_names: Vec<gpui::SharedString> =
-        std::iter::once(i.t("空白 / Blank", "Blank / Custom"))
+        std::iter::once(i.t("tool_dialog.blank_custom"))
             .chain(presets.iter().map(|p| gpui::SharedString::from(p.name)))
             .collect();
 
@@ -953,10 +944,7 @@ pub fn render_provider_dialog(
     let mut preset_bar = div().flex().flex_col().gap(px(6.0));
     if !presets.is_empty() {
         preset_bar = preset_bar
-            .child(field_label(i.t(
-                "快速套用服务商预设（自动填入地址与模型参数）：",
-                "Quick Presets (auto-fills endpoints & models):",
-            )))
+            .child(field_label(i.t("tool_dialog.quick_presets_auto_fills")))
             .child(div().flex().flex_wrap().gap(px(5.0)).children(
                 preset_names.iter().enumerate().map(|(idx, label)| {
                     let is_on = match preset_index {
@@ -1155,11 +1143,11 @@ pub fn render_provider_dialog(
         for cat in CATEGORIES {
             let is_current = cat == category;
             let label: gpui::SharedString = match cat {
-                "official" => i.t("官方", "Official"),
-                "custom" => i.t("自定义", "Custom"),
-                "proxy" => i.t("代理", "Proxy"),
-                "subscription" => i.t("订阅", "Subscription"),
-                _ => i.t("其他", "Other"),
+                "official" => i.t("tool_dialog.official"),
+                "custom" => i.t("tool_dialog.custom"),
+                "proxy" => i.t("tool_dialog.proxy"),
+                "subscription" => i.t("tool_dialog.subscription"),
+                _ => i.t("tool_dialog.other"),
             };
             let cat2 = cat.to_string();
             category_row = category_row.child(button_l(
@@ -1193,7 +1181,7 @@ pub fn render_provider_dialog(
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(field_label(i.t("官网地址（可选）", "Website (optional)")))
+                .child(field_label(i.t("tool_dialog.website_optional")))
                 .child({
                     let web_txt = website.read(cx).text().to_string();
                     let has_url = !web_txt.trim().is_empty();
@@ -1211,7 +1199,7 @@ pub fn render_provider_dialog(
                                 open_in_browser(&web_txt);
                             }))
                             .child(gpui::svg().data(crate::icons::EXTERNAL_LINK_SVG).size(px(11.0)).text_color(t.accent))
-                            .child(i.t("打开官网", "Open"))
+                            .child(i.t("tool_dialog.open"))
                             .into_any_element()
                     } else {
                         div().into_any_element()
@@ -1225,10 +1213,10 @@ pub fn render_provider_dialog(
         .flex()
         .flex_col()
         .gap(px(4.0))
-        .child(field_label(i.t("备注（可选）", "Notes (optional)")))
+        .child(field_label(i.t("tool_dialog.notes_optional")))
         .child(input_container(&t, notes.clone()));
 
-    let mut basic_section = section_card(i.t("基础信息", "Basic Information"));
+    let mut basic_section = section_card(i.t("tool_dialog.basic_information"));
 
     if is_pi_tool {
         basic_section = basic_section
@@ -1242,7 +1230,7 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("供应商名称 *", "Provider Name *")))
+                            .child(field_label(i.t("tool_dialog.provider_name")))
                             .child(input_container(&t, name.clone())),
                     )
                     .child(
@@ -1251,7 +1239,7 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("Provider Key (配置标识) *", "Provider Key *")))
+                            .child(field_label(i.t("tool_dialog.provider_key")))
                             .child(input_container(&t, pi_provider_key.clone())),
                     ),
             )
@@ -1265,7 +1253,7 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("分类", "Category")))
+                            .child(field_label(i.t("tool_dialog.category")))
                             .child(category_picker),
                     )
                     .child(website_field),
@@ -1288,7 +1276,7 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("供应商名称 *", "Provider Name *")))
+                            .child(field_label(i.t("tool_dialog.provider_name")))
                             .child(input_container(&t, name.clone())),
                     )
                     .child(
@@ -1297,7 +1285,7 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("分类", "Category")))
+                            .child(field_label(i.t("tool_dialog.category")))
                             .child(category_picker),
                     ),
             )
@@ -1312,7 +1300,7 @@ pub fn render_provider_dialog(
 
     // 3. Section: 接口与凭据 (Connection & Credentials)
     let is_official = category == "official";
-    let mut connection_section = section_card(i.t("接口与凭据", "Connection & Credentials"));
+    let mut connection_section = section_card(i.t("tool_dialog.connection_credentials"));
 
     if is_official {
         connection_section = connection_section.child(
@@ -1324,10 +1312,7 @@ pub fn render_provider_dialog(
                 .border_color(t.accent)
                 .text_size(px(12.0))
                 .text_color(t.text_primary)
-                .child(i.t(
-                    "💡 当前使用的是官方直连模式。无需填写 Base URL 或自定义 API Key，CLI 将直接使用官方认证/订阅登录。",
-                    "💡 Using official direct connection mode. No Base URL or custom API Key required.",
-                )),
+                .child(i.t("tool_dialog.using_official_direct_connecti")),
         );
     } else {
         // Base URL
@@ -1336,16 +1321,13 @@ pub fn render_provider_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(field_label(i.t("接口地址 (Base URL)", "Base URL")))
+                .child(field_label(i.t("tool_dialog.base_url")))
                 .child(input_container(&t, base_url.clone()))
                 .child(
                     div()
                         .text_size(px(11.0))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "例如: https://api.anthropic.com 或第三方中转地址",
-                            "e.g. https://api.anthropic.com or reverse proxy URL",
-                        )),
+                        .child(i.t("tool_dialog.e_g_https_api")),
                 ),
         );
 
@@ -1360,7 +1342,7 @@ pub fn render_provider_dialog(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(field_label(i.t("API Key / 访问密钥", "API Key / Token")))
+                        .child(field_label(i.t("tool_dialog.api_key_token")))
                         .child({
                             let has_web = !web_url_for_key.trim().is_empty();
                             if has_web {
@@ -1373,7 +1355,7 @@ pub fn render_provider_dialog(
                                     .on_click(cx.listener(move |_ws, _ev, _w, _cx| {
                                         open_in_browser(&web_url_for_key);
                                     }))
-                                    .child(i.t("获取 API Key ->", "Get API key ->"))
+                                    .child(i.t("tool_dialog.get_api_key"))
                                     .into_any_element()
                             } else {
                                 div().into_any_element()
@@ -1394,9 +1376,9 @@ pub fn render_provider_dialog(
                                 crate::icons::EYE_SVG
                             },
                             if show_api_key {
-                                i.t("隐藏密钥", "Hide API Key")
+                                i.t("tool_dialog.hide_api_key")
                             } else {
-                                i.t("显示密钥", "Show API Key")
+                                i.t("tool_dialog.show_api_key")
                             },
                             false,
                             &t,
@@ -1420,7 +1402,7 @@ pub fn render_provider_dialog(
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
-                    .child(field_label(i.t("API 协议格式 (API Format)", "API Format")))
+                    .child(field_label(i.t("tool_dialog.api_format")))
                     .child({
                         let formats = [
                             ("openai-completions", "OpenAI Chat Completions"),
@@ -1461,7 +1443,7 @@ pub fn render_provider_dialog(
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
-                    .child(field_label(i.t("上游协议格式 (Upstream Format)", "Upstream Format")))
+                    .child(field_label(i.t("tool_dialog.upstream_format")))
                     .child({
                         let formats = [
                             ("responses", "Responses (原生直连)"),
@@ -1503,7 +1485,7 @@ pub fn render_provider_dialog(
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
-                    .child(field_label(i.t("思考等级 (Reasoning Effort)", "Reasoning Effort")))
+                    .child(field_label(i.t("tool_dialog.reasoning_effort_2")))
                     .child({
                         let efforts = [
                             ("default", "默认 (Default)"),
@@ -1633,7 +1615,7 @@ pub fn render_provider_dialog(
                         crate::components::icon_button_svg(
                             format!("btn-drop-{target_id}"),
                             if is_open { crate::icons::CHEVRON_UP_SVG } else { crate::icons::CHEVRON_DOWN_SVG },
-                            if is_open { i.t("收起下拉", "Close") } else { i.t("选择模型", "Select") },
+                            if is_open { i.t("tool_dialog.close_2") } else { i.t("tool_dialog.select_2") },
                             false,
                             &t2,
                             cx,
@@ -1690,7 +1672,7 @@ pub fn render_provider_dialog(
                             .child(crate::components::icon_button_svg(
                                 format!("btn-close-pop-{target_str_close}"),
                                 crate::icons::X_SVG,
-                                i.t("关闭", "Close"),
+                                i.t("tool_dialog.close"),
                                 false,
                                 &t2,
                                 cx,
@@ -1710,10 +1692,10 @@ pub fn render_provider_dialog(
                             .text_color(t2.text_muted)
                             .child(format!(
                                 "{} {} / {} {}",
-                                i.t("匹配", "Matched"),
+                                i.t("tool_dialog.matched"),
                                 filtered_len,
                                 total_models_len,
-                                i.t("个模型（点击条目直接填入）", "models (click to select)")
+                                i.t("tool_dialog.models_click_to_select")
                             ))
                     );
 
@@ -1734,7 +1716,7 @@ pub fn render_provider_dialog(
                                 .justify_center()
                                 .text_size(px(11.5))
                                 .text_color(t2.text_muted)
-                                .child(i.t("未找到匹配的模型", "No matching models found"))
+                                .child(i.t("tool_dialog.no_matching_models_found"))
                         );
                     } else {
                         for (vendor, m_list) in &grouped_models {
@@ -1787,7 +1769,7 @@ pub fn render_provider_dialog(
                                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                                     d.active_model_dropdown = None;
                                                 }
-                                                let msg = ws.i18n.t(
+                                                let msg = ws.i18n.raw(
                                                     &format!("已选择模型: {m_id_c}"),
                                                     &format!("Selected model: {m_id_c}"),
                                                 ).to_string();
@@ -1843,7 +1825,7 @@ pub fn render_provider_dialog(
                                         .text_size(px(10.0))
                                         .text_color(t3.accent)
                                         .font_weight(gpui::FontWeight::MEDIUM)
-                                        .child(i.t("选择", "Select"))
+                                        .child(i.t("tool_dialog.select"))
                                 );
 
                                 list_container = list_container.child(row_el);
@@ -1907,7 +1889,7 @@ pub fn render_provider_dialog(
                                     .text_size(px(12.5))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(t.text_primary)
-                                    .child(i.t("模型配置与列表 (Models)", "Models Configuration")),
+                                    .child(i.t("tool_dialog.models_configuration")),
                             )
                             .child(
                                 div()
@@ -1918,7 +1900,7 @@ pub fn render_provider_dialog(
                                     .text_size(px(10.5))
                                     .text_color(t.accent)
                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child(format!("{} {}", pi_models.len(), i.t("个模型", "models"))),
+                                    .child(format!("{} {}", pi_models.len(), i.t("tool_dialog.models_2"))),
                             )
                     )
                     .child(
@@ -1933,11 +1915,11 @@ pub fn render_provider_dialog(
                                     "btn-pi-fetch-models",
                                     if has_models { crate::icons::REFRESH_SVG } else { crate::icons::DOWNLOAD_SVG },
                                     if is_fetching_models {
-                                        i.t("获取中...", "Fetching...")
+                                        i.t("tool_dialog.fetching")
                                     } else if has_models {
-                                        i.t("重新获取", "Refresh")
+                                        i.t("tool_dialog.refresh")
                                     } else {
-                                        i.t("获取上游模型", "Fetch Models")
+                                        i.t("tool_dialog.fetch_models")
                                     },
                                     ButtonVariant::Secondary,
                                     is_fetching_models,
@@ -1954,7 +1936,7 @@ pub fn render_provider_dialog(
                                 row.child(button_with_icon_l(
                                     "btn-pi-import-all",
                                     crate::icons::PLUS_SVG,
-                                    i.t("导入全部", "Import All"),
+                                    i.t("tool_dialog.import_all"),
                                     ButtonVariant::Secondary,
                                     &t2,
                                     cx,
@@ -2000,7 +1982,7 @@ pub fn render_provider_dialog(
                                                     added += 1;
                                                 }
                                             }
-                                            let msg = format!("{} {} {}", ws.i18n.t("已导入", "Imported"), added, ws.i18n.t("个模型", "models"));
+                                            let msg = format!("{} {} {}", ws.i18n.t("tool_dialog.imported"), added, ws.i18n.t("tool_dialog.models_2"));
                                             ws.ui.toast(msg, false);
                                         }
                                         cx.notify();
@@ -2013,7 +1995,7 @@ pub fn render_provider_dialog(
                                 button_with_icon_l(
                                     "btn-pi-add-model",
                                     crate::icons::PLUS_SVG,
-                                    i.t("添加模型", "Add Model"),
+                                    i.t("tool_dialog.add_model"),
                                     ButtonVariant::Primary,
                                     &t2,
                                     cx,
@@ -2042,7 +2024,7 @@ pub fn render_provider_dialog(
                                                 max_tokens: mt_ent,
                                                 is_expanded: false,
                                             });
-                                            let msg = ws.i18n.t("已添加模型行", "Model row added").to_string();
+                                            let msg = ws.i18n.t("tool_dialog.model_row_added").to_string();
                                             ws.ui.toast(msg, false);
                                         }
                                         cx.notify();
@@ -2058,7 +2040,7 @@ pub fn render_provider_dialog(
                 let dismiss_btn = crate::components::icon_button_svg(
                     "btn-dismiss-pi-fetch-err",
                     crate::icons::X_SVG,
-                    i.t("关闭", "Close"),
+                    i.t("tool_dialog.close"),
                     false,
                     &t2,
                     cx,
@@ -2072,7 +2054,7 @@ pub fn render_provider_dialog(
                 pi_sec = pi_sec.child(
                     crate::components::error_strip(
                         "pi-fetch-err-strip",
-                        i.t("获取模型失败", "Fetch models failed"),
+                        i.t("tool_dialog.fetch_models_failed"),
                         err_txt,
                         &t2,
                         cx,
@@ -2091,7 +2073,7 @@ pub fn render_provider_dialog(
                         .justify_center()
                         .text_size(px(12.0))
                         .text_color(t.text_muted)
-                        .child(i.t("暂无模型配置，请点击右上角【添加模型】或【获取上游模型】", "No models configured. Click Add Model or Fetch Models."))
+                        .child(i.t("tool_dialog.no_models_configured_click"))
                 );
             } else {
                 // Table Header
@@ -2105,8 +2087,8 @@ pub fn render_provider_dialog(
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_secondary)
                         .child(div().w(px(28.0)))
-                        .child(div().flex_1().child(i.t("模型 ID *", "Model ID *")))
-                        .child(div().flex_1().child(i.t("显示名称", "Display Name")))
+                        .child(div().flex_1().child(i.t("tool_dialog.model_id")))
+                        .child(div().flex_1().child(i.t("tool_dialog.display_name")))
                         .child(div().w(px(28.0)))
                 );
 
@@ -2136,7 +2118,7 @@ pub fn render_provider_dialog(
                     top_row = top_row.child(crate::components::icon_button_svg(
                         format!("btn-expand-pi-{idx}"),
                         if is_expanded { crate::icons::CHEVRON_DOWN_SVG } else { crate::icons::CHEVRON_RIGHT_SVG },
-                        if is_expanded { i.t("收起参数", "Collapse") } else { i.t("展开高级参数", "Expand") },
+                        if is_expanded { i.t("tool_dialog.collapse") } else { i.t("tool_dialog.expand") },
                         false,
                         &t2,
                         cx,
@@ -2170,7 +2152,7 @@ pub fn render_provider_dialog(
                     top_row = top_row.child(crate::components::icon_button_svg(
                         format!("btn-del-pi-model-{idx}"),
                         crate::icons::TRASH_SVG,
-                        i.t("移除模型", "Remove model"),
+                        i.t("tool_dialog.remove_model"),
                         true,
                         &t2,
                         cx,
@@ -2178,10 +2160,10 @@ pub fn render_provider_dialog(
                             if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                 if d.pi_models.len() > 1 {
                                     d.pi_models.remove(idx);
-                                    let msg = ws.i18n.t("已移除模型", "Model removed").to_string();
+                                    let msg = ws.i18n.t("tool_dialog.model_removed").to_string();
                                     ws.ui.toast(msg, false);
                                 } else {
-                                    let msg = ws.i18n.t("至少保留一个模型配置", "Keep at least one model").to_string();
+                                    let msg = ws.i18n.t("tool_dialog.keep_at_least_one").to_string();
                                     ws.ui.toast(msg, true);
                                 }
                             }
@@ -2305,7 +2287,7 @@ pub fn render_provider_dialog(
                             .text_size(px(12.5))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(t.text_primary)
-                            .child(i.t("默认模型 (Default Model)", "Default Model")),
+                            .child(i.t("tool_dialog.default_model")),
                     ),
             );
 
@@ -2313,10 +2295,7 @@ pub fn render_provider_dialog(
                 div()
                     .text_size(px(11.0))
                     .text_color(t.text_muted)
-                    .child(i.t(
-                        "Codex 默认请求的模型，随时可改。留空且配置了模型映射时，默认使用映射第一行。",
-                        "Default model for Codex. Leave empty to use the first mapped model.",
-                    )),
+                    .child(i.t("tool_dialog.default_model_for_codex")),
             );
 
             let def_row = div()
@@ -2335,11 +2314,11 @@ pub fn render_provider_dialog(
                         "btn-fetch-models-codex-def",
                         if has_models { crate::icons::REFRESH_SVG } else { crate::icons::DOWNLOAD_SVG },
                         if is_fetching_models {
-                            i.t("获取中...", "Fetching...")
+                            i.t("tool_dialog.fetching")
                         } else if has_models {
-                            i.t("重新获取", "Refresh")
+                            i.t("tool_dialog.refresh")
                         } else {
-                            i.t("获取上游模型", "Fetch Models")
+                            i.t("tool_dialog.fetch_models")
                         },
                         ButtonVariant::Secondary,
                         is_fetching_models,
@@ -2379,16 +2358,13 @@ pub fn render_provider_dialog(
                                     .text_size(px(12.5))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(t.text_primary)
-                                    .child(i.t("模型映射 (Model Mapping)", "Model Mapping")),
+                                    .child(i.t("tool_dialog.model_mapping_2")),
                             )
                             .child(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(t.text_muted)
-                                    .child(i.t(
-                                        "配置 Codex 菜单显示名与实际请求模型的映射（多模型支持）",
-                                        "Configure model mapping between menu display name and actual upstream model",
-                                    )),
+                                    .child(i.t("tool_dialog.configure_model_mapping_betwee")),
                             ),
                     )
                     .child(
@@ -2402,11 +2378,11 @@ pub fn render_provider_dialog(
                                     "btn-fetch-models-codex-map",
                                     if has_models { crate::icons::REFRESH_SVG } else { crate::icons::DOWNLOAD_SVG },
                                     if is_fetching_models {
-                                        i.t("获取中...", "Fetching...")
+                                        i.t("tool_dialog.fetching")
                                     } else if has_models {
-                                        i.t("重新获取", "Refresh")
+                                        i.t("tool_dialog.refresh")
                                     } else {
-                                        i.t("获取上游模型", "Fetch Models")
+                                        i.t("tool_dialog.fetch_models")
                                     },
                                     ButtonVariant::Secondary,
                                     is_fetching_models,
@@ -2422,17 +2398,17 @@ pub fn render_provider_dialog(
                                 button_with_icon_l(
                                     "btn-add-codex-model",
                                     crate::icons::PLUS_SVG,
-                                    i.t("添加模型", "Add Model"),
+                                    i.t("tool_dialog.add_model"),
                                     ButtonVariant::Secondary,
                                     &t2,
                                     cx,
                                     |ws, _ev, _w, cx| {
                                         if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                             let idx = d.codex_catalog_models.len();
-                                            let display_name = cx.new(|cx| TextInput::new(ws.i18n.t("例如 DeepSeek V3", "e.g. DeepSeek V3"), cx));
-                                            let model_ent = cx.new(|cx| TextInput::new(ws.i18n.t("实际模型如 deepseek-chat", "Model e.g. deepseek-chat"), cx));
+                                            let display_name = cx.new(|cx| TextInput::new(ws.i18n.t("tool_dialog.e_g_deepseek_v3"), cx));
+                                            let model_ent = cx.new(|cx| TextInput::new(ws.i18n.t("tool_dialog.model_e_g_deepseek"), cx));
                                             let cw_ent = cx.new(|cx| {
-                                                let mut inp = TextInput::new(ws.i18n.t("如 128000", "e.g. 128000"), cx);
+                                                let mut inp = TextInput::new(ws.i18n.t("tool_dialog.e_g_128000"), cx);
                                                 inp.set_text_silent("128000", cx);
                                                 inp
                                             });
@@ -2457,7 +2433,7 @@ pub fn render_provider_dialog(
                 let dismiss_btn = crate::components::icon_button_svg(
                     "btn-dismiss-codex-fetch-err",
                     crate::icons::X_SVG,
-                    i.t("关闭", "Close"),
+                    i.t("tool_dialog.close"),
                     false,
                     &t2,
                     cx,
@@ -2470,7 +2446,7 @@ pub fn render_provider_dialog(
                 );
                 map_card = map_card.child(crate::components::error_strip(
                     "codex-fetch-err-strip",
-                    i.t("获取模型失败", "Fetch models failed"),
+                    i.t("tool_dialog.fetch_models_failed"),
                     err_txt,
                     &t2,
                     cx,
@@ -2487,10 +2463,7 @@ pub fn render_provider_dialog(
                         .justify_center()
                         .text_size(px(12.0))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "暂无模型映射配置（非必填），点击右上角【添加模型】或【获取上游模型】进行多模型映射",
-                            "No model mapping configured. Click Add Model or Fetch Models.",
-                        )),
+                        .child(i.t("tool_dialog.no_model_mapping_configured")),
                 );
             } else {
                 // Table header
@@ -2503,10 +2476,10 @@ pub fn render_provider_dialog(
                         .text_size(px(11.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_secondary)
-                        .child(div().w(px(160.0)).child(i.t("菜单显示名", "Menu Display Name")))
-                        .child(div().flex_1().child(i.t("实际请求模型 *", "Actual Request Model *")))
-                        .child(div().w(px(100.0)).child(i.t("上下文窗口", "Context Window")))
-                        .child(div().w(px(90.0)).child(i.t("思考等级", "Reasoning Levels")))
+                        .child(div().w(px(160.0)).child(i.t("tool_dialog.menu_display_name")))
+                        .child(div().flex_1().child(i.t("tool_dialog.actual_request_model")))
+                        .child(div().w(px(100.0)).child(i.t("tool_dialog.context_window")))
+                        .child(div().w(px(90.0)).child(i.t("tool_dialog.reasoning_levels")))
                         .child(div().w(px(28.0))),
                 );
 
@@ -2533,7 +2506,7 @@ pub fn render_provider_dialog(
                         .child(div().w(px(100.0)).child(input_container(&t2, draft.context_window.clone())))
                         .child({
                             let label = if current_reasoning.is_empty() {
-                                i.t("未设置", "Not set").to_string()
+                                i.t("tool_dialog.not_set").to_string()
                             } else {
                                 current_reasoning.clone()
                             };
@@ -2563,14 +2536,14 @@ pub fn render_provider_dialog(
                         .child(crate::components::icon_button_svg(
                             format!("btn-del-codex-model-{idx}"),
                             crate::icons::TRASH_SVG,
-                            i.t("移除模型", "Remove model"),
+                            i.t("tool_dialog.remove_model"),
                             true,
                             &t2,
                             cx,
                             move |ws, _ev, _w, cx| {
                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                     d.codex_catalog_models.remove(idx);
-                                    let msg = ws.i18n.t("已移除模型", "Model removed").to_string();
+                                    let msg = ws.i18n.t("tool_dialog.model_removed").to_string();
                                     ws.ui.toast(msg, false);
                                 }
                                 cx.notify();
@@ -2611,13 +2584,13 @@ pub fn render_provider_dialog(
                                     .text_size(px(12.5))
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(t.text_primary)
-                                    .child(i.t("模型角色映射 (Model Mapping)", "Model Mapping")),
+                                    .child(i.t("tool_dialog.model_mapping")),
                             )
                             .child(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(t.text_muted)
-                                    .child(i.t("配置各角色的请求模型与显示名称", "Configure request models & display names for each role")),
+                                    .child(i.t("tool_dialog.configure_request_models_displ")),
                             )
                     )
                     .child(
@@ -2631,7 +2604,7 @@ pub fn render_provider_dialog(
                                 button_with_icon_l(
                                     "btn-quick-set-roles",
                                     crate::icons::WAND_SVG,
-                                    i.t("一键设置", "Quick Set"),
+                                    i.t("tool_dialog.quick_set"),
                                     ButtonVariant::Secondary,
                                     &t2,
                                     cx,
@@ -2666,10 +2639,10 @@ pub fn render_provider_dialog(
                                                 if d.fable_name.read(cx).text().trim().is_empty() {
                                                     d.fable_name.update(cx, |inp, cx| inp.set_text_silent(&base_m, cx));
                                                 }
-                                                let msg = ws.i18n.t("已一键将模型应用到所有角色", "Model applied to all roles").to_string();
+                                                let msg = ws.i18n.t("tool_dialog.model_applied_to_all").to_string();
                                                 ws.ui.toast(msg, false);
                                             } else {
-                                                let msg = ws.i18n.t("请先填写任一模型", "Please enter a model name first").to_string();
+                                                let msg = ws.i18n.t("tool_dialog.please_enter_a_model").to_string();
                                                 ws.ui.toast(msg, true);
                                             }
                                         }
@@ -2684,11 +2657,11 @@ pub fn render_provider_dialog(
                                     "btn-fetch-models-top",
                                     if has_models { crate::icons::REFRESH_SVG } else { crate::icons::DOWNLOAD_SVG },
                                     if is_fetching_models {
-                                        i.t("获取中...", "Fetching...")
+                                        i.t("tool_dialog.fetching")
                                     } else if has_models {
-                                        i.t("重新获取", "Refresh")
+                                        i.t("tool_dialog.refresh")
                                     } else {
-                                        i.t("获取上游模型", "Fetch Models")
+                                        i.t("tool_dialog.fetch_models")
                                     },
                                     ButtonVariant::Secondary,
                                     is_fetching_models,
@@ -2708,7 +2681,7 @@ pub fn render_provider_dialog(
                 let dismiss_btn = crate::components::icon_button_svg(
                     "btn-dismiss-fetch-err",
                     crate::icons::X_SVG,
-                    i.t("关闭", "Close"),
+                    i.t("tool_dialog.close"),
                     false,
                     &t2,
                     cx,
@@ -2722,7 +2695,7 @@ pub fn render_provider_dialog(
                 sec = sec.child(
                     crate::components::error_strip(
                         "provider-fetch-err-strip",
-                        i.t("获取模型失败", "Fetch models failed"),
+                        i.t("tool_dialog.fetch_models_failed"),
                         err_txt,
                         &t2,
                         cx,
@@ -2743,10 +2716,10 @@ pub fn render_provider_dialog(
                         .text_size(px(11.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(t.text_secondary)
-                        .child(div().w(px(80.0)).child(i.t("模型角色", "Role")))
-                        .child(div().flex_1().min_w(px(0.0)).child(i.t("显示名称", "Display Name")))
-                        .child(div().flex_1().min_w(px(0.0)).child(i.t("实际请求模型", "Request Model")))
-                        .child(div().w(px(64.0)).text_center().child(i.t("1M 模式", "1M Mode")))
+                        .child(div().w(px(80.0)).child(i.t("tool_dialog.role")))
+                        .child(div().flex_1().min_w(px(0.0)).child(i.t("tool_dialog.display_name")))
+                        .child(div().flex_1().min_w(px(0.0)).child(i.t("tool_dialog.request_model")))
+                        .child(div().w(px(64.0)).text_center().child(i.t("tool_dialog.k_1m_mode")))
                 );
 
                 // Helper to render role row
@@ -2793,7 +2766,7 @@ pub fn render_provider_dialog(
                                     div()
                                         .text_size(px(11.0))
                                         .text_color(t2.text_muted)
-                                        .child(i.t("后台子代理，不显示在菜单", "Subagent (not in menu)"))
+                                        .child(i.t("tool_dialog.subagent_not_in_menu"))
                                 );
                             div().flex_1().min_w(px(0.0)).child(disabled_box).into_any_element()
                         }
@@ -2938,14 +2911,14 @@ pub fn render_provider_dialog(
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(field_label(i.t("默认 / 兜底模型 (Fallback Model)", "Default / Fallback Model")))
+                        .child(field_label(i.t("tool_dialog.default_fallback_model")))
                         .child({
                             if has_models {
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(t.accent)
                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child(format!("{} {} {}", i.t("已获取", "Fetched"), fetched_models.len(), i.t("个上游模型", "models")))
+                                    .child(format!("{} {} {}", i.t("tool_dialog.fetched"), fetched_models.len(), i.t("tool_dialog.models")))
                             } else {
                                 div()
                             }
@@ -2961,10 +2934,7 @@ pub fn render_provider_dialog(
                     div()
                         .text_size(px(11.0))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方中转代理时建议填写。",
-                            "Used for requests not mapped to specific roles. Recommended for third-party proxies.",
-                        )),
+                        .child(i.t("tool_dialog.used_for_requests_not")),
                 );
 
             sec = sec.child(fallback_field);
@@ -2972,10 +2942,10 @@ pub fn render_provider_dialog(
             // Codex specific fields
             if tool == ToolId::Codex {
                 let reasoning_levels = [
-                    ("default", i.t("默认", "Default")),
-                    ("low", i.t("低 (Low)", "Low")),
-                    ("medium", i.t("中 (Medium)", "Medium")),
-                    ("high", i.t("高 (High)", "High")),
+                    ("default", i.t("tool_dialog.default")),
+                    ("low", i.t("tool_dialog.low")),
+                    ("medium", i.t("tool_dialog.medium")),
+                    ("high", i.t("tool_dialog.high")),
                 ];
                 let mut r_row = div().flex().gap(px(6.0)).flex_wrap();
                 for (r_val, r_lbl) in reasoning_levels {
@@ -3001,8 +2971,8 @@ pub fn render_provider_dialog(
                 }
 
                 let wire_apis = [
-                    ("responses", i.t("Responses 原生", "Responses Native")),
-                    ("chat", i.t("Chat 兼容", "Chat Compatible")),
+                    ("responses", i.t("tool_dialog.responses_native")),
+                    ("chat", i.t("tool_dialog.chat_compatible")),
                 ];
                 let mut w_row = div().flex().gap(px(6.0)).flex_wrap();
                 for (w_val, w_lbl) in wire_apis {
@@ -3033,7 +3003,7 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("推理强度 (Reasoning Effort)", "Reasoning Effort")))
+                            .child(field_label(i.t("tool_dialog.reasoning_effort")))
                             .child(r_row),
                     )
                     .child(
@@ -3041,7 +3011,7 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("传输协议 (Wire API)", "Wire API")))
+                            .child(field_label(i.t("tool_dialog.wire_api")))
                             .child(w_row),
                     );
             }
@@ -3056,11 +3026,11 @@ pub fn render_provider_dialog(
         vec![
             (
                 crate::pages::ProviderDialogTab::Connection,
-                i.t("核心连接与模型", "Connection & Models"),
+                i.t("tool_dialog.connection_models"),
             ),
             (
                 crate::pages::ProviderDialogTab::Advanced,
-                i.t("网络、请求头与计费", "Network & Billing"),
+                i.t("tool_dialog.network_billing"),
             ),
         ],
         active_tab,
@@ -3076,16 +3046,13 @@ pub fn render_provider_dialog(
 
     // Advanced Tab Cards:
     // 1. User-Agent Card
-    let ua_card = section_card(i.t("客户端 User-Agent (User-Agent 指纹)", "Client User-Agent"))
+    let ua_card = section_card(i.t("tool_dialog.client_user_agent"))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(field_label(i.t(
-                    "自定义 User-Agent（用于国内聚合代理 403 白名单校验）",
-                    "Custom User-Agent (for proxy 403 allowlist checks)",
-                )))
+                .child(field_label(i.t("tool_dialog.custom_user_agent_for")))
                 .child(input_container(&t, custom_user_agent.clone()))
                 .child(
                     div()
@@ -3097,11 +3064,11 @@ pub fn render_provider_dialog(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(t.text_secondary)
-                                .child(i.t("常用指纹预设:", "Quick presets:")),
+                                .child(i.t("tool_dialog.quick_presets")),
                         )
                         .child(button_l(
                             "ua-pill-claude",
-                            i.t("Claude Code 官方指纹", "Claude Code Official"),
+                            i.t("tool_dialog.claude_code_official"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -3146,7 +3113,7 @@ pub fn render_provider_dialog(
                         ))
                         .child(button_l(
                             "ua-pill-clear",
-                            i.t("清空", "Clear"),
+                            i.t("tool_dialog.clear"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -3164,10 +3131,7 @@ pub fn render_provider_dialog(
                     div()
                         .text_size(px(11.0))
                         .text_color(t.text_muted)
-                        .child(i.t(
-                            "提示: 部分中转站（如 Kimi / 火山 / GLM）仅允许官方白名单 User-Agent。若请求报 403 Forbidden，请直接套用「Claude Code 官方指纹」。",
-                            "Tip: Some third-party proxies only allow official User-Agents. If you hit 403 Forbidden, apply the official fingerprint above.",
-                        )),
+                        .child(i.t("tool_dialog.tip_some_third_party")),
                 ),
         );
 
@@ -3199,7 +3163,7 @@ pub fn render_provider_dialog(
                                 .text_size(px(12.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t("自定义 HTTP 请求头 (Custom HTTP Headers)", "Custom HTTP Headers")),
+                                .child(i.t("tool_dialog.custom_http_headers")),
                         )
                         .child(
                             div()
@@ -3210,14 +3174,14 @@ pub fn render_provider_dialog(
                                 .text_size(px(10.5))
                                 .text_color(t.accent)
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(format!("{} {}", custom_headers_list.len(), i.t("项", "items"))),
+                                .child(format!("{} {}", custom_headers_list.len(), i.t("tool_dialog.items"))),
                         ),
                 )
                 .child(
                     button_with_icon_l(
                         "btn-add-custom-header",
                         crate::icons::PLUS_SVG,
-                        i.t("添加 Header", "Add Header"),
+                        i.t("tool_dialog.add_header"),
                         ButtonVariant::Secondary,
                         &t2,
                         cx,
@@ -3244,10 +3208,7 @@ pub fn render_provider_dialog(
                     .border_color(t2.card_border)
                     .text_size(px(11.5))
                     .text_color(t2.text_muted)
-                    .child(i.t(
-                        "暂未配置自定义 Header。可点击上方按钮添加，或点击下方常用预设快速填入。",
-                        "No custom headers configured. Click button above or use quick presets below.",
-                    )),
+                    .child(i.t("tool_dialog.no_custom_headers_configured")),
             );
         } else {
             let mut list_col = div().flex().flex_col().gap(px(6.0));
@@ -3283,7 +3244,7 @@ pub fn render_provider_dialog(
                         crate::components::icon_button_svg(
                             format!("del-header-{idx}"),
                             crate::icons::TRASH_SVG,
-                            i.t("删除", "Delete"),
+                            i.t("tool_dialog.delete"),
                             false,
                             &t3,
                             cx,
@@ -3311,7 +3272,7 @@ pub fn render_provider_dialog(
                 div()
                     .text_size(px(11.0))
                     .text_color(t2.text_secondary)
-                    .child(i.t("常用 Header 快速填入:", "Quick Header presets:")),
+                    .child(i.t("tool_dialog.quick_header_presets")),
             )
             .child(button_l(
                 "hdr-pill-referer",
@@ -3387,10 +3348,7 @@ pub fn render_provider_dialog(
             div()
                 .text_size(px(11.0))
                 .text_color(t2.text_muted)
-                .child(i.t(
-                    "说明: 保存时将自动写入 Claude Code 的 CUSTOM_HEADERS 环境变量及 Pi / Codex 的对应协议请求头中。",
-                    "Note: Automatically written to Claude Code's CUSTOM_HEADERS env and Pi / Codex request headers.",
-                )),
+                .child(i.t("tool_dialog.note_automatically_written_to")),
         );
 
         card
@@ -3424,16 +3382,13 @@ pub fn render_provider_dialog(
                                 .text_size(px(12.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t("计费与成本倍率 (Billing & Multiplier)", "Billing & Multiplier")),
+                                .child(i.t("tool_dialog.billing_multiplier")),
                         )
                         .child(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "兼容 cc-switch / ai-toolbox 计费倍率与价格换算规则",
-                                    "Compatible with cc-switch / ai-toolbox cost multiplier and billing",
-                                )),
+                                .child(i.t("tool_dialog.compatible_with_cc_switch")),
                         ),
                 )
                 .child(
@@ -3463,10 +3418,7 @@ pub fn render_provider_dialog(
                     .border_color(t2.card_border)
                     .text_size(px(11.5))
                     .text_color(t2.text_muted)
-                    .child(i.t(
-                        "计费配置已禁用（遵循官方默认标准价格与全局规则）。点击右上角开关启用自定义计费。",
-                        "Billing is disabled (using standard pricing). Click toggle above to enable.",
-                    )),
+                    .child(i.t("tool_dialog.billing_is_disabled_using")),
             );
         } else {
             let mut form_col = div().flex().flex_col().gap(px(10.0));
@@ -3475,7 +3427,7 @@ pub fn render_provider_dialog(
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(field_label(i.t("成本倍率 (Cost Multiplier)", "Cost Multiplier")))
+                .child(field_label(i.t("tool_dialog.cost_multiplier")))
                 .child(
                     div()
                         .flex()
@@ -3494,7 +3446,7 @@ pub fn render_provider_dialog(
                                 .flex_wrap()
                                 .child(button_l(
                                     "mul-pill-10",
-                                    i.t("1.0 (原价)", "1.0 (Standard)"),
+                                    i.t("tool_dialog.k_1_0_standard"),
                                     ButtonVariant::Secondary,
                                     &t2,
                                     cx,
@@ -3507,7 +3459,7 @@ pub fn render_provider_dialog(
                                 ))
                                 .child(button_l(
                                     "mul-pill-07",
-                                    i.t("0.7 (七折)", "0.7 (30% off)"),
+                                    i.t("tool_dialog.k_0_7_30_off"),
                                     ButtonVariant::Secondary,
                                     &t2,
                                     cx,
@@ -3520,7 +3472,7 @@ pub fn render_provider_dialog(
                                 ))
                                 .child(button_l(
                                     "mul-pill-15",
-                                    i.t("1.5 (中转)", "1.5 (Proxy)"),
+                                    i.t("tool_dialog.k_1_5_proxy"),
                                     ButtonVariant::Secondary,
                                     &t2,
                                     cx,
@@ -3533,7 +3485,7 @@ pub fn render_provider_dialog(
                                 ))
                                 .child(button_l(
                                     "mul-pill-20",
-                                    i.t("2.0 (双倍)", "2.0 (Double)"),
+                                    i.t("tool_dialog.k_2_0_double"),
                                     ButtonVariant::Secondary,
                                     &t2,
                                     cx,
@@ -3548,9 +3500,9 @@ pub fn render_provider_dialog(
                 );
 
             let sources = [
-                ("inherit", i.t("继承全局 (Global)", "Inherit Global")),
-                ("request", i.t("按请求模型 (Request)", "By Request Model")),
-                ("response", i.t("按响应模型 (Response)", "By Response Model")),
+                ("inherit", i.t("tool_dialog.inherit_global")),
+                ("request", i.t("tool_dialog.by_request_model")),
+                ("response", i.t("tool_dialog.by_response_model")),
             ];
             let mut src_row = div().flex().gap(px(6.0)).flex_wrap();
             for (val, label) in sources {
@@ -3572,16 +3524,16 @@ pub fn render_provider_dialog(
             }
 
             let src_hint = match pricing_model_source.as_str() {
-                "request" => i.t("按客户端请求的模型单价进行计费换算", "Calculates cost using requested model pricing"),
-                "response" => i.t("按服务端返回的真实模型单价计费（推荐在配置了模型重写映射时选用）", "Calculates cost using response model pricing (recommended with rewrites)"),
-                _ => i.t("继承系统的全局默认计费策略与费率规则", "Follows global default billing rules"),
+                "request" => i.t("tool_dialog.calculates_cost_using_requeste"),
+                "response" => i.t("tool_dialog.calculates_cost_using_response"),
+                _ => i.t("tool_dialog.follows_global_default_billing"),
             };
 
             let pricing_source_sec = div()
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(field_label(i.t("计费基准模型源 (Pricing Model Source)", "Pricing Model Source")))
+                .child(field_label(i.t("tool_dialog.pricing_model_source")))
                 .child(src_row)
                 .child(
                     div()
@@ -3625,7 +3577,7 @@ pub fn render_provider_dialog(
                                 .text_size(px(12.5))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(t.text_primary)
-                                .child(i.t("模型重写映射 (Model Rewrites)", "Model Rewrites")),
+                                .child(i.t("tool_dialog.model_rewrites")),
                         )
                         .child(
                             div()
@@ -3636,14 +3588,14 @@ pub fn render_provider_dialog(
                                 .text_size(px(10.5))
                                 .text_color(t.accent)
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(format!("{} {}", model_rewrites.len(), i.t("条规则", "rules"))),
+                                .child(format!("{} {}", model_rewrites.len(), i.t("tool_dialog.rules"))),
                         ),
                 )
                 .child(
                     button_with_icon_l(
                         "btn-add-model-rewrite",
                         crate::icons::PLUS_SVG,
-                        i.t("添加重写规则", "Add Rewrite Rule"),
+                        i.t("tool_dialog.add_rewrite_rule"),
                         ButtonVariant::Secondary,
                         &t2,
                         cx,
@@ -3670,10 +3622,7 @@ pub fn render_provider_dialog(
                     .border_color(t2.card_border)
                     .text_size(px(11.5))
                     .text_color(t2.text_muted)
-                    .child(i.t(
-                        "暂未配置模型重写映射。常用于将 CLI 内部硬编码的辅助模型（如 haiku、fast 模型）重定向至第三方中转站支持的模型。",
-                        "No model rewrites configured. Useful to map hardcoded helper models (e.g. haiku) to proxy models.",
-                    )),
+                    .child(i.t("tool_dialog.no_model_rewrites_configured")),
             );
         } else {
             let mut list_col = div().flex().flex_col().gap(px(6.0));
@@ -3710,7 +3659,7 @@ pub fn render_provider_dialog(
                         crate::components::icon_button_svg(
                             format!("del-rewrite-{idx}"),
                             crate::icons::TRASH_SVG,
-                            i.t("删除", "Delete"),
+                            i.t("tool_dialog.delete"),
                             false,
                             &t3,
                             cx,
@@ -3733,26 +3682,20 @@ pub fn render_provider_dialog(
             div()
                 .text_size(px(11.0))
                 .text_color(t2.text_muted)
-                .child(i.t(
-                    "例如: 将「claude-3-5-haiku-20241022」重定向至「deepseek-chat」或「gpt-4o-mini」，避免中转代理报错。",
-                    "e.g. Map 'claude-3-5-haiku-20241022' to 'deepseek-chat' or 'gpt-4o-mini' to prevent 400 errors.",
-                )),
+                .child(i.t("tool_dialog.e_g_map_claude")),
         );
 
         card
     };
 
     // 5. Raw Config Card
-    let raw_card = section_card(i.t("原始底层配置代码 (Raw JSON / TOML)", "Raw Config JSON / TOML"))
+    let raw_card = section_card(i.t("tool_dialog.raw_config_json_toml"))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(4.0))
-                .child(field_label(i.t(
-                    "高级用户底层配置（保存时将与上方表单字段自动安全合并）",
-                    "Underlying config (merged with form fields automatically on save)",
-                )))
+                .child(field_label(i.t("tool_dialog.underlying_config_merged_with")))
                 .child(textarea_container(&t, settings.clone())),
         );
 
@@ -3802,7 +3745,7 @@ pub fn render_provider_dialog(
                 .text_color(t.text_muted)
                 .child(if let Some(p_idx) = preset_index {
                     let p_name = presets.get(p_idx).map(|p| p.name).unwrap_or("");
-                    format!("{} {}", i.t("已选用预设:", "Selected preset:"), p_name)
+                    format!("{} {}", i.t("tool_dialog.selected_preset"), p_name)
                 } else {
                     "".to_string()
                 }),
@@ -3814,7 +3757,7 @@ pub fn render_provider_dialog(
                 .gap(px(8.0))
                 .child(button_l(
                     "prov-cancel-btn",
-                    i.t("取消", "Cancel"),
+                    i.t("tool_dialog.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -3826,7 +3769,7 @@ pub fn render_provider_dialog(
                 .child(button_with_icon_l(
                     "prov-save-btn",
                     crate::icons::CHECK_SVG,
-                    i.t("保存配置", "Save Configuration"),
+                    i.t("tool_dialog.save_configuration"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -4402,7 +4345,7 @@ pub(super) fn save_provider(
     let effective_custom_headers = env_headers.join(", ");
 
     if name_txt.is_empty() {
-        let msg = i.t("供应商名称不能为空", "Provider name is required").to_string();
+        let msg = i.t("tool_dialog.provider_name_is_required").to_string();
         ws.ui.toast(msg, true);
         cx.notify();
         return;
@@ -4442,7 +4385,7 @@ pub(super) fn save_provider(
         }
 
         if pi_models_json.is_empty() {
-            let msg = i.t("请至少填写一个模型 ID", "Please configure at least one model ID").to_string();
+            let msg = i.t("tool_dialog.please_configure_at_least").to_string();
             ws.ui.toast(msg, true);
             cx.notify();
             return;
@@ -4518,7 +4461,7 @@ pub(super) fn save_provider(
     let settings_txt = match build_provider_settings(&form_data) {
         Ok(s) => s,
         Err(e) => {
-            let msg = format!("{}: {}", i.t("构建配置失败", "Failed to build settings"), e);
+            let msg = format!("{}: {}", i.t("tool_dialog.failed_to_build_settings"), e);
             ws.ui.toast(msg, true);
             cx.notify();
             return;
@@ -4653,7 +4596,7 @@ pub(super) fn save_provider(
     }
 
     ws.ui.provider_dialog = None;
-    let msg = i.t("供应商已保存", "Provider saved").to_string();
+    let msg = i.t("tool_dialog.provider_saved").to_string();
     ws.ui.toast(msg, false);
     cx.notify();
 }

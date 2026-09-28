@@ -24,7 +24,7 @@ mod common;
 mod extensions;
 mod plugins;
 mod prompts;
-mod provider_dialog;
+pub(super) mod provider_dialog;
 mod providers;
 mod runtime;
 mod sessions;
@@ -143,24 +143,24 @@ fn tabs_bar(tool: ToolId, ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
     let current = ws.ui.tool_tab;
 
     let mut tabs = vec![
-        (ToolTab::Providers, i.t("供应商", "Providers")),
-        (ToolTab::Prompts, i.t("全局提示词", "Prompts")),
-        (ToolTab::Runtime, i.t("运行时文件", "Runtime Files")),
+        (ToolTab::Providers, i.t("tool_page.providers")),
+        (ToolTab::Prompts, i.t("tool_page.prompts")),
+        (ToolTab::Runtime, i.t("tool_page.runtime_files")),
     ];
     if matches!(tool, ToolId::Pi | ToolId::OhMyPi) {
-        tabs.push((ToolTab::Extensions, i.t("扩展", "Extensions")));
+        tabs.push((ToolTab::Extensions, i.t("tool_page.extensions")));
     }
     if tool == ToolId::Pi {
-        tabs.push((ToolTab::Common, i.t("其他设置", "Other Settings")));
+        tabs.push((ToolTab::Common, i.t("tool_page.other_settings")));
     }
     if tool == ToolId::ClaudeCode || tool == ToolId::Codex || tool == ToolId::Grok {
-        tabs.push((ToolTab::Plugins, i.t("已安装插件", "Installed Plugins")));
-        tabs.push((ToolTab::Marketplace, i.t("插件市场", "Marketplace")));
+        tabs.push((ToolTab::Plugins, i.t("tool_page.installed_plugins")));
+        tabs.push((ToolTab::Marketplace, i.t("tool_page.marketplace")));
     }
     if tool == ToolId::OpenCode {
-        tabs.push((ToolTab::Addons, i.t("附加工具", "Add-ons")));
+        tabs.push((ToolTab::Addons, i.t("tool_page.add_ons")));
     }
-    tabs.push((ToolTab::Sessions, i.t("会话管理", "Sessions")));
+    tabs.push((ToolTab::Sessions, i.t("tool_page.sessions")));
 
     crate::components::segmented_tab_bar(
         "tool",

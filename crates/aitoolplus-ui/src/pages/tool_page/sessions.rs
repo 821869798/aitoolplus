@@ -166,15 +166,15 @@ pub(super) fn agent_sessions_section(
             .text_color(t.text_muted)
             .child(format!(
                 "{} {} {}",
-                i.t("共", "Total"),
+                i.t("tool_sessions.total"),
                 filtered.len(),
-                i.t("个会话", "sessions")
+                i.t("tool_sessions.sessions")
             )),
     );
     toolbar = toolbar.child(button_with_icon_loading_l(
         "agent-sessions-refresh-btn",
         crate::icons::REFRESH_SVG,
-        i.t("刷新", "Refresh"),
+        i.t("tool_sessions.refresh"),
         ButtonVariant::Secondary,
         ws.ui.agent_sessions_loading,
         &t,
@@ -194,11 +194,8 @@ pub(super) fn agent_sessions_section(
             crate::components::empty_state_svg(
                 &t,
                 crate::icons::REFRESH_SVG,
-                i.t("正在加载会话列表…", "Loading sessions…"),
-                i.t(
-                    "后台正在快速扫描会话历史文件，请稍候",
-                    "Scanning session history files in background, please wait",
-                ),
+                i.t("tool_sessions.loading_sessions"),
+                i.t("tool_sessions.scanning_session_history_files"),
             ),
         );
     } else if filtered.is_empty() {
@@ -206,11 +203,8 @@ pub(super) fn agent_sessions_section(
             crate::components::empty_state_svg(
                 &t,
                 crate::icons::FOLDER_SVG,
-                i.t("没有找到会话", "No sessions found"),
-                i.t(
-                    "该 Agent 的会话目录可能为空或没有匹配的搜索结果",
-                    "This agent's session directory may be empty or no results matched",
-                ),
+                i.t("tool_sessions.no_sessions_found"),
+                i.t("tool_sessions.this_agent_s_session"),
             ),
         );
     } else {
@@ -461,15 +455,15 @@ pub(crate) fn render_virtual_agent_session_card(
                     let _ = ws_entity.update(cx, |ws, cx| {
                         if let Some(cmd) = cmd_opt.as_ref() {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(cmd.clone()));
-                            ws.ui.toast(ws.i18n.t("已复制恢复命令", "Copied resume command").to_string(), false);
+                            ws.ui.toast(ws.i18n.t("tool_sessions.copied_resume_command").to_string(), false);
                         } else {
-                            ws.ui.toast(ws.i18n.t("该会话暂不支持恢复命令", "Resume not supported for this session").to_string(), true);
+                            ws.ui.toast(ws.i18n.t("tool_sessions.resume_not_supported_for").to_string(), true);
                         }
                         cx.notify();
                     });
                 })
                 .child(crate::icons::svg_icon(crate::icons::TERMINAL_SVG, px(11.5), t.text_secondary))
-                .child(i.t("恢复命令", "Resume")),
+                .child(i.t("tool_sessions.resume")),
         );
     }
 
@@ -515,7 +509,7 @@ pub(crate) fn render_virtual_agent_session_card(
                     });
                 })
                 .child(crate::icons::svg_icon(crate::icons::PENCIL_SVG, px(11.5), t.text_secondary))
-                .child(i.t("重命名", "Rename")),
+                .child(i.t("tool_sessions.rename")),
         );
     }
 
@@ -549,16 +543,16 @@ pub(crate) fn render_virtual_agent_session_card(
                                 session.session_id
                             );
                             ws.ui.confirm = Some(crate::pages::ConfirmState {
-                                title: ws.i18n.t("删除 Antigravity 会话", "Delete Antigravity Session").to_string(),
+                                title: ws.i18n.t("tool_sessions.delete_antigravity_session").to_string(),
                                 message: msg,
                                 action: crate::pages::ConfirmAction::DeleteAntigravitySession { session },
                             });
                         } else {
                             ws.ui.confirm = Some(crate::pages::ConfirmState {
-                                title: ws.i18n.t("删除会话", "Delete Session").to_string(),
+                                title: ws.i18n.t("tool_sessions.delete_session").to_string(),
                                 message: ws
                                     .i18n
-                                    .t("确定要删除这条会话记录吗？此操作无法恢复。", "Delete this session? This action cannot be undone.")
+                                    .t("tool_sessions.delete_this_session_this")
                                     .to_string(),
                                 action: crate::pages::ConfirmAction::DeleteSession {
                                     tool,
@@ -570,7 +564,7 @@ pub(crate) fn render_virtual_agent_session_card(
                     });
                 })
                 .child(crate::icons::svg_icon(crate::icons::TRASH_SVG, px(11.5), t.danger))
-                .child(i.t("删除", "Delete")),
+                .child(i.t("tool_sessions.delete")),
         );
     }
 
@@ -662,7 +656,7 @@ pub(crate) fn render_rename_dialog(
                 .gap(px(8.0))
                 .child(button_l(
                     "rename-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("tool_sessions.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -673,7 +667,7 @@ pub(crate) fn render_rename_dialog(
                 ))
                 .child(button_l(
                     "rename-save",
-                    i.t("保存", "Save"),
+                    i.t("tool_sessions.save"),
                     ButtonVariant::Primary,
                     &t,
                     cx,
@@ -682,7 +676,7 @@ pub(crate) fn render_rename_dialog(
                         match session::rename_session(&meta, &title) {
                             Ok(()) => {
                                 session::invalidate_cache();
-                                ws.ui.toast(ws.i18n.t("已重命名", "renamed").to_string(), false);
+                                ws.ui.toast(ws.i18n.t("tool_sessions.renamed").to_string(), false);
                             }
                             Err(e) => ws.ui.toast(format!("rename failed: {e}"), true),
                         }
@@ -693,7 +687,7 @@ pub(crate) fn render_rename_dialog(
         );
     crate::pages::modal_scaffold(
         &t,
-        i.t("重命名会话", "Rename Session").as_ref(),
+        i.t("tool_sessions.rename_session").as_ref(),
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {

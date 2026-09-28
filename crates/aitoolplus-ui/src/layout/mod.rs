@@ -38,7 +38,7 @@ impl Workspace {
             .overflow_y_scroll()
             .py(px(6.0));
 
-        nav_list = nav_list.child(self.sidebar_group(i.t("编码工具", "Coding Tools")));
+        nav_list = nav_list.child(self.sidebar_group(i.t("layout.coding_tools")));
 
         let mut ag_rendered = false;
         let show_ag = self.settings.visible_tools.is_empty()
@@ -69,7 +69,7 @@ impl Workspace {
             nav_list = nav_list.child(self.sidebar_item(cx, Page::Antigravity));
         }
 
-        nav_list = nav_list.child(self.sidebar_group(i.t("共享资源", "Shared Resources")));
+        nav_list = nav_list.child(self.sidebar_group(i.t("layout.shared_resources")));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Mcp));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Skills));
 
@@ -114,11 +114,11 @@ impl Workspace {
         let is_active = self.page == page;
 
         let (icon_svg, label): (&'static [u8], SharedString) = match page {
-            Page::Tool(tool) => (crate::icons::tool_icon(tool), i.t(tool.name_zh(), tool.name_en())),
-            Page::Mcp => (crate::icons::MCP_SVG, i.t("MCP 服务器", "MCP Servers")),
-            Page::Skills => (crate::icons::SPARKLES_SVG, i.t("Skills 技能", "Skills")),
-            Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("Antigravity", "Antigravity")),
-            Page::Settings => (crate::icons::SETTINGS_SVG, i.t("系统设置", "Settings")),
+            Page::Tool(tool) => (crate::icons::tool_icon(tool), i.raw(tool.name_zh(), tool.name_en())),
+            Page::Mcp => (crate::icons::MCP_SVG, i.t("layout.mcp_servers")),
+            Page::Skills => (crate::icons::SPARKLES_SVG, i.t("layout.skills")),
+            Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("layout.antigravity")),
+            Page::Settings => (crate::icons::SETTINGS_SVG, i.t("layout.settings")),
         };
 
         div()
@@ -201,39 +201,33 @@ impl Workspace {
 
         let (page_title, page_subtitle) = match page {
             Page::Tool(tool) => (
-                i.t(tool.name_zh(), tool.name_en()),
-                i.t("模型供应商与运行时配置", "Providers & Runtime Configuration"),
+                i.raw(tool.name_zh(), tool.name_en()),
+                i.t("layout.providers_runtime_configuratio"),
             ),
             Page::Mcp => (
-                i.t("MCP 服务器", "MCP Servers"),
-                i.t("统一管理各工具的 Model Context Protocol 协议服务", "Manage Model Context Protocol servers"),
+                i.t("layout.mcp_servers"),
+                i.t("layout.manage_model_context_protocol"),
             ),
             Page::Skills => (
-                i.t("Skills 技能", "Skills"),
-                i.t("扩展各 AI 工具的系统 Prompt 与函数技能库", "System prompts & agent tool skills"),
+                i.t("layout.skills"),
+                i.t("layout.system_prompts_agent_tool"),
             ),
             Page::Antigravity => {
                 if self.ui.antigravity_tab == crate::pages::AntigravityPageTab::Sessions {
                     (
-                        i.t("Antigravity 会话管理", "Antigravity Sessions"),
-                        i.t(
-                            "Google / Antigravity CLI 与桌面 App 历史会话查看、恢复与管理",
-                            "Browse, resume, and manage Antigravity CLI & App chat sessions",
-                        ),
+                        i.t("layout.antigravity_sessions"),
+                        i.t("layout.browse_resume_and_manage"),
                     )
                 } else {
                     (
-                        i.t("Antigravity 账号管理", "Antigravity Accounts"),
-                        i.t(
-                            "Google / Antigravity 账号配额监控与一键凭据无缝切换",
-                            "Account quota inspection and seamless credential switching",
-                        ),
+                        i.t("layout.antigravity_accounts"),
+                        i.t("layout.account_quota_inspection_and"),
                     )
                 }
             }
             Page::Settings => (
-                i.t("系统设置", "Settings"),
-                i.t("个性化偏好、CLI 根目录与自动备份管理", "Preferences, paths & backups"),
+                i.t("layout.settings"),
+                i.t("layout.preferences_paths_backups"),
             ),
         };
 
@@ -284,7 +278,7 @@ impl Workspace {
                                 .text_size(px(11.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.success)
-                                .child(i.t("代理开启", "Proxy Active")),
+                                .child(i.t("layout.proxy_active")),
                         )
                     }),
             )

@@ -21,17 +21,17 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             (
                 aitoolplus_core::settings::ThemeMode::System,
                 Some(crate::icons::SUN_MOON_SVG),
-                i.t("跟随系统", "System"),
+                i.t("settings_general.system"),
             ),
             (
                 aitoolplus_core::settings::ThemeMode::Dark,
                 Some(crate::icons::MOON_SVG),
-                i.t("暗色模式", "Dark"),
+                i.t("settings_general.dark"),
             ),
             (
                 aitoolplus_core::settings::ThemeMode::Light,
                 Some(crate::icons::SUN_SVG),
-                i.t("亮色模式", "Light"),
+                i.t("settings_general.light"),
             ),
         ],
         theme_mode,
@@ -52,17 +52,17 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             (
                 aitoolplus_core::settings::Language::System,
                 Some(crate::icons::GLOBE_SVG),
-                i.t("跟随系统", "System"),
+                i.t("settings_general.system"),
             ),
             (
                 aitoolplus_core::settings::Language::Zh,
                 None,
-                i.t("简体中文", "中文"),
+                i.t("settings_general.zh_cn"),
             ),
             (
                 aitoolplus_core::settings::Language::En,
                 None,
-                i.t("English", "EN"),
+                i.t("settings_general.english"),
             ),
         ],
         lang_val,
@@ -72,34 +72,26 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             ws.settings.language = lang;
             ws.i18n = crate::i18n::I18n::new(lang);
             (ws.callbacks.save_settings)(&ws.settings);
+            cx.refresh_windows();
             cx.notify();
         },
     );
 
     let appearance_card = settings_card(
         &t,
-        i.t("外观与语言", "Appearance & Language"),
-        Some(i.t(
-            "选择工作台的色彩主题风格与界面文本显示语言",
-            "Choose workbench color theme and interface language",
-        )),
+        i.t("settings_general.appearance_language"),
+        Some(i.t("settings_general.choose_workbench_color_theme")),
         vec![
             settings_row(
                 &t,
-                i.t("界面主题", "Theme Mode"),
-                Some(i.t(
-                    "暗色、亮色或自动同步操作系统的深浅色偏好",
-                    "Dark, light or automatically sync with OS preference",
-                )),
+                i.t("settings_general.theme_mode"),
+                Some(i.t("settings_general.dark_light_or_automatically")),
                 theme_selector,
             ),
             settings_row(
                 &t,
-                i.t("界面语言", "Interface Language"),
-                Some(i.t(
-                    "切换应用内所有界面文案、提示与状态标签的语言",
-                    "Select language for UI labels, notifications and buttons",
-                )),
+                i.t("settings_general.interface_language"),
+                Some(i.t("settings_general.select_language_for_ui")),
                 lang_selector,
             ),
         ],
@@ -112,19 +104,13 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
 
     let behavior_card = settings_card(
         &t,
-        i.t("系统与启动行为", "System & Launch Behavior"),
-        Some(i.t(
-            "配置开机自启、关闭窗口策略与托盘驻留行为",
-            "Configure startup, window close, and background tray actions",
-        )),
+        i.t("settings_general.system_launch_behavior"),
+        Some(i.t("settings_general.configure_startup_window_close")),
         vec![
             settings_row(
                 &t,
-                i.t("开机自动启动", "Launch at Login"),
-                Some(i.t(
-                    "登录 Windows 后在后台自动启动 AI ToolPlus 守护服务",
-                    "Start AI ToolPlus in background after Windows user login",
-                )),
+                i.t("settings_general.launch_at_login"),
+                Some(i.t("settings_general.start_ai_toolplus_in")),
                 toggle(
                     "autostart-toggle",
                     autostart_on,
@@ -139,11 +125,8 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             ),
             settings_row(
                 &t,
-                i.t("关闭时最小化到托盘", "Minimize to Tray on Close"),
-                Some(i.t(
-                    "点击主窗口关闭按钮时保留后台托盘运行，避免中断会话",
-                    "Keep running in system tray when window is closed",
-                )),
+                i.t("settings_general.minimize_to_tray_on"),
+                Some(i.t("settings_general.keep_running_in_system")),
                 toggle(
                     "minimize-on-close-toggle",
                     minimize_on_close,
@@ -159,11 +142,8 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             ),
             settings_row(
                 &t,
-                i.t("启动时直接最小化", "Start Minimized"),
-                Some(i.t(
-                    "应用启动后静默进入系统托盘，不主动弹出主窗口",
-                    "Launch directly into tray without showing main window",
-                )),
+                i.t("settings_general.start_minimized"),
+                Some(i.t("settings_general.launch_directly_into_tray")),
                 toggle(
                     "start-minimized-toggle",
                     start_minimized,
@@ -178,11 +158,8 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             ),
             settings_row(
                 &t,
-                i.t("自动扫描本地会话用量", "Auto-Scan Local Session Usage"),
-                Some(i.t(
-                    "自动追踪并扫描 Claude Code、Codex、Pi 等本地会话记录与 Token 消耗",
-                    "Automatically scan Claude Code, Codex, Pi session files for token analytics",
-                )),
+                i.t("settings_general.auto_scan_local_session"),
+                Some(i.t("settings_general.automatically_scan_claude_code")),
                 toggle(
                     "usage-auto-scan-toggle-settings",
                     ws.settings.usage_auto_scan_sessions,
@@ -328,7 +305,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                     .text_size(px(12.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(t.text_secondary)
-                    .child(i.t("代理协议", "Proxy Protocol")),
+                    .child(i.t("settings_general.proxy_protocol")),
             )
             .child(protocol_dropdown),
     );
@@ -348,7 +325,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                             .text_size(px(12.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(t.text_secondary)
-                            .child(i.t("代理服务器", "Proxy Server")),
+                            .child(i.t("settings_general.proxy_server")),
                     )
                     .child(input_container(&t, proxy_host_input)),
             )
@@ -363,7 +340,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                             .text_size(px(12.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(t.text_secondary)
-                            .child(i.t("代理端口", "Port")),
+                            .child(i.t("settings_general.port")),
                     )
                     .child(input_container(&t, proxy_port_input)),
             );
@@ -381,15 +358,9 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                         .text_size(px(12.0))
                         .text_color(t.text_secondary)
                         .child(if current_proxy_type == aitoolplus_core::settings::ProxyType::Direct {
-                            i.t(
-                                "直连模式：不使用任何网络代理，直接连接上游模型与更新服务器",
-                                "Direct mode: no proxy, connects directly to target servers",
-                            )
+                            i.t("settings_general.direct_mode_no_proxy")
                         } else {
-                            i.t(
-                                "跟随系统代理：自动检测并使用当前操作系统配置的系统代理",
-                                "System mode: follow system proxy settings configured in OS",
-                            )
+                            i.t("settings_general.system_mode_follow_system")
                         }),
                 ),
         );
@@ -399,11 +370,11 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
     let test_button = button_l(
         "proxy-test-btn",
         if is_testing_proxy {
-            i.t("正在测试…", "Testing…")
+            i.t("settings_general.testing")
         } else if is_custom_proxy {
-            i.t("测试代理", "Test Proxy")
+            i.t("settings_general.test_proxy")
         } else {
-            i.t("测试网络连接", "Test Connectivity")
+            i.t("settings_general.test_connectivity")
         },
         ButtonVariant::Secondary,
         &t,
@@ -418,14 +389,14 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                 let port = ws.ui.proxy_port_input.read(cx).text().trim().to_string();
                 if host.is_empty() {
                     ws.ui.toast(
-                        ws.i18n.t("请输入代理服务器地址", "Please enter proxy server").to_string(),
+                        ws.i18n.t("settings_general.please_enter_proxy_server").to_string(),
                         true,
                     );
                     return;
                 }
                 if port.is_empty() {
                     ws.ui.toast(
-                        ws.i18n.t("请输入代理端口", "Please enter proxy port").to_string(),
+                        ws.i18n.t("settings_general.please_enter_proxy_port").to_string(),
                         true,
                     );
                     return;
@@ -455,7 +426,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                         Ok(ms) => {
                             ws.ui.toast(
                                 ws.i18n
-                                    .t(
+                                    .raw(
                                         &format!("网络测试成功，响应延时: {} ms", ms),
                                         &format!("Connection test succeeded: {} ms", ms),
                                     )
@@ -466,7 +437,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                         Err(err) => {
                             ws.ui.toast(
                                 ws.i18n
-                                    .t(
+                                    .raw(
                                         &format!("网络测试失败: {}", err),
                                         &format!("Connection test failed: {}", err),
                                     )
@@ -486,7 +457,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
     // Save Settings Button
     let save_button = button_l(
         "proxy-save-btn",
-        i.t("保存设置", "Save Settings"),
+        i.t("settings_general.save_settings"),
         ButtonVariant::Primary,
         &t,
         cx,
@@ -500,7 +471,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             aitoolplus_core::settings::apply_proxy_env(&ws.settings);
             ws.ui.toast(
                 ws.i18n
-                    .t("代理网络设置已保存并立即生效", "Proxy settings saved and applied")
+                    .t("settings_general.proxy_settings_saved_and")
                     .to_string(),
                 false,
             );
@@ -523,7 +494,7 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                 div()
                     .text_size(px(11.5))
                     .text_color(t.text_secondary)
-                    .child(i.t("正在检测连接延时…", "Testing connection latency…")),
+                    .child(i.t("settings_general.testing_connection_latency")),
             )
             .into_any_element()
     } else if let Some(ref res) = proxy_test_result {
@@ -603,11 +574,8 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
 
     let network_card = settings_card(
         &t,
-        i.t("网络与代理", "Network & Proxy"),
-        Some(i.t(
-            "配置工作台发起网络请求时使用的代理方式与出口地址",
-            "Configure outbound proxy URL and connection behavior",
-        )),
+        i.t("settings_general.network_proxy"),
+        Some(i.t("settings_general.configure_outbound_proxy_url")),
         vec![proxy_card_content],
     );
 
@@ -734,11 +702,8 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
 
     let visibility_card = settings_card(
         &t,
-        i.t("侧边栏可见工具", "Visible Sidebar Tools"),
-        Some(i.t(
-            "点击切换工具卡片，定制侧边栏中常驻显示的 AI 编码助手",
-            "Click tool chips to customize which AI coding tools appear in navigation",
-        )),
+        i.t("settings_general.visible_sidebar_tools"),
+        Some(i.t("settings_general.click_tool_chips_to")),
         vec![visibility_chips.into_any_element()],
     );
 

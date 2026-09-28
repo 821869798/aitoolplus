@@ -89,12 +89,12 @@ pub fn render_antigravity_page(ws: &mut Workspace, cx: &mut Context<Workspace>) 
             (
                 AntigravityPageTab::Accounts,
                 Some(USER_SVG),
-                i.t("账号与配额", "Accounts & Quota"),
+                i.t("antigravity.accounts_quota"),
             ),
             (
                 AntigravityPageTab::Sessions,
                 Some(HISTORY_SVG),
-                i.t("会话管理", "Sessions"),
+                i.t("antigravity.sessions"),
             ),
         ],
         ws.ui.antigravity_tab,
@@ -209,9 +209,9 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
         }).detach();
     }
 
-    let add_label = i.t("添加账号", "Add Account");
-    let import_label = i.t("从本机导入", "Import Local");
-    let refresh_all_label = i.t("刷新全部配额", "Refresh All Quotas");
+    let add_label = i.t("antigravity.add_account_2");
+    let import_label = i.t("antigravity.import_local");
+    let refresh_all_label = i.t("antigravity.refresh_all_quotas");
     let cur_tier_filter = ws.ui.antigravity_tier_filter;
 
     let query = ws.ui.antigravity_search.read(cx).text().trim().to_lowercase();
@@ -309,7 +309,7 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                                     div()
                                         .text_size(px(12.0))
                                         .text_color(t.text_secondary)
-                                        .child(i.t("隐藏邮箱", "Mask emails")),
+                                        .child(i.t("antigravity.mask_emails")),
                                 )
                                 .child(toggle(
                                     "ag-mask-email",
@@ -352,18 +352,18 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                                 .child(if auto_on {
                                     format!("自动刷新: {}m", interval)
                                 } else {
-                                    i.t("自动刷新: 关", "Auto Refresh: Off").to_string()
+                                    i.t("antigravity.auto_refresh_off").to_string()
                                 })
                                 .on_click(cx.listener(move |ws, _, _, cx| {
                                     ws.settings.antigravity_auto_refresh = !ws.settings.antigravity_auto_refresh;
                                     (ws.callbacks.save_settings)(&ws.settings);
                                     let msg = if ws.settings.antigravity_auto_refresh {
-                                        ws.i18n.t(
+                                        ws.i18n.raw(
                                             &format!("后台自动刷新已开启，每 {} 分钟自动更新配额", ws.settings.antigravity_refresh_interval_minutes),
                                             &format!("Auto refresh enabled (every {}m)", ws.settings.antigravity_refresh_interval_minutes),
                                         )
                                     } else {
-                                        ws.i18n.t("后台自动刷新已关闭", "Auto refresh disabled")
+                                        ws.i18n.t("antigravity.auto_refresh_disabled")
                                     };
                                     ws.ui.toast(msg.to_string(), false);
                                     cx.notify();
@@ -422,7 +422,7 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                                 .border_color(t.card_border)
                                 .child(make_pill(
                                     "toggle-tier-all",
-                                    SharedString::from(i.t("全部", "All")),
+                                    SharedString::from(i.t("antigravity.all")),
                                     count_all,
                                     AntigravityTierFilter::All,
                                 ))
@@ -460,17 +460,14 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
             &t,
             GEMINI_SVG,
             if !is_filtered {
-                i.t("还没有添加 Antigravity 账号", "No Antigravity accounts yet")
+                i.t("antigravity.no_antigravity_accounts_yet")
             } else {
-                i.t("没有找到匹配的账号", "No matching accounts found")
+                i.t("antigravity.no_matching_accounts_found")
             },
             if !is_filtered {
-                i.t(
-                    "点击上方「添加账号」进行 Google 授权或输入 Refresh Token，也可以「从本机导入」当前凭据",
-                    "Click 'Add Account' or 'Import Local' above to get started",
-                )
+                i.t("antigravity.click_add_account_or")
             } else {
-                i.t("尝试更换筛选分类或搜索关键词", "Try switching filter tier or changing search keywords")
+                i.t("antigravity.try_switching_filter_tier")
             },
         ));
     } else {
@@ -547,17 +544,17 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
             (
                 AntigravitySessionFilter::All,
                 None,
-                i.t("全部", "All"),
+                i.t("antigravity.all"),
             ),
             (
                 AntigravitySessionFilter::Cli,
                 Some(TERMINAL_SVG),
-                i.t("终端 CLI", "Terminal CLI"),
+                i.t("antigravity.terminal_cli"),
             ),
             (
                 AntigravitySessionFilter::App,
                 Some(CODE_SVG),
-                i.t("桌面 App", "Desktop App"),
+                i.t("antigravity.desktop_app"),
             ),
         ],
         filter,
@@ -574,7 +571,7 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
     let refresh_btn = button_with_icon_l(
         "ag-sess-refresh-btn",
         REFRESH_SVG,
-        i.t("刷新", "Refresh"),
+        i.t("antigravity.refresh"),
         ButtonVariant::Secondary,
         &t,
         cx,
@@ -582,7 +579,7 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
             ws.ui.antigravity_sessions = None;
             ws.ui.antigravity_sessions_loading = false;
             load_antigravity_sessions(ws, cx);
-            ws.ui.toast(ws.i18n.t("已刷新会话列表", "Refreshed session list").to_string(), false);
+            ws.ui.toast(ws.i18n.t("antigravity.refreshed_session_list").to_string(), false);
             cx.notify();
         },
     );
@@ -607,34 +604,25 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
             div()
                 .text_size(px(12.0))
                 .text_color(t.text_muted)
-                .child(format!("{}: {}", i.t("共计", "Total"), total_count))
+                .child(format!("{}: {}", i.t("antigravity.total"), total_count))
         );
 
     let body = if ws.ui.antigravity_sessions_loading && filtered.is_empty() {
         empty_state_svg(
             &t,
             HISTORY_SVG,
-            i.t("正在加载会话列表…", "Loading sessions…"),
-            i.t(
-                "后台正在扫描 Antigravity 会话，请稍候",
-                "Scanning Antigravity sessions in the background",
-            ),
+            i.t("antigravity.loading_sessions"),
+            i.t("antigravity.scanning_antigravity_sessions"),
         )
     } else if filtered.is_empty() {
         empty_state_svg(
             &t,
             HISTORY_SVG,
-            i.t("暂无 Antigravity 会话记录", "No Antigravity sessions found"),
+            i.t("antigravity.no_antigravity_sessions_found"),
             if query.is_empty() {
-                i.t(
-                    "在终端中使用 agy，或在 Antigravity 桌面端中开始对话后，历史会话将自动显示在此处",
-                    "Conversations started in agy CLI or Antigravity IDE will automatically appear here.",
-                )
+                i.t("antigravity.conversations_started_in_agy")
             } else {
-                i.t(
-                    "没有找到匹配的会话，请尝试更换关键词",
-                    "No matching sessions found, try a different keyword.",
-                )
+                i.t("antigravity.no_matching_sessions_found")
             },
         )
     } else {
@@ -703,7 +691,7 @@ fn render_antigravity_session_detail(
                 .child(button_with_icon_l(
                     "ag-detail-back",
                     ARROW_LEFT_SVG,
-                    i.t("返回列表", "Back"),
+                    i.t("antigravity.back"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -740,7 +728,7 @@ fn render_antigravity_session_detail(
                 .child(button_with_icon_l(
                     "ag-detail-reveal",
                     FOLDER_SVG,
-                    i.t("定位文件", "Reveal File"),
+                    i.t("antigravity.reveal_file"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -771,17 +759,16 @@ fn render_antigravity_session_detail(
                         .text_size(px(13.0))
                         .text_color(t.text_secondary)
                         .child(if session.source == "app" {
-                            i.t("此桌面 App 会话历史仅保存于本地 Protocol Buffers 二进制缓存中，无明文对话记录。",
-                                "This Desktop App session history is stored in binary protocol buffers (.pb).")
+                            i.t("antigravity.this_desktop_app_session")
                         } else {
-                            i.t("此会话暂未记录明文消息。", "No text transcript messages recorded for this session.")
+                            i.t("antigravity.no_text_transcript_messages")
                         })
                 )
         );
     } else {
         for (idx, msg) in messages.iter().enumerate() {
             let is_user = msg.role == "user";
-            let role_label: gpui::SharedString = if is_user { i.t("用户", "User") } else { "Antigravity".into() };
+            let role_label: gpui::SharedString = if is_user { i.t("antigravity.user") } else { "Antigravity".into() };
             let copy_text = msg.content.clone();
 
             let mut msg_box = div()
@@ -827,13 +814,13 @@ fn render_antigravity_session_detail(
                     button_with_icon_l(
                         gpui::SharedString::from(format!("ag-cp-msg-{}", idx)),
                         COPY_SVG,
-                        i.t("复制", "Copy"),
+                        i.t("antigravity.copy"),
                         ButtonVariant::Ghost,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_text.clone()));
-                            ws.ui.toast(ws.i18n.t("已复制内容", "Copied").to_string(), false);
+                            ws.ui.toast(ws.i18n.t("antigravity.copied_2").to_string(), false);
                             cx.notify();
                         }
                     )
@@ -1159,7 +1146,7 @@ fn render_five_hour_quota_bar(
             } else {
                 String::new()
             };
-            let tooltip_text = format!("{} (0%){}", i.t("周配额已耗尽", "Weekly quota exhausted"), weekly_reset_tip);
+            let tooltip_text = format!("{} (0%){}", i.t("antigravity.weekly_quota_exhausted"), weekly_reset_tip);
 
             return div()
                 .id(SharedString::from(format!("ag-constrained-{}", title)))
@@ -1223,7 +1210,7 @@ fn render_five_hour_quota_bar(
                                         .text_size(px(9.0))
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(t.danger)
-                                        .child(i.t("周配额 0%", "Weekly 0%")),
+                                        .child(i.t("antigravity.weekly_0")),
                                 )
                                 .child(
                                     div()
@@ -1385,7 +1372,7 @@ fn render_weekly_quota_bar(
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(t.text_secondary)
                             .child(gpui::svg().data(icon_svg).size(px(11.0)).text_color(t.text_muted))
-                            .child(i.t(&format!("{} 周配额", title), &format!("{} Weekly", title))),
+                            .child(i.raw(&format!("{} 周配额", title), &format!("{} Weekly", title))),
                     )
                     // Middle: Clock + Countdown
                     .child(
@@ -1408,7 +1395,7 @@ fn render_weekly_quota_bar(
             )
             .into_any_element()
     } else {
-        render_quota_bar_placeholder(i.t(&format!("{} 周配额", title), &format!("{} Weekly", title)).to_string(), icon_svg, t)
+        render_quota_bar_placeholder(i.raw(&format!("{} 周配额", title), &format!("{} Weekly", title)).to_string(), icon_svg, t)
     }
 }
 
@@ -1668,7 +1655,7 @@ fn render_account_card(
                                     .rounded_full()
                                     .bg(t.accent),
                             )
-                            .child(i.t("当前活动", "Active")),
+                            .child(i.t("antigravity.active")),
                     )
                 })
                 .when(is_disabled, |s| {
@@ -1694,7 +1681,7 @@ fn render_account_card(
                                 .rounded_full()
                                 .bg(t.danger),
                         )
-                        .child(i.t("已禁用", "Disabled"));
+                        .child(i.t("antigravity.disabled"));
 
                     if let Some(reason) = disabled_reason {
                         badge = badge.tooltip(move |_window, cx| {
@@ -1773,7 +1760,7 @@ fn render_account_card(
                 .child(render_action_icon_btn(
                     format!("details-{}", acc_id),
                     INFO_SVG,
-                    i.t("详情", "Details"),
+                    i.t("antigravity.details"),
                     false,
                     &t,
                     cx,
@@ -1785,7 +1772,7 @@ fn render_account_card(
                 .child(render_action_icon_btn(
                     format!("device-{}", acc_id),
                     FINGERPRINT_SVG,
-                    i.t("设备指纹", "Device Fingerprint"),
+                    i.t("antigravity.device_fingerprint"),
                     false,
                     &t,
                     cx,
@@ -1798,7 +1785,7 @@ fn render_account_card(
                 .child(render_action_icon_btn(
                     format!("tag-{}", acc_id),
                     TAG_SVG,
-                    i.t("编辑标签", "Edit Label"),
+                    i.t("antigravity.edit_label"),
                     false,
                     &t,
                     cx,
@@ -1822,7 +1809,7 @@ fn render_account_card(
                     render_action_icon_btn_loading(
                         format!("refresh-{}", ref_id),
                         REFRESH_SVG,
-                        i.t("刷新配额", "Refresh Quota"),
+                        i.t("antigravity.refresh_quota"),
                         false,
                         ws.ui.antigravity_refreshing_all
                             || ws.ui.antigravity_refreshing_ids.contains(&ref_id),
@@ -1836,7 +1823,7 @@ fn render_account_card(
                 .child(render_action_icon_btn(
                     format!("export-{}", acc_id),
                     DOWNLOAD_SVG,
-                    i.t("导出凭据", "Export Credentials"),
+                    i.t("antigravity.export_credentials"),
                     false,
                     &t,
                     cx,
@@ -1849,13 +1836,13 @@ fn render_account_card(
                     render_action_icon_btn(
                         format!("copy-{}", acc_id),
                         COPY_SVG,
-                        i.t("复制 Refresh Token", "Copy Refresh Token"),
+                        i.t("antigravity.copy_refresh_token"),
                         false,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(token_clone.clone()));
-                            let msg = ws.i18n.t("已复制 Refresh Token 到剪贴板", "Refresh token copied to clipboard").to_string();
+                            let msg = ws.i18n.t("antigravity.refresh_token_copied_to").to_string();
                             ws.ui.toast(msg, false);
                             cx.notify();
                         },
@@ -1873,7 +1860,7 @@ fn render_account_card(
                     render_action_icon_btn(
                         format!("switch-app-{}", switch_id),
                         ARROW_RIGHT_LEFT_SVG,
-                        i.t("切换到 Antigravity App", "Switch to Antigravity App"),
+                        i.t("antigravity.switch_to_antigravity_app"),
                         false,
                         &t,
                         cx,
@@ -1887,7 +1874,7 @@ fn render_account_card(
                     render_action_icon_btn(
                         format!("switch-ide-{}", switch_id),
                         REPEAT_SVG,
-                        i.t("切换到 Antigravity IDE", "Switch to Antigravity IDE"),
+                        i.t("antigravity.switch_to_antigravity_ide"),
                         false,
                         &t,
                         cx,
@@ -1901,7 +1888,7 @@ fn render_account_card(
                     render_action_icon_btn(
                         format!("switch-cli-{}", switch_id),
                         TERMINAL_SVG,
-                        i.t("切换到 CLI (agy)", "Switch to CLI (agy)"),
+                        i.t("antigravity.switch_to_cli_agy"),
                         false,
                         &t,
                         cx,
@@ -1915,7 +1902,7 @@ fn render_account_card(
                     render_action_icon_btn(
                         format!("toggle-{}", tog_id),
                         if is_disabled { TOGGLE_LEFT_SVG } else { TOGGLE_RIGHT_SVG },
-                        if is_disabled { i.t("启用账号", "Enable Account") } else { i.t("禁用账号", "Disable Account") },
+                        if is_disabled { i.t("antigravity.enable_account") } else { i.t("antigravity.disable_account") },
                         false,
                         &t,
                         cx,
@@ -1927,7 +1914,7 @@ fn render_account_card(
                 .child(render_action_icon_btn(
                     format!("delete-{}", del_id),
                     TRASH_SVG,
-                    i.t("删除账号", "Delete Account"),
+                    i.t("antigravity.delete_account"),
                     true,
                     &t,
                     cx,
@@ -1962,7 +1949,7 @@ fn render_account_card(
                         .min_w(px(0.0))
                         .child(error_strip_action(
                             format!("ag-quota-err-{}", account.id),
-                            i.t("配额受限 (403)", "Quota 403"),
+                            i.t("antigravity.quota_403"),
                             raw_reason,
                             &t,
                             cx,
@@ -1999,10 +1986,7 @@ fn render_account_card(
             .bg(t.sidebar_bg)
             .text_size(px(11.0))
             .text_color(t.text_muted)
-            .child(i.t(
-                "暂未获取配额信息，点击右侧「刷新配额」获取当前额度。",
-                "No quota data yet. Click 'Refresh Quota' on the right to check current limits.",
-            ));
+            .child(i.t("antigravity.no_quota_data_yet"));
 
         div()
             .flex()
@@ -2121,7 +2105,7 @@ pub fn render_account_details_dialog(
                     .justify_center()
                     .text_size(px(12.5))
                     .text_color(t.text_muted)
-                    .child(i.t("暂无各模型配额数据", "No detailed model quotas available")),
+                    .child(i.t("antigravity.no_detailed_model_quotas")),
             );
         }
     } else {
@@ -2262,7 +2246,7 @@ pub fn render_account_details_dialog(
                 .text_size(px(12.5))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(t.text_secondary)
-                .child(i.t("全部模型详细配额", "All Model Detailed Quotas")),
+                .child(i.t("antigravity.all_model_detailed_quotas")),
         )
         .child(models_grid)
         .when(!quota_groups.is_empty(), |s| {
@@ -2271,7 +2255,7 @@ pub fn render_account_details_dialog(
                     .text_size(px(12.5))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(t.text_secondary)
-                    .child(i.t("配额组窗口摘要", "Quota Group Windows")),
+                    .child(i.t("antigravity.quota_group_windows")),
             ).child(groups_view)
         })
         .child(
@@ -2283,7 +2267,7 @@ pub fn render_account_details_dialog(
                 .border_color(t.card_border)
                 .child(button_l(
                     "close-details-btn",
-                    i.t("关闭", "Close"),
+                    i.t("antigravity.close"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -2296,7 +2280,7 @@ pub fn render_account_details_dialog(
 
     modal_scaffold_custom(
         &t,
-        &format!("{} - {}", i.t("账号详情", "Account Details"), account.email),
+        &format!("{} - {}", i.t("antigravity.account_details"), account.email),
         px(680.0),
         body.into_any_element(),
         cx,
@@ -2383,10 +2367,7 @@ pub fn render_device_fingerprint_dialog(
             div()
                 .text_size(px(12.5))
                 .text_color(t.text_secondary)
-                .child(i.t(
-                    "设备指纹用于隔离不同账号的 IDE/VS Code 设备标识，避免多账号关联或风控限制。",
-                    "Device fingerprints isolate account machine identifiers to avoid multi-account association.",
-                )),
+                .child(i.t("antigravity.device_fingerprints_isolate_ac")),
         )
         .child(render_field("Machine ID", &profile.machine_id))
         .child(render_field("Mac Machine ID", &profile.mac_machine_id))
@@ -2407,28 +2388,28 @@ pub fn render_device_fingerprint_dialog(
                         .child(button_with_icon_l(
                             "btn-regen-fp",
                             WAND_SVG,
-                            i.t("重新生成随机指纹", "Generate New"),
+                            i.t("antigravity.generate_new"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
                             move |ws, _, _, cx| {
                                 let new_prof = DeviceProfile::generate_random();
                                 ws.ui.antigravity_device_account = Some((account_for_regenerate.clone(), new_prof));
-                                ws.ui.toast(ws.i18n.t("已生成新随机指纹，点击「保存并绑定」生效", "New fingerprint generated. Click Save to apply.").to_string(), false);
+                                ws.ui.toast(ws.i18n.t("antigravity.new_fingerprint_generated_clic").to_string(), false);
                                 cx.notify();
                             },
                         ))
                         .child(button_with_icon_l(
                             "btn-copy-all-fp",
                             COPY_SVG,
-                            i.t("复制全部", "Copy All"),
+                            i.t("antigravity.copy_all"),
                             ButtonVariant::Ghost,
                             &t,
                             cx,
                             move |ws, _, _, cx| {
                                 if let Ok(json) = serde_json::to_string_pretty(&profile_for_copy) {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
-                                    ws.ui.toast(ws.i18n.t("已复制完整设备指纹到剪贴板", "Copied device profile to clipboard").to_string(), false);
+                                    ws.ui.toast(ws.i18n.t("antigravity.copied_device_profile_to").to_string(), false);
                                     cx.notify();
                                 }
                             },
@@ -2440,7 +2421,7 @@ pub fn render_device_fingerprint_dialog(
                         .gap(px(8.0))
                         .child(button_l(
                             "btn-close-fp",
-                            i.t("取消", "Cancel"),
+                            i.t("antigravity.cancel"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -2451,7 +2432,7 @@ pub fn render_device_fingerprint_dialog(
                         ))
                         .child(button_l(
                             "btn-save-fp",
-                            i.t("保存并绑定", "Save & Bind"),
+                            i.t("antigravity.save_bind"),
                             ButtonVariant::Primary,
                             &t,
                             cx,
@@ -2460,7 +2441,7 @@ pub fn render_device_fingerprint_dialog(
                                 if let Some(mut store) = ws.ui.antigravity_store.clone() {
                                     let _ = update_account_device_profile(&app_data, &mut store, &account_id_for_save, profile_for_save.clone());
                                     ws.ui.antigravity_store = Some(store);
-                                    ws.ui.toast(ws.i18n.t("设备指纹已绑定并保存", "Device fingerprint bound and saved").to_string(), false);
+                                    ws.ui.toast(ws.i18n.t("antigravity.device_fingerprint_bound_and").to_string(), false);
                                 }
                                 ws.ui.antigravity_device_account = None;
                                 cx.notify();
@@ -2471,7 +2452,7 @@ pub fn render_device_fingerprint_dialog(
 
     modal_scaffold(
         &t,
-        &format!("{} - {}", i.t("设备指纹", "Device Fingerprint"), account.email),
+        &format!("{} - {}", i.t("antigravity.device_fingerprint"), account.email),
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {
@@ -2502,10 +2483,7 @@ pub fn render_label_edit_dialog(
             div()
                 .text_size(px(12.5))
                 .text_color(t.text_secondary)
-                .child(i.t(
-                    "设置自定义标签方便在多账号列表中快速辨识（例如：工作号、主力账号、备用、测试等）。",
-                    "Set a custom label to easily identify this account in the list.",
-                )),
+                .child(i.t("antigravity.set_a_custom_label")),
         )
         .child(input_container(&t, input))
         .child(
@@ -2518,7 +2496,7 @@ pub fn render_label_edit_dialog(
                 .border_color(t.card_border)
                 .child(button_l(
                     "btn-clear-label",
-                    i.t("清除标签", "Clear Label"),
+                    i.t("antigravity.clear_label"),
                     ButtonVariant::Danger,
                     &t,
                     cx,
@@ -2527,7 +2505,7 @@ pub fn render_label_edit_dialog(
                         if let Some(mut store) = ws.ui.antigravity_store.clone() {
                             let _ = update_account_label(&app_data, &mut store, &acc_id_clear, None);
                             ws.ui.antigravity_store = Some(store);
-                            ws.ui.toast(ws.i18n.t("已清除标签", "Label cleared").to_string(), false);
+                            ws.ui.toast(ws.i18n.t("antigravity.label_cleared").to_string(), false);
                         }
                         ws.ui.antigravity_editing_label = None;
                         cx.notify();
@@ -2539,7 +2517,7 @@ pub fn render_label_edit_dialog(
                         .gap(px(8.0))
                         .child(button_l(
                             "btn-cancel-label",
-                            i.t("取消", "Cancel"),
+                            i.t("antigravity.cancel"),
                             ButtonVariant::Secondary,
                             &t,
                             cx,
@@ -2550,7 +2528,7 @@ pub fn render_label_edit_dialog(
                         ))
                         .child(button_l(
                             "btn-save-label",
-                            i.t("保存", "Save"),
+                            i.t("antigravity.save"),
                             ButtonVariant::Primary,
                             &t,
                             cx,
@@ -2561,7 +2539,7 @@ pub fn render_label_edit_dialog(
                                     let val = if text.is_empty() { None } else { Some(text) };
                                     let _ = update_account_label(&app_data, &mut store, &acc_id_save, val);
                                     ws.ui.antigravity_store = Some(store);
-                                    ws.ui.toast(ws.i18n.t("标签已保存", "Label saved").to_string(), false);
+                                    ws.ui.toast(ws.i18n.t("antigravity.label_saved").to_string(), false);
                                 }
                                 ws.ui.antigravity_editing_label = None;
                                 cx.notify();
@@ -2572,7 +2550,7 @@ pub fn render_label_edit_dialog(
 
     modal_scaffold(
         &t,
-        &i.t("编辑自定义标签", "Edit Custom Label"),
+        &i.t("antigravity.edit_custom_label"),
         body.into_any_element(),
         cx,
         |ws, _, _, cx| {
@@ -2642,9 +2620,9 @@ pub fn render_add_account_dialog(
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    let tab_oauth = i.t("OAuth 授权", "OAuth Auth");
-    let tab_token = i.t("Refresh Token", "Refresh Token");
-    let tab_import = i.t("从数据库导入", "Import from DB");
+    let tab_oauth = i.t("antigravity.oauth_auth");
+    let tab_token = i.t("antigravity.refresh_token");
+    let tab_import = i.t("antigravity.import_from_db");
 
     let is_oauth = state.active_tab == AntigravityDialogTab::OAuth;
     let is_token = state.active_tab == AntigravityDialogTab::Token;
@@ -2774,7 +2752,7 @@ pub fn render_add_account_dialog(
         let dismiss_btn = icon_button_svg(
             "btn-dismiss-dlg-err",
             X_SVG,
-            i.t("关闭", "Close"),
+            i.t("antigravity.close"),
             false,
             &t,
             cx,
@@ -2787,7 +2765,7 @@ pub fn render_add_account_dialog(
         );
         Some(error_strip(
             "ag-dlg-error-msg",
-            i.t("操作失败", "Failed"),
+            i.t("antigravity.failed"),
             err,
             &t,
             cx,
@@ -2834,16 +2812,13 @@ pub fn render_add_account_dialog(
                                         .text_size(px(14.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(t.text_primary)
-                                        .child(i.t("推荐方式", "Recommended Method")),
+                                        .child(i.t("antigravity.recommended_method")),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(12.0))
                                         .text_color(t.text_secondary)
-                                        .child(i.t(
-                                            "将打开默认浏览器进行 Google 登录授权，自动获取并保存 Token。",
-                                            "Will open default browser for Google sign-in and save Token automatically.",
-                                        )),
+                                        .child(i.t("antigravity.will_open_default_browser")),
                                 ),
                         ),
                 )
@@ -2852,7 +2827,7 @@ pub fn render_add_account_dialog(
                     button_with_icon_loading_l(
                         "ag-btn-start-oauth",
                         GLOBE_SVG,
-                        i.t("开始 OAuth 授权", "Start OAuth Login"),
+                        i.t("antigravity.start_oauth_login"),
                         ButtonVariant::Primary,
                         state.is_authorizing,
                         &t,
@@ -2875,7 +2850,7 @@ pub fn render_add_account_dialog(
                                 div()
                                     .text_size(px(11.0))
                                     .text_color(t.text_secondary)
-                                    .child(i.t("授权链接", "Authorization Link")),
+                                    .child(i.t("antigravity.authorization_link")),
                             )
                             .child(
                                 div()
@@ -2898,7 +2873,7 @@ pub fn render_add_account_dialog(
                                             if let Some(d) = &mut ws.ui.antigravity_dialog {
                                                 d.oauth_url_copied = true;
                                             }
-                                            ws.ui.toast(ws.i18n.t("已复制授权链接", "Copied link").to_string(), false);
+                                            ws.ui.toast(ws.i18n.t("antigravity.copied_link").to_string(), false);
                                             cx.notify();
                                         }
                                     }))
@@ -2928,9 +2903,9 @@ pub fn render_add_account_dialog(
                                             .text_size(px(11.0))
                                             .text_color(if is_copied { gpui::rgb(0x10b981) } else { t.accent })
                                             .child(if is_copied {
-                                                i.t("已复制", "Copied")
+                                                i.t("antigravity.copied")
                                             } else {
-                                                i.t("复制授权链接", "Copy Link")
+                                                i.t("antigravity.copy_link")
                                             }),
                                     ),
                             )
@@ -2938,7 +2913,7 @@ pub fn render_add_account_dialog(
                                 button_with_icon_l(
                                     "ag-btn-finish-oauth",
                                     CHECK_SVG,
-                                    i.t("我已授权，继续", "I Have Authorized, Continue"),
+                                    i.t("antigravity.i_have_authorized_continue"),
                                     ButtonVariant::Secondary,
                                     &t,
                                     cx,
@@ -2962,10 +2937,7 @@ pub fn render_add_account_dialog(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "浏览器没有自动跳转？请在此处粘贴回调链接或 Authorization Code：",
-                                    "Browser did not redirect? Paste callback URL or Authorization Code:",
-                                )),
+                                .child(i.t("antigravity.browser_did_not_redirect")),
                         )
                         .child(
                             div()
@@ -2980,7 +2952,7 @@ pub fn render_add_account_dialog(
                                 .child(
                                     button_l(
                                         "ag-btn-manual-code-submit",
-                                        i.t("提交", "Submit"),
+                                        i.t("antigravity.submit"),
                                         ButtonVariant::Primary,
                                         &t,
                                         cx,
@@ -3018,7 +2990,7 @@ pub fn render_add_account_dialog(
                                         .text_size(px(12.5))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(t.text_primary)
-                                        .child(i.t("Refresh Token", "Refresh Token")),
+                                        .child(i.t("antigravity.refresh_token")),
                                 ),
                         )
                         .child(input_container(&t, state.refresh_token.clone()))
@@ -3026,10 +2998,7 @@ pub fn render_add_account_dialog(
                             div()
                                 .text_size(px(10.5))
                                 .text_color(t.text_muted)
-                                .child(i.t(
-                                    "提示: 支持一次性粘贴多个 Token 或 JSON 数组，系统将自动识别并批量导入。",
-                                    "Hint: Supports pasting multiple tokens or JSON array, system will auto-extract and batch import.",
-                                )),
+                                .child(i.t("antigravity.hint_supports_pasting_multiple")),
                         ),
                 )
                 .child(
@@ -3042,7 +3011,7 @@ pub fn render_add_account_dialog(
                                 .text_size(px(12.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(t.text_secondary)
-                                .child(i.t("账号备注（可选）", "Custom Label (Optional)")),
+                                .child(i.t("antigravity.custom_label_optional")),
                         )
                         .child(input_container(&t, state.custom_label.clone())),
                 )
@@ -3070,23 +3039,20 @@ pub fn render_add_account_dialog(
                                         .text_size(px(13.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(t.text_primary)
-                                        .child(i.t("方案 A: 自动扫描本地已登录账号", "Scheme A: Auto Scan Local Accounts")),
+                                        .child(i.t("antigravity.scheme_a_auto_scan")),
                                 ),
                         )
                         .child(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_secondary)
-                                .child(i.t(
-                                    "自动对本地系统 Keyring、Antigravity IDE、插件版及 CLI 进行全量扫描并批量导入已登录账号。",
-                                    "Automatically scans System Keyring, Antigravity IDE, extension, and CLI to import accounts.",
-                                )),
+                                .child(i.t("antigravity.automatically_scans_system_key")),
                         )
                         .child(
                             button_with_icon_l(
                                 "ag-btn-scan-local-db",
                                 CHECK_SVG,
-                                i.t("一键导入所有本地已登录账号", "Import All Local Logged-in Accounts"),
+                                i.t("antigravity.import_all_local_logged"),
                                 ButtonVariant::Primary,
                                 &t,
                                 cx,
@@ -3099,7 +3065,7 @@ pub fn render_add_account_dialog(
                             button_with_icon_l(
                                 "ag-btn-custom-db",
                                 DATABASE_SVG,
-                                i.t("从自定义 DB 导入 (state.vscdb)", "Import Custom DB (state.vscdb)"),
+                                i.t("antigravity.import_custom_db_state"),
                                 ButtonVariant::Secondary,
                                 &t,
                                 cx,
@@ -3120,7 +3086,7 @@ pub fn render_add_account_dialog(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(t.text_muted)
-                                .child(i.t("或者", "OR")),
+                                .child(i.t("antigravity.or")),
                         )
                         .child(div().flex_1().h(px(1.0)).bg(t.card_border)),
                 )
@@ -3141,23 +3107,20 @@ pub fn render_add_account_dialog(
                                         .text_size(px(13.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(t.text_primary)
-                                        .child(i.t("方案 B: 从旧版数据文件导入", "Scheme B: Import from Legacy Backup")),
+                                        .child(i.t("antigravity.scheme_b_import_from")),
                                 ),
                         )
                         .child(
                             div()
                                 .text_size(px(11.5))
                                 .text_color(t.text_secondary)
-                                .child(i.t(
-                                    "扫描 ~/.antigravity-agent 目录，批量导入旧版本的账号数据。",
-                                    "Scans ~/.antigravity-agent directory to batch import legacy accounts.",
-                                )),
+                                .child(i.t("antigravity.scans_antigravity_agent_direct")),
                         )
                         .child(
                             button_with_icon_l(
                                 "ag-btn-import-v1",
                                 HISTORY_SVG,
-                                i.t("从旧版数据导入", "Import from Legacy Backup"),
+                                i.t("antigravity.import_from_legacy_backup"),
                                 ButtonVariant::Secondary,
                                 &t,
                                 cx,
@@ -3186,7 +3149,7 @@ pub fn render_add_account_dialog(
                 .mt(px(8.0))
                 .child(button_l(
                     "ag-dlg-cancel",
-                    i.t("取消", "Cancel"),
+                    i.t("antigravity.cancel"),
                     ButtonVariant::Secondary,
                     &t,
                     cx,
@@ -3204,7 +3167,7 @@ pub fn render_add_account_dialog(
                     s.child(button_with_icon_loading_l(
                         "ag-dlg-submit-token-batch",
                         CHECK_SVG,
-                        i.t("确认添加", "Confirm Add"),
+                        i.t("antigravity.confirm_add"),
                         ButtonVariant::Primary,
                         state.is_authorizing,
                         &t,
@@ -3218,7 +3181,7 @@ pub fn render_add_account_dialog(
 
     modal_scaffold_custom(
         &t,
-        &i.t("添加新账号", "Add Account"),
+        &i.t("antigravity.add_account"),
         px(520.0),
         body.into_any_element(),
         cx,
@@ -3244,7 +3207,7 @@ fn start_browser_oauth_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
         return;
     }
     state.is_authorizing = true;
-    state.auth_status = Some(ws.i18n.t("已在浏览器中打开授权页面，请在浏览器中完成登录…", "Opened browser for authorization…").to_string());
+    state.auth_status = Some(ws.i18n.t("antigravity.opened_browser_for_authorizati").to_string());
     state.error_message = None;
 
     if let Some(ref url) = state.oauth_url {
@@ -3273,7 +3236,7 @@ fn start_browser_oauth_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 fn complete_oauth_flow_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
         d.is_authorizing = true;
-        d.auth_status = Some(ws.i18n.t("正在等待授权回调…", "Waiting for OAuth callback…").to_string());
+        d.auth_status = Some(ws.i18n.t("antigravity.waiting_for_oauth_callback").to_string());
     }
     cx.notify();
 }
@@ -3328,7 +3291,7 @@ fn start_oauth_listener_background(
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
 
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("已成功添加账号：{}", email),
                         &format!("Account added: {}", email),
                     ).to_string();
@@ -3358,7 +3321,7 @@ fn submit_manual_code_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let raw_input = state.manual_code.read(cx).text().trim().to_string();
     if raw_input.is_empty() {
         if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
-            d.error_message = Some(ws.i18n.t("请先输入回调 URL 或授权码", "Please enter the callback URL or code").to_string());
+            d.error_message = Some(ws.i18n.t("antigravity.please_enter_the_callback").to_string());
         }
         cx.notify();
         return;
@@ -3370,7 +3333,7 @@ fn submit_manual_code_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let weak = cx.entity().downgrade();
 
     if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
-        d.auth_status = Some(ws.i18n.t("正在验证授权码并获取账号信息…", "Validating code and fetching account info…").to_string());
+        d.auth_status = Some(ws.i18n.t("antigravity.validating_code_and_fetching").to_string());
         d.error_message = None;
     }
     cx.notify();
@@ -3414,7 +3377,7 @@ fn submit_manual_code_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
 
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("已成功添加账号：{}", email),
                         &format!("Account added: {}", email),
                     ).to_string();
@@ -3448,7 +3411,7 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
     let tokens = extract_tokens_from_text(&raw_input);
     if tokens.is_empty() {
         if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
-            d.error_message = Some(ws.i18n.t("请填写 Refresh Token (以 1// 开头)", "Please provide a valid Refresh Token (starting with 1//)").to_string());
+            d.error_message = Some(ws.i18n.t("antigravity.please_provide_a_valid").to_string());
         }
         cx.notify();
         return;
@@ -3456,7 +3419,7 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
 
     if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
         d.is_authorizing = true;
-        d.auth_status = Some(ws.i18n.t(
+        d.auth_status = Some(ws.i18n.raw(
             &format!("正在导入第 1/{} 个账户…", tokens.len()),
             &format!("Importing 1/{} accounts…", tokens.len()),
         ).to_string());
@@ -3506,7 +3469,7 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
 
             if success_count == total {
                 ws.ui.antigravity_dialog = None;
-                let msg = ws.i18n.t(
+                let msg = ws.i18n.raw(
                     &format!("成功导入 {} 个账户", success_count),
                     &format!("Successfully imported {} accounts", success_count),
                 ).to_string();
@@ -3514,7 +3477,7 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
             } else if success_count > 0 {
                 if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
                     d.is_authorizing = false;
-                    d.auth_status = Some(ws.i18n.t(
+                    d.auth_status = Some(ws.i18n.raw(
                         &format!("导入完成: {} 个成功, {} 个失败", success_count, fail_count),
                         &format!("Import finished: {} succeeded, {} failed", success_count, fail_count),
                     ).to_string());
@@ -3523,7 +3486,7 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
                 if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
                     d.is_authorizing = false;
                     d.auth_status = None;
-                    d.error_message = Some(ws.i18n.t("导入失败，未能验证 Token", "Import failed, token could not be verified").to_string());
+                    d.error_message = Some(ws.i18n.t("antigravity.import_failed_token_could").to_string());
                 }
             }
             cx.notify();
@@ -3535,7 +3498,7 @@ fn submit_batch_refresh_token_action(ws: &mut Workspace, cx: &mut Context<Worksp
 fn import_all_local_accounts_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
         d.is_authorizing = true;
-        d.auth_status = Some(ws.i18n.t("正在扫描本地已登录账号…", "Scanning local accounts…").to_string());
+        d.auth_status = Some(ws.i18n.t("antigravity.scanning_local_accounts").to_string());
         d.error_message = None;
     }
     cx.notify();
@@ -3565,7 +3528,7 @@ fn import_all_local_accounts_action(ws: &mut Workspace, cx: &mut Context<Workspa
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
 
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("成功导入 {} 个账户", count),
                         &format!("Successfully imported {} accounts", count),
                     ).to_string();
@@ -3618,7 +3581,7 @@ fn import_custom_db_picker_action(ws: &mut Workspace, cx: &mut Context<Workspace
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
 
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("成功导入账户：{}", email),
                         &format!("Successfully imported: {}", email),
                     ).to_string();
@@ -3639,7 +3602,7 @@ fn import_custom_db_picker_action(ws: &mut Workspace, cx: &mut Context<Workspace
 fn import_v1_backup_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     if let Some(d) = ws.ui.antigravity_dialog.as_mut() {
         d.is_authorizing = true;
-        d.auth_status = Some(ws.i18n.t("正在扫描旧版备份数据…", "Scanning legacy backup data…").to_string());
+        d.auth_status = Some(ws.i18n.t("antigravity.scanning_legacy_backup_data").to_string());
         d.error_message = None;
     }
     cx.notify();
@@ -3669,7 +3632,7 @@ fn import_v1_backup_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
 
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("成功导入 {} 个账户", count),
                         &format!("Successfully imported {} accounts", count),
                     ).to_string();
@@ -3695,7 +3658,7 @@ fn import_local_account_action(ws: &mut Workspace, cx: &mut Context<Workspace>) 
     let weak = cx.entity().downgrade();
 
     ws.ui.toast(
-        ws.i18n.t("正在从本机导入 Antigravity 凭据…", "Importing local Antigravity credentials…"),
+        ws.i18n.t("antigravity.importing_local_antigravity_cr"),
         false,
     );
     cx.notify();
@@ -3718,7 +3681,7 @@ fn import_local_account_action(ws: &mut Workspace, cx: &mut Context<Workspace>) 
                     let _ = save_store(&app_data, &store);
                     ws.ui.antigravity_store = Some(store);
 
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("成功从本机导入账号：{}", email),
                         &format!("Imported local account: {}", email),
                     ).to_string();
@@ -3745,7 +3708,7 @@ pub(super) fn import_from_manager_action(ws: &mut Workspace, cx: &mut Context<Wo
 
     ws.ui.antigravity_manager_importing = true;
     ws.ui.toast(
-        ws.i18n.t("正在从 Antigravity Manager 迁移账号…", "Importing accounts from Antigravity Manager…"),
+        ws.i18n.t("antigravity.importing_accounts_from_antigr"),
         false,
     );
     cx.notify();
@@ -3771,7 +3734,7 @@ pub(super) fn import_from_manager_action(ws: &mut Workspace, cx: &mut Context<Wo
                     let _ = save_store(&app_data, &store);
                     ws.ui.antigravity_store = Some(store);
 
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("成功从 Antigravity Manager 导入 {} 个账号！", count),
                         &format!("Successfully imported {} accounts from Antigravity Manager!", count),
                     ).to_string();
@@ -3805,7 +3768,7 @@ fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut C
     cx.notify();
 
     ws.ui.toast(
-        ws.i18n.t(&format!("正在刷新 {} 的用量…", account.email), &format!("Refreshing quota for {}…", account.email)),
+        ws.i18n.raw(&format!("正在刷新 {} 的用量…", account.email), &format!("Refreshing quota for {}…", account.email)),
         false,
     );
     cx.notify();
@@ -3838,7 +3801,7 @@ fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut C
                         let _ = save_store(&app_data, &store);
                         ws.ui.antigravity_store = Some(store);
                     }
-                    let msg = ws.i18n.t("配额已刷新", "Quota refreshed").to_string();
+                    let msg = ws.i18n.t("antigravity.quota_refreshed").to_string();
                     ws.ui.toast(msg, false);
                 }
                 Err(e) => {
@@ -3870,7 +3833,7 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     let weak = cx.entity().downgrade();
 
     ws.ui.toast(
-        ws.i18n.t("正在刷新全部账号配额…", "Refreshing all account quotas…"),
+        ws.i18n.t("antigravity.refreshing_all_account_quotas"),
         false,
     );
     cx.notify();
@@ -3919,7 +3882,7 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
             }
             ws.settings.last_antigravity_refresh_time = Some(chrono::Utc::now().to_rfc3339());
             (ws.callbacks.save_settings)(&ws.settings);
-            let msg = ws.i18n.t("全部账号配额已刷新", "All account quotas refreshed").to_string();
+            let msg = ws.i18n.t("antigravity.all_account_quotas_refreshed").to_string();
             ws.ui.toast(msg, false);
             cx.notify();
         });
@@ -3957,7 +3920,7 @@ fn switch_account_target_action(
     };
 
     ws.ui.toast(
-        ws.i18n.t(
+        ws.i18n.raw(
             &format!("正在切换账号到 {}：{}…", target_name, account_email),
             &format!("Switching account to {} for: {}…", target_name_en, account_email),
         ),
@@ -3975,7 +3938,7 @@ fn switch_account_target_action(
             match result {
                 Ok((new_store, email)) => {
                     ws.ui.antigravity_store = Some(new_store);
-                    let msg = ws.i18n.t(
+                    let msg = ws.i18n.raw(
                         &format!("已成功切换 {} 活动账号为：{}", target_name, email),
                         &format!("Switched {} active account to: {}", target_name_en, email),
                     ).to_string();
@@ -4008,9 +3971,9 @@ fn toggle_disabled_action(account_id: &str, ws: &mut Workspace, cx: &mut Context
     match toggle_account_disabled(&app_data, &mut store, account_id) {
         Ok(disabled) => {
             let msg = if disabled {
-                ws.i18n.t("账号已禁用", "Account disabled").to_string()
+                ws.i18n.t("antigravity.account_disabled").to_string()
             } else {
-                ws.i18n.t("账号已启用", "Account enabled").to_string()
+                ws.i18n.t("antigravity.account_enabled").to_string()
             };
             ws.ui.antigravity_store = Some(store);
             ws.ui.toast(msg, false);
@@ -4028,7 +3991,7 @@ fn export_account_action(account: &AntigravityAccount, ws: &mut Workspace, cx: &
     match serde_json::to_string_pretty(account) {
         Ok(json) => {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(json));
-            let msg = ws.i18n.t(
+            let msg = ws.i18n.raw(
                 &format!("已将账号 {} 凭据复制到剪贴板（JSON）", account.email),
                 &format!("Copied credentials for {} to clipboard (JSON)", account.email),
             ).to_string();
@@ -4050,8 +4013,8 @@ fn delete_account_action(
     cx: &mut Context<Workspace>,
 ) {
     let i = ws.i18n;
-    let title = i.t("删除 Antigravity 账号", "Delete Antigravity Account").to_string();
-    let message = i.t(
+    let title = i.t("antigravity.delete_antigravity_account").to_string();
+    let message = i.raw(
         &format!("确定要删除账号「{}」吗？此操作不会影响您的 Google 账号本身。", email),
         &format!("Are you sure you want to delete '{}'? This will not affect your Google account.", email),
     ).to_string();

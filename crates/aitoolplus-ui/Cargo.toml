@@ -21,6 +21,7 @@ rfd.workspace = true
 opener.workspace = true
 unicode-segmentation.workspace = true
 toml_edit.workspace = true
+rust-i18n.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
