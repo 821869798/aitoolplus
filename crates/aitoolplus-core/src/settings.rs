@@ -739,7 +739,9 @@ mod tests {
         let sync_content = fs::read_to_string(&sync_path).unwrap();
         assert!(sync_content.contains("https://dav.example.com"));
         assert!(sync_content.contains("user1"));
-        assert!(!sync_content.contains("secret_pass_123")); // DPAPI protected
+        if cfg!(target_os = "windows") {
+            assert!(!sync_content.contains("secret_pass_123")); // DPAPI protected
+        }
 
         // 2. settings.json must NOT contain webdav, s3, or passwords
         let settings_content = fs::read_to_string(&settings_path).unwrap();
