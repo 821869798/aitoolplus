@@ -12,6 +12,7 @@ pub mod cc_switch_import;
 pub mod claude_desktop;
 pub mod claude_plugins;
 pub mod cli_launch;
+pub mod codex_history;
 pub mod codex_plugins;
 pub mod config;
 pub mod deeplink;
@@ -47,6 +48,9 @@ pub use antigravity::{AntigravityAccount, AntigravityQuota, AntigravityStore, Mo
 pub use api_hub::{FetchedModel, ModelsFetchResult};
 pub use claude_desktop::ClaudeDesktopPaths;
 pub use claude_plugins::{InstalledPlugin, KnownMarketplace, MarketplacePlugin};
+pub use codex_history::{
+    CodexHistoryMigrationOutcome, CodexHistoryRestoreOutcome, CodexOfficialHistoryUnifyMigration,
+};
 pub use dsh::DshRuntimePaths;
 pub use hermes::HermesRuntimePaths;
 pub use oh_my_pi::OmpRuntimePaths;

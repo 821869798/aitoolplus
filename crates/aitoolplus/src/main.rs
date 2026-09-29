@@ -38,6 +38,11 @@ fn main() {
     let mut instance = match single_instance::acquire() {
         Some(instance) => instance,
         None => {
+            #[cfg(windows)]
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
+            }
             let message = incoming.as_deref().unwrap_or("activate");
             if let Err(error) = single_instance::forward_to_existing(message) {
                 tracing::warn!("failed to forward to running instance: {error}");

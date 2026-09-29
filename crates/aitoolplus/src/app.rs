@@ -18,12 +18,23 @@ pub fn request_quit() {
 #[cfg(windows)]
 pub fn get_window_hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundation::HWND> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let handle = match HasWindowHandle::window_handle(window) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("get_window_hwnd HasWindowHandle failed: {e}");
+            return None;
+        }
+    };
     match handle.as_raw() {
         RawWindowHandle::Win32(win32) => {
-            Some(windows::Win32::Foundation::HWND(win32.hwnd.get() as _))
+            let hwnd = windows::Win32::Foundation::HWND(win32.hwnd.get() as _);
+            tracing::info!(hwnd = ?hwnd, "get_window_hwnd resolved HWND");
+            Some(hwnd)
         }
-        _ => None,
+        other => {
+            tracing::warn!("get_window_hwnd unhandled RawWindowHandle: {other:?}");
+            None
+        }
     }
 }
 
@@ -46,6 +57,7 @@ pub fn hide_window_to_tray(window: &gpui::Window) {
     {
         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
         if let Some(hwnd) = get_window_hwnd(window) {
+            tracing::info!(hwnd = ?hwnd, "hide_window_to_tray calling SW_HIDE");
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
             }
@@ -58,21 +70,55 @@ pub fn hide_window_to_tray(window: &gpui::Window) {
 }
 
 pub fn restore_window_from_tray(window: &gpui::Window) {
+    tracing::info!("restore_window_from_tray called");
     aitoolplus_ui::set_window_on_screen(true);
     #[cfg(windows)]
     {
         use windows::Win32::UI::WindowsAndMessaging::{
-            IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+            BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, IsZoomed,
+            SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SW_RESTORE, SW_SHOW,
+            SW_SHOWMAXIMIZED, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
         };
+        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+
         if let Some(hwnd) = get_window_hwnd(window) {
             unsafe {
-                if IsIconic(hwnd).as_bool() {
+                let iconic = IsIconic(hwnd).as_bool();
+                let zoomed = IsZoomed(hwnd).as_bool();
+                tracing::info!(hwnd = ?hwnd, iconic, zoomed, "restore_window_from_tray restoring HWND");
+                if iconic {
                     let _ = ShowWindow(hwnd, SW_RESTORE);
+                } else if zoomed {
+                    let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
                 } else {
                     let _ = ShowWindow(hwnd, SW_SHOW);
                 }
-                let _ = SetForegroundWindow(hwnd);
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+
+                let fg_hwnd = GetForegroundWindow();
+                let fg_thread = GetWindowThreadProcessId(fg_hwnd, None);
+                let cur_thread = GetCurrentThreadId();
+
+                if fg_thread != 0 && fg_thread != cur_thread {
+                    let _ = AttachThreadInput(cur_thread, fg_thread, true);
+                    let _ = SetForegroundWindow(hwnd);
+                    let _ = BringWindowToTop(hwnd);
+                    let _ = AttachThreadInput(cur_thread, fg_thread, false);
+                } else {
+                    let _ = SetForegroundWindow(hwnd);
+                    let _ = BringWindowToTop(hwnd);
+                }
             }
+        } else {
+            tracing::warn!("restore_window_from_tray failed to get HWND");
         }
     }
     window.activate_window();
@@ -137,6 +183,14 @@ impl App {
                 },
             );
             std::env::set_var(
+                "AITOOLPLUS_CODEX_UNIFY_HISTORY",
+                if settings.codex_unify_session_history {
+                    "1"
+                } else {
+                    "0"
+                },
+            );
+            std::env::set_var(
                 "AITOOLPLUS_OMO_LEGACY",
                 if settings.opencode_use_legacy_oh_my_config {
                     "1"
@@ -172,6 +226,46 @@ impl App {
             }
             Ok(None) => {}
             Err(error) => tracing::warn!("automatic backup failed: {error}"),
+        }
+        if settings.codex_unify_session_history
+            && settings.codex_unify_migrate_existing
+            && settings.codex_official_history_unify_migration.is_none()
+        {
+            let migration_paths = paths.clone();
+            let settings_p = settings_path(&paths);
+            std::thread::spawn(move || {
+                match aitoolplus_core::codex_history::migrate_codex_official_history_unify(&migration_paths) {
+                    Ok(outcome) => {
+                        tracing::info!(
+                            files = outcome.migrated_jsonl_files,
+                            rows = outcome.migrated_state_rows,
+                            "startup codex unified history migration completed"
+                        );
+                        let mut current_settings = AppSettings::load(&settings_p);
+                        if current_settings.codex_unify_session_history
+                            && current_settings.codex_unify_migrate_existing
+                        {
+                                current_settings.codex_official_history_unify_migration = Some(
+                                    aitoolplus_core::codex_history::CodexOfficialHistoryUnifyMigration {
+                                        completed_at: chrono::Utc::now().to_rfc3339(),
+                                        target_provider_id: aitoolplus_core::codex_history::UNIFIED_CODEX_MODEL_PROVIDER_ID.to_string(),
+                                        migrated_jsonl_files: outcome.migrated_jsonl_files,
+                                        migrated_state_rows: outcome.migrated_state_rows,
+                                        codex_config_dir: Some(
+                                            aitoolplus_core::codex_history::canonical_dir_string(
+                                                &migration_paths.tool_root(aitoolplus_core::tools::ToolId::Codex),
+                                            ),
+                                        ),
+                                    },
+                                );
+                                let _ = current_settings.save(&settings_p);
+                            }
+                        }
+                    Err(err) => {
+                        tracing::warn!("startup codex unified history migration failed: {err}");
+                    }
+                }
+            });
         }
         if settings.auto_update_check_enabled {
             let due = settings

@@ -23,19 +23,34 @@ pub struct Claim {
 pub fn acquire() -> Option<Claim> {
     #[cfg(windows)]
     let handle = {
-        let name: Vec<u16> = "Global\\aitoolplus-single-instance"
+        let name: Vec<u16> = "Local\\aitoolplus-single-instance"
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let handle = unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) }.ok()?;
-        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        let handle = match unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) } {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!("CreateMutexW failed: {e}");
+                return None;
+            }
+        };
+        let last_err = unsafe { GetLastError() };
+        if last_err == ERROR_ALREADY_EXISTS {
+            tracing::info!("acquire: mutex already exists, another instance is running");
             let _ = unsafe { CloseHandle(handle) };
             return None;
         }
+        tracing::info!("acquire: mutex acquired successfully");
         handle
     };
 
-    let listener = TcpListener::bind(IPC_ADDRESS).ok()?;
+    let listener = match TcpListener::bind(IPC_ADDRESS) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("bind IPC listener failed: {e}");
+            return None;
+        }
+    };
     let (sender, receiver) = async_channel::unbounded();
     std::thread::Builder::new()
         .name("single-instance-ipc".into())
@@ -46,9 +61,16 @@ pub fn acquire() -> Option<Claim> {
                 let mut message = String::new();
                 if reader.read_line(&mut message).is_ok() {
                     let message = message.trim().to_string();
-                    if !message.is_empty() && sender.send_blocking(message).is_err() {
+                    let payload = if message.is_empty() {
+                        "activate".to_string()
+                    } else {
+                        message
+                    };
+                    tracing::info!(payload = %payload, "IPC server received payload");
+                    if sender.send_blocking(payload).is_err() {
                         break;
                     }
+                    crate::tray::wake_ui_thread();
                 }
             }
         })
@@ -71,16 +93,37 @@ impl Claim {
 
 /// Forward an argv/deep-link payload to the running instance.
 pub fn forward_to_existing(message: &str) -> Result<(), String> {
-    let mut stream = TcpStream::connect_timeout(
-        &IPC_ADDRESS
-            .parse()
-            .map_err(|e| format!("invalid IPC address: {e}"))?,
-        std::time::Duration::from_secs(2),
-    )
-    .map_err(|e| format!("connect to running instance failed: {e}"))?;
-    stream
-        .write_all(format!("{message}\n").as_bytes())
-        .map_err(|e| e.to_string())
+    tracing::info!(message = %message, "forward_to_existing called");
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+    }
+    let addr = IPC_ADDRESS
+        .parse()
+        .map_err(|e| format!("invalid IPC address: {e}"))?;
+    let mut last_err = None;
+    for i in 0..5 {
+        match TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500)) {
+            Ok(mut stream) => {
+                stream
+                    .write_all(format!("{message}\n").as_bytes())
+                    .map_err(|e| e.to_string())?;
+                tracing::info!("forward_to_existing succeeded on attempt {i}");
+                return Ok(());
+            }
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    let err = format!(
+        "connect to running instance failed: {}",
+        last_err.map(|e| e.to_string()).unwrap_or_default()
+    );
+    tracing::warn!("{err}");
+    Err(err)
 }
 
 /// Import deep links and activation messages from later launches.
@@ -92,53 +135,46 @@ pub fn pump_messages(
     // The IPC thread blocks in accept/read. This await does not hold a pool thread.
     cx.spawn(async move |cx| {
         while let Ok(message) = receiver.recv().await {
-                let handle = cx.update(|cx| {
-                    cx.windows()
-                        .into_iter()
-                        .find_map(|window| window.downcast::<gpui_kit::component::Root>())
-                });
-                let handle = match handle {
-                    Some(handle) => Some(handle),
-                    None => cx.update(|cx| {
-                        let mut application = crate::app::App::load().ok()?;
-                        crate::app::open_main_window(&mut application, updater.clone(), cx).ok()
-                    }),
-                };
-                if let Some(handle) = handle {
-                    let _ = handle.update(cx, |root, window, cx| {
-                        if let Ok(workspace) = root.view().clone().downcast::<aitoolplus_ui::Workspace>() {
-                            workspace.update(cx, |workspace, cx| {
-                                if message.starts_with("aitoolplus://")
-                                    || message.starts_with("aitoolbox://")
-                                    || message.starts_with("ccswitch://")
-                                {
-                                    match aitoolplus_core::deeplink::import_into_store(
-                                        &message,
-                                        workspace.store.store_mut(),
-                                    ) {
-                                        Ok((tool, name)) => {
-                                            workspace.persist_store();
-                                            workspace.navigate(aitoolplus_ui::pages::Page::Tool(tool), cx);
-                                            workspace.ui.toast(
-                                                workspace
-                                                    .i18n
-                                                    .raw(
-                                                        &format!("已导入供应商 {name}"),
-                                                        &format!("imported provider {name}"),
-                                                    )
-                                                    .to_string(),
-                                                false,
-                                            );
-                                        }
-                                        Err(error) => workspace.ui.toast(error, true),
+            tracing::info!(message = %message, "pump_messages processing message");
+            if let Some(handle) = crate::tray::ensure_workspace_window(cx, &updater) {
+                tracing::info!("pump_messages got window handle");
+                let _ = handle.update(cx, |root, window, cx| {
+                    if let Ok(workspace) = root.view().clone().downcast::<aitoolplus_ui::Workspace>() {
+                        workspace.update(cx, |workspace, cx| {
+                            if message.starts_with("aitoolplus://")
+                                || message.starts_with("aitoolbox://")
+                                || message.starts_with("ccswitch://")
+                            {
+                                match aitoolplus_core::deeplink::import_into_store(
+                                    &message,
+                                    workspace.store.store_mut(),
+                                ) {
+                                    Ok((tool, name)) => {
+                                        workspace.persist_store();
+                                        workspace.navigate(aitoolplus_ui::pages::Page::Tool(tool), cx);
+                                        workspace.ui.toast(
+                                            workspace
+                                                .i18n
+                                                .raw(
+                                                    &format!("已导入供应商 {name}"),
+                                                    &format!("imported provider {name}"),
+                                                )
+                                                .to_string(),
+                                            false,
+                                        );
                                     }
+                                    Err(error) => workspace.ui.toast(error, true),
                                 }
-                                cx.notify();
-                            });
-                        }
-                        window.activate_window();
-                    });
-                }
+                            }
+                            cx.notify();
+                        });
+                    }
+                    tracing::info!("pump_messages calling restore_window_from_tray");
+                    crate::app::restore_window_from_tray(window);
+                });
+            } else {
+                tracing::warn!("pump_messages could not get window handle");
+            }
         }
     })
     .detach();

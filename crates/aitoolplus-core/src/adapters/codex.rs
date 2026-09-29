@@ -351,8 +351,26 @@ impl ToolAdapter for CodexAdapter {
         let auth = root.join("auth.json");
         let mut files = vec![];
 
-        let provider_toml = provider_toml_text(&ctx.provider.settings_config);
+        let raw_provider_toml = provider_toml_text(&ctx.provider.settings_config);
         let common_toml = ctx.common_config.trim().to_string();
+
+        let is_official = ctx.provider.category == "official"
+            || crate::providers::is_official_provider(ToolId::Codex, &ctx.provider.id)
+            || raw_provider_toml.contains("model_provider = \"openai\"");
+        let unify_history = std::env::var("AITOOLPLUS_CODEX_UNIFY_HISTORY")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        let provider_toml = if is_official && unify_history {
+            crate::codex_history::inject_codex_unified_session_bucket(&raw_provider_toml)
+                .unwrap_or_else(|_| raw_provider_toml.clone())
+        } else if is_official && !unify_history {
+            crate::codex_history::strip_codex_unified_session_bucket(&raw_provider_toml)
+                .unwrap_or_else(|_| raw_provider_toml.clone())
+        } else {
+            raw_provider_toml
+        };
 
         // Managed layer for this provider.
         let next_managed =
@@ -582,5 +600,38 @@ mod tests {
         let report = CodexAdapter.apply(&c).unwrap();
         let toml = std::fs::read_to_string(&report.files[0]).unwrap();
         assert!(toml.contains("approval_policy = \"never\""));
+    }
+
+    #[test]
+    fn test_codex_adapter_unified_session_history_injection() {
+        let (_dir, paths) = setup();
+        let mut p = ProviderRecord::new("OpenAI 官方 / Official", "official");
+        p.id = "codex-official".into();
+        p.settings_config = "model_provider = \"openai\"\n\n[model_providers.openai]\nname = \"OpenAI\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n".into();
+
+        // 1. Without unification env var: writes openai
+        unsafe {
+            std::env::set_var("AITOOLPLUS_CODEX_UNIFY_HISTORY", "0");
+        }
+        let report = CodexAdapter.apply(&ctx(&paths, &p)).unwrap();
+        let toml = std::fs::read_to_string(&report.files[0]).unwrap();
+        assert!(toml.contains("model_provider = \"openai\""));
+        assert!(toml.contains("[model_providers.openai]"));
+
+        // 2. With unification env var: writes custom unified table
+        unsafe {
+            std::env::set_var("AITOOLPLUS_CODEX_UNIFY_HISTORY", "1");
+        }
+        let report = CodexAdapter.apply(&ctx(&paths, &p)).unwrap();
+        let toml = std::fs::read_to_string(&report.files[0]).unwrap();
+        assert!(toml.contains("model_provider = \"custom\""));
+        assert!(toml.contains("[model_providers.custom]"));
+        assert!(toml.contains("requires_openai_auth = true"));
+        assert!(!toml.contains("[model_providers.openai]"));
+
+        // Clean up env
+        unsafe {
+            std::env::remove_var("AITOOLPLUS_CODEX_UNIFY_HISTORY");
+        }
     }
 }

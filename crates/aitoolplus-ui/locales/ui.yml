@@ -1279,6 +1279,12 @@ settings_backup:
     zh-CN: 本地快照
     en: Local
 settings_general:
+  codex_enhancements:
+    zh-CN: Codex 应用增强
+    en: Codex Enhancements
+  codex_enhancements_desc:
+    zh-CN: 官方登录态持久化与跨供应商会话历史统一
+    en: Official authentication preservation and unified session history
   click_tool_chips_to:
     zh-CN: 点击切换工具卡片，定制侧边栏中常驻显示的 AI 编码助手
     en: Click tool chips to customize which AI coding tools appear in navigation
@@ -1445,6 +1451,45 @@ settings_import:
   preserve_codex_official_auth:
     zh-CN: Codex 保留官方登录态
     en: Preserve Codex Official Auth
+  unify_codex_session_history:
+    zh-CN: 统一 Codex 会话历史
+    en: Unify Codex Session History
+  unify_codex_session_history_desc:
+    zh-CN: 开启后，官方订阅将以共享的 custom 供应商标识运行，官方与第三方会话出现在同一历史列表中，消除续聊割裂
+    en: Run official subscription under the shared custom bucket so official and third-party sessions appear in the same history pool
+  unify_codex_history_title:
+    zh-CN: 统一 Codex 会话历史
+    en: Unify Codex Session History
+  unify_codex_history_message:
+    zh-CN: 开启后，官方订阅与第三方将共用同一个会话历史列表。跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败，建议老会话回原供应商继续。可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份）。
+    en: Once enabled, official subscription and third parties share the same session history pool. Resuming old sessions across providers may fail if the target provider cannot decrypt encrypted_content reasoning tokens. You can optionally migrate existing official sessions into the shared pool (automatically backed up).
+  unify_codex_history_migrate_existing:
+    zh-CN: 同时迁入现有官方会话历史（改写前自动备份）
+    en: Also migrate existing official sessions (backed up before rewrite)
+  unify_codex_history_confirm:
+    zh-CN: 我已了解，继续开启
+    en: I Understand, Enable
+  unify_codex_history_off_title:
+    zh-CN: 关闭统一会话历史
+    en: Disable Unified Session History
+  unify_codex_history_off_message:
+    zh-CN: 关闭后，官方订阅与第三方将恢复各自独立的会话历史列表。开启期间产生的会话因无法区分来源，将留在第三方历史中，官方订阅将看不到它们。
+    en: Once disabled, official and third-party providers restore separated history lists. Sessions created during unification remain in third-party history.
+  unify_codex_history_off_restore_backup:
+    zh-CN: 把开启时迁入的官方会话还原回官方历史（按备份精确还原）
+    en: Restore migrated official sessions back to official history using backups
+  unify_codex_history_off_confirm:
+    zh-CN: 确认关闭
+    en: Disable
+  unify_codex_restore_success:
+    zh-CN: 已按备份还原官方会话历史（%{files} 个会话文件、%{rows} 条索引记录）
+    en: Restored official history from backup (%{files} session files, %{rows} index records)
+  unify_codex_restore_nothing:
+    zh-CN: 没有需要还原的官方会话（会话可能已在官方抽屉中）
+    en: No official sessions needed to be restored
+  unify_codex_migrate_success:
+    zh-CN: 已开启统一会话历史（迁入 %{files} 个会话文件、%{rows} 条索引记录）
+    en: Unified session history enabled (migrated %{files} session files, %{rows} index records)
   pass_dangerously_skip_permissi:
     zh-CN: 启动 Claude Code 时自动附加全权限参数，跳过频繁的危险确认提示
     en: Pass --dangerously-skip-permissions on Claude Code startup

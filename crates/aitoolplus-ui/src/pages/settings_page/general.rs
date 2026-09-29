@@ -707,6 +707,49 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
         vec![visibility_chips.into_any_element()],
     );
 
+    let codex_preserve_auth_on = ws.settings.codex_preserve_official_auth_on_switch;
+    let codex_unify_history_on = ws.settings.codex_unify_session_history;
+
+    let codex_enhancement_card = settings_card(
+        &t,
+        i.t("settings_general.codex_enhancements"),
+        Some(i.t("settings_general.codex_enhancements_desc")),
+        vec![
+            settings_row(
+                &t,
+                i.t("settings_import.preserve_codex_official_auth"),
+                Some(i.t("settings_import.keep_official_login_session")),
+                toggle(
+                    "general-codex-preserve-auth",
+                    codex_preserve_auth_on,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.settings.codex_preserve_official_auth_on_switch =
+                            !ws.settings.codex_preserve_official_auth_on_switch;
+                        (ws.callbacks.save_settings)(&ws.settings);
+                        cx.notify();
+                    },
+                ),
+            ),
+            settings_row(
+                &t,
+                i.t("settings_import.unify_codex_session_history"),
+                Some(i.t("settings_import.unify_codex_session_history_desc")),
+                toggle(
+                    "general-codex-unify-history",
+                    codex_unify_history_on,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        let next = !ws.settings.codex_unify_session_history;
+                        ws.open_codex_unify_dialog(next, cx);
+                    },
+                ),
+            ),
+        ],
+    );
+
     // Combine all modular cards with ample vertical spacing
     div()
         .flex()
@@ -715,8 +758,9 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
         .gap(px(20.0))
         .child(appearance_card)
         .child(behavior_card)
-        .child(network_card)
         .child(visibility_card)
+        .child(codex_enhancement_card)
+        .child(network_card)
         .into_any_element()
 }
 

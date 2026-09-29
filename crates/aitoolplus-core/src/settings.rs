@@ -381,6 +381,13 @@ pub struct AppSettings {
     #[serde(default)]
     pub codex_preserve_official_auth_on_switch: bool,
     #[serde(default)]
+    pub codex_unify_session_history: bool,
+    #[serde(default)]
+    pub codex_unify_migrate_existing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_official_history_unify_migration:
+        Option<crate::codex_history::CodexOfficialHistoryUnifyMigration>,
+    #[serde(default)]
     pub opencode_use_legacy_oh_my_config: bool,
     #[serde(default)]
     pub opencode_allow_clear_applied_oh_my_config: bool,
@@ -456,6 +463,9 @@ impl Default for AppSettings {
             session_filters: SessionFilters::default(),
             claude_cli_launch_full_access: false,
             codex_preserve_official_auth_on_switch: false,
+            codex_unify_session_history: false,
+            codex_unify_migrate_existing: false,
+            codex_official_history_unify_migration: None,
             opencode_use_legacy_oh_my_config: false,
             opencode_allow_clear_applied_oh_my_config: false,
             opencode_dual_write_reasoning_variant: false,
