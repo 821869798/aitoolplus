@@ -32,14 +32,33 @@ pub fn button_l<V: 'static>(
     cx: &mut Context<V>,
     on_click: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
 ) -> gpui::AnyElement {
+    button_loading_l(id, label, variant, false, theme, cx, on_click)
+}
+
+/// View-bound button with optional spinning spinner (转菊花) loading state.
+pub fn button_loading_l<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    variant: ButtonVariant,
+    loading: bool,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    on_click: impl Fn(&mut V, &ClickEvent, &mut Window, &mut Context<V>) + 'static,
+) -> gpui::AnyElement {
     let t = theme.clone();
     let label: SharedString = label.into();
+    let spin_id = SharedString::from(format!("{label}-spin"));
     let id = id.into();
     let on_click = std::rc::Rc::new(on_click);
 
-    let base = div()
+    let icon_fg = match variant {
+        ButtonVariant::Primary => WHITE,
+        ButtonVariant::Danger => t.danger,
+        _ => t.text_secondary,
+    };
+
+    let mut base = div()
         .id(id)
-        .cursor_pointer()
         .h(px(30.0))
         .px(px(12.0))
         .rounded(px(6.0))
@@ -52,44 +71,77 @@ pub fn button_l<V: 'static>(
         .font_weight(gpui::FontWeight::MEDIUM)
         .whitespace_nowrap();
 
+    if !loading {
+        base = base.cursor_pointer();
+    }
+
     let styled = match variant {
-        ButtonVariant::Primary => base
-            .bg(t.accent)
-            .text_color(WHITE)
-            .shadow_xs()
-            .hover(move |h| h.bg(t.accent_hover))
-            .active(move |a| a.opacity(0.88)),
-        ButtonVariant::Secondary => base
-            .bg(t.tab_active_bg)
-            .border_1()
-            .border_color(t.card_border)
-            .text_color(t.text_primary)
-            .hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
-            .active(move |a| a.bg(t.row_hover)),
-        ButtonVariant::Ghost => base
-            .text_color(t.text_secondary)
-            .hover(move |h| h.bg(t.card_hover).text_color(t.text_primary))
-            .active(move |a| a.bg(t.row_hover)),
-        ButtonVariant::Outline => base
-            .border_1()
-            .border_color(t.card_border)
-            .text_color(t.text_primary)
-            .hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
-            .active(move |a| a.bg(t.row_hover)),
-        ButtonVariant::Danger => base
-            .bg(t.danger_subtle)
-            .border_1()
-            .border_color(t.danger_subtle)
-            .text_color(t.danger)
-            .hover(move |h| h.bg(t.danger).text_color(WHITE).border_color(t.danger))
-            .active(move |a| a.opacity(0.88)),
+        ButtonVariant::Primary => {
+            let b = base.bg(t.accent).text_color(WHITE).shadow_xs();
+            if !loading {
+                b.hover(move |h| h.bg(t.accent_hover))
+                    .active(move |a| a.opacity(0.88))
+            } else {
+                b.opacity(0.85)
+            }
+        }
+        ButtonVariant::Secondary => {
+            let b = base
+                .bg(t.tab_active_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .text_color(t.text_primary);
+            if !loading {
+                b.hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
+                    .active(move |a| a.bg(t.row_hover))
+            } else {
+                b.opacity(0.85)
+            }
+        }
+        ButtonVariant::Ghost => {
+            let b = base.text_color(t.text_secondary);
+            if !loading {
+                b.hover(move |h| h.bg(t.card_hover).text_color(t.text_primary))
+                    .active(move |a| a.bg(t.row_hover))
+            } else {
+                b.opacity(0.85)
+            }
+        }
+        ButtonVariant::Outline => {
+            let b = base
+                .border_1()
+                .border_color(t.card_border)
+                .text_color(t.text_primary);
+            if !loading {
+                b.hover(move |h| h.bg(t.card_hover).border_color(t.card_border_hover))
+                    .active(move |a| a.bg(t.row_hover))
+            } else {
+                b.opacity(0.85)
+            }
+        }
+        ButtonVariant::Danger => {
+            let b = base
+                .bg(t.danger_subtle)
+                .border_1()
+                .border_color(t.danger_subtle)
+                .text_color(t.danger);
+            if !loading {
+                b.hover(move |h| h.bg(t.danger).text_color(WHITE).border_color(t.danger))
+                    .active(move |a| a.opacity(0.88))
+            } else {
+                b.opacity(0.85)
+            }
+        }
     };
 
     styled
+        .when(loading, |this| this.child(spinner(spin_id, icon_fg)))
         .child(label)
-        .on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
-            on_click(view, ev, window, cx);
-        }))
+        .when(!loading, |this| {
+            this.on_click(cx.listener(move |view, ev: &ClickEvent, window, cx| {
+                on_click(view, ev, window, cx);
+            }))
+        })
         .into_any_element()
 }
 

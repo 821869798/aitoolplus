@@ -13,7 +13,7 @@ pub mod usage_page;
 use aitoolplus_core::tools::ToolId;
 use gpui::{ClickEvent, Context, IntoElement, MouseButton, Window, div, prelude::*, px};
 
-use crate::components::{ButtonVariant, button_l};
+use crate::components::{ButtonVariant, button_l, button_loading_l, toggle};
 use crate::text_area::TextArea;
 use crate::text_input::TextInput;
 use crate::theme::Theme;
@@ -83,6 +83,8 @@ pub struct WorkspaceState {
     pub mcp_dialog: Option<McpDialogState>,
     /// Delete confirmations (title, message, action id).
     pub confirm: Option<ConfirmState>,
+    /// Codex session history unification confirm dialog.
+    pub codex_unify_dialog: Option<CodexUnifyDialogState>,
     /// Settings page: import/export feedback.
     pub settings_tab: SettingsTab,
     pub skills_tool_filter: Option<ToolId>,
@@ -642,6 +644,19 @@ pub struct SkillDetailState {
     pub tools: Vec<ToolId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodexUnifyDialogState {
+    Enable {
+        migrate_existing: bool,
+        busy: bool,
+    },
+    Disable {
+        has_backup: bool,
+        restore_backup: bool,
+        busy: bool,
+    },
+}
+
 #[derive(Clone)]
 pub enum ConfirmAction {
     DeleteProvider { tool: ToolId, id: String },
@@ -800,6 +815,7 @@ impl WorkspaceState {
             open_session: None,
             mcp_dialog: None,
             confirm: None,
+            codex_unify_dialog: None,
             settings_tab: SettingsTab::General,
             skills_tool_filter: None,
             toast: None,
@@ -1227,6 +1243,7 @@ impl WorkspaceState {
             || self.antigravity_device_account.is_some()
             || self.antigravity_editing_label.is_some()
             || self.update_install_confirm_dialog.is_some()
+            || self.codex_unify_dialog.is_some()
     }
 
     /// Resolve or lazily create the common-config editor for a tool.
@@ -1451,6 +1468,242 @@ pub fn render_confirm_dialog(
         ws.ui.confirm = None;
         cx.notify();
     })
+}
+
+pub fn render_codex_unify_dialog(
+    state: CodexUnifyDialogState,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+
+    match state {
+        CodexUnifyDialogState::Enable { migrate_existing, busy } => {
+            let title = i.t("settings_import.unify_codex_history_title");
+            let message = i.t("settings_import.unify_codex_history_message");
+            let check_label = i.t("settings_import.unify_codex_history_migrate_existing");
+            let confirm_label = i.t("settings_import.unify_codex_history_confirm");
+            let cancel_label = i.t("pages.cancel");
+
+            let body = div()
+                .flex()
+                .flex_col()
+                .gap(px(14.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .line_height(px(20.0))
+                        .text_color(t.text_secondary)
+                        .child(message),
+                )
+                .child(
+                    div()
+                        .p(px(10.0))
+                        .rounded(px(6.0))
+                        .bg(crate::rgba_const(0xf59e0b15))
+                        .border_1()
+                        .border_color(crate::rgba_const(0xf59e0b35))
+                        .text_size(px(12.0))
+                        .line_height(px(17.0))
+                        .text_color(crate::rgba_const(0xf59e0bff))
+                        .child("提示：跨供应商继续旧会话时，对方后端可能无法解密会话中的 encrypted_content 推理内容导致续聊失败，建议老会话回原供应商继续。"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .p(px(8.0))
+                        .rounded(px(6.0))
+                        .bg(t.sidebar_bg)
+                        .border_1()
+                        .border_color(t.card_border)
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(t.text_primary)
+                                .child(check_label),
+                        )
+                        .child(toggle(
+                            "dialog-migrate-existing",
+                            migrate_existing,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                if let Some(CodexUnifyDialogState::Enable { busy: true, .. }) =
+                                    ws.ui.codex_unify_dialog
+                                {
+                                    return;
+                                }
+                                if let Some(CodexUnifyDialogState::Enable { ref mut migrate_existing, .. }) =
+                                    ws.ui.codex_unify_dialog
+                                {
+                                    *migrate_existing = !*migrate_existing;
+                                    cx.notify();
+                                }
+                            },
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(button_l(
+                            "unify-enable-cancel",
+                            cancel_label,
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                if let Some(CodexUnifyDialogState::Enable { busy: true, .. }) =
+                                    ws.ui.codex_unify_dialog
+                                {
+                                    return;
+                                }
+                                ws.ui.codex_unify_dialog = None;
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_loading_l(
+                            "unify-enable-confirm",
+                            confirm_label,
+                            ButtonVariant::Primary,
+                            busy,
+                            &t,
+                            cx,
+                            move |ws, _, _, cx| {
+                                if busy {
+                                    return;
+                                }
+                                let migrate = match ws.ui.codex_unify_dialog {
+                                    Some(CodexUnifyDialogState::Enable { migrate_existing, .. }) => migrate_existing,
+                                    _ => migrate_existing,
+                                };
+                                ws.enable_codex_unified_history(migrate, cx);
+                            },
+                        )),
+                );
+
+            modal_scaffold_sized(&t, &title, px(520.0), None, body.into_any_element(), cx, |ws, _, _, cx| {
+                if let Some(CodexUnifyDialogState::Enable { busy: true, .. }) = ws.ui.codex_unify_dialog {
+                    return;
+                }
+                ws.ui.codex_unify_dialog = None;
+                cx.notify();
+            })
+        }
+        CodexUnifyDialogState::Disable { has_backup, restore_backup, busy } => {
+            let title = i.t("settings_import.unify_codex_history_off_title");
+            let message = i.t("settings_import.unify_codex_history_off_message");
+            let check_label = i.t("settings_import.unify_codex_history_off_restore_backup");
+            let confirm_label = i.t("settings_import.unify_codex_history_off_confirm");
+            let cancel_label = i.t("pages.cancel");
+
+            let mut body = div()
+                .flex()
+                .flex_col()
+                .gap(px(14.0))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .line_height(px(20.0))
+                        .text_color(t.text_secondary)
+                        .child(message),
+                );
+
+            if has_backup {
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .p(px(8.0))
+                        .rounded(px(6.0))
+                        .bg(t.sidebar_bg)
+                        .border_1()
+                        .border_color(t.card_border)
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(t.text_primary)
+                                .child(check_label),
+                        )
+                        .child(toggle(
+                            "dialog-restore-backup",
+                            restore_backup,
+                            &t,
+                            cx,
+                            |ws, _, _, cx| {
+                                if let Some(CodexUnifyDialogState::Disable { busy: true, .. }) =
+                                    ws.ui.codex_unify_dialog
+                                {
+                                    return;
+                                }
+                                if let Some(CodexUnifyDialogState::Disable { ref mut restore_backup, .. }) =
+                                    ws.ui.codex_unify_dialog
+                                {
+                                    *restore_backup = !*restore_backup;
+                                    cx.notify();
+                                }
+                            },
+                        )),
+                );
+            }
+
+            body = body.child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .child(button_l(
+                        "unify-disable-cancel",
+                        cancel_label,
+                        ButtonVariant::Secondary,
+                        &t,
+                        cx,
+                        |ws, _, _, cx| {
+                            if let Some(CodexUnifyDialogState::Disable { busy: true, .. }) =
+                                ws.ui.codex_unify_dialog
+                            {
+                                return;
+                            }
+                            ws.ui.codex_unify_dialog = None;
+                            cx.notify();
+                        },
+                    ))
+                    .child(button_loading_l(
+                        "unify-disable-confirm",
+                        confirm_label,
+                        ButtonVariant::Danger,
+                        busy,
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            if busy {
+                                return;
+                            }
+                            let restore = match ws.ui.codex_unify_dialog {
+                                Some(CodexUnifyDialogState::Disable { restore_backup, .. }) => restore_backup,
+                                _ => restore_backup,
+                            };
+                            ws.disable_codex_unified_history(if has_backup { restore } else { false }, cx);
+                        },
+                    )),
+            );
+
+            modal_scaffold_sized(&t, &title, px(520.0), None, body.into_any_element(), cx, |ws, _, _, cx| {
+                if let Some(CodexUnifyDialogState::Disable { busy: true, .. }) = ws.ui.codex_unify_dialog {
+                    return;
+                }
+                ws.ui.codex_unify_dialog = None;
+                cx.notify();
+            })
+        }
+    }
 }
 
 pub fn render_update_install_dialog(
@@ -1893,6 +2146,44 @@ mod tests {
                 assert_eq!(id, "prov-1");
             }
             _ => panic!("unexpected action"),
+        }
+    }
+
+    #[test]
+    fn test_codex_unify_dialog_state_clone() {
+        let enable = CodexUnifyDialogState::Enable {
+            migrate_existing: true,
+            busy: false,
+        };
+        let cloned_enable = enable.clone();
+        match cloned_enable {
+            CodexUnifyDialogState::Enable {
+                migrate_existing,
+                busy,
+            } => {
+                assert!(migrate_existing);
+                assert!(!busy);
+            }
+            _ => panic!("unexpected state"),
+        }
+
+        let disable = CodexUnifyDialogState::Disable {
+            has_backup: true,
+            restore_backup: false,
+            busy: true,
+        };
+        let cloned_disable = disable.clone();
+        match cloned_disable {
+            CodexUnifyDialogState::Disable {
+                has_backup,
+                restore_backup,
+                busy,
+            } => {
+                assert!(has_backup);
+                assert!(!restore_backup);
+                assert!(busy);
+            }
+            _ => panic!("unexpected state"),
         }
     }
 }

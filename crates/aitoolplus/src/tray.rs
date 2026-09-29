@@ -34,7 +34,7 @@ pub fn set_main_thread_id(tid: u32) {
 }
 
 /// Wake up GPUI's Win32 message pump if sleeping in GetMessageW.
-fn wake_ui_thread() {
+pub fn wake_ui_thread() {
     #[cfg(windows)]
     {
         let tid = MAIN_THREAD_ID.load(Ordering::Acquire);
@@ -312,7 +312,7 @@ fn pretty_tool_name(tool: &str) -> &'static str {
         .unwrap_or("Tool")
 }
 
-fn ensure_workspace_window(
+pub fn ensure_workspace_window(
     cx: &mut gpui::AsyncApp,
     updater: &TrayMenuUpdater,
 ) -> Option<gpui::WindowHandle<gpui_kit::component::Root>> {

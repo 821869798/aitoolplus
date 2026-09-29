@@ -601,6 +601,11 @@ impl Workspace {
             };
         }
 
+        if let Ok(target) = std::env::var("AITOOLPLUS_OPEN_CODEX_UNIFY_DIALOG") {
+            let next = target == "1" || target == "true" || target == "enable";
+            ws.open_codex_unify_dialog(next, cx);
+        }
+
         if ws.settings.auto_update_check_enabled {
             let weak = cx.entity().downgrade();
             let custom_api = ws.settings.custom_update_api_url.clone();
@@ -922,6 +927,217 @@ impl Workspace {
         }
         cx.notify();
     }
+
+    pub fn open_codex_unify_dialog(&mut self, target_state: bool, cx: &mut Context<Self>) {
+        if target_state {
+            self.ui.codex_unify_dialog = Some(pages::CodexUnifyDialogState::Enable {
+                migrate_existing: false,
+                busy: false,
+            });
+        } else {
+            let has_backup =
+                aitoolplus_core::codex_history::has_codex_official_history_unify_backup(&self.paths)
+                || self.settings.codex_unify_migrate_existing;
+            self.ui.codex_unify_dialog = Some(pages::CodexUnifyDialogState::Disable {
+                has_backup,
+                restore_backup: true,
+                busy: false,
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn enable_codex_unified_history(
+        &mut self,
+        migrate_existing: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if migrate_existing {
+            if let Some(pages::CodexUnifyDialogState::Enable { ref mut busy, .. }) =
+                self.ui.codex_unify_dialog
+            {
+                *busy = true;
+                cx.notify();
+            }
+
+            let paths = self.paths.clone();
+            let weak = cx.entity().downgrade();
+            cx.spawn(async move |_this, cx| {
+                let res = cx
+                    .background_spawn(async move {
+                        aitoolplus_core::codex_history::migrate_codex_official_history_unify(&paths)
+                    })
+                    .await;
+
+                let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                    ws.ui.codex_unify_dialog = None;
+                    ws.settings.codex_unify_session_history = true;
+                    ws.settings.codex_unify_migrate_existing = true;
+                    unsafe {
+                        std::env::set_var("AITOOLPLUS_CODEX_UNIFY_HISTORY", "1");
+                    }
+                    ws.reapply_active_codex_provider();
+
+                    let i = ws.i18n;
+                    match res {
+                        Ok(outcome) => {
+                            ws.settings.codex_official_history_unify_migration = Some(
+                                aitoolplus_core::codex_history::CodexOfficialHistoryUnifyMigration {
+                                    completed_at: chrono::Utc::now().to_rfc3339(),
+                                    target_provider_id:
+                                        aitoolplus_core::codex_history::UNIFIED_CODEX_MODEL_PROVIDER_ID
+                                            .to_string(),
+                                    migrated_jsonl_files: outcome.migrated_jsonl_files,
+                                    migrated_state_rows: outcome.migrated_state_rows,
+                                    codex_config_dir: Some(
+                                        aitoolplus_core::codex_history::canonical_dir_string(
+                                            &ws.paths.tool_root(ToolId::Codex),
+                                        ),
+                                    ),
+                                },
+                            );
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            let msg = i.raw(
+                                format!(
+                                    "已开启统一会话历史（迁入 {} 个会话文件、{} 条索引记录）",
+                                    outcome.migrated_jsonl_files, outcome.migrated_state_rows
+                                ),
+                                format!(
+                                    "Unified session history enabled (migrated {} session files, {} index records)",
+                                    outcome.migrated_jsonl_files, outcome.migrated_state_rows
+                                ),
+                            );
+                            (ws.callbacks.notify)(msg.to_string());
+                        }
+                        Err(err) => {
+                            (ws.callbacks.save_settings)(&ws.settings);
+                            let msg = i.raw(format!("操作失败: {err}"), format!("Operation failed: {err}"));
+                            (ws.callbacks.notify)(msg.to_string());
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else {
+            self.ui.codex_unify_dialog = None;
+            self.settings.codex_unify_session_history = true;
+            self.settings.codex_unify_migrate_existing = false;
+            unsafe {
+                std::env::set_var("AITOOLPLUS_CODEX_UNIFY_HISTORY", "1");
+            }
+            (self.callbacks.save_settings)(&self.settings);
+            self.reapply_active_codex_provider();
+            let msg = self.i18n.t("settings_import.unify_codex_session_history");
+            (self.callbacks.notify)(format!("已开启 {}", msg));
+            cx.notify();
+        }
+    }
+
+    pub fn disable_codex_unified_history(
+        &mut self,
+        restore_backup: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if restore_backup {
+            if let Some(pages::CodexUnifyDialogState::Disable { ref mut busy, .. }) =
+                self.ui.codex_unify_dialog
+            {
+                *busy = true;
+                cx.notify();
+            }
+
+            let paths = self.paths.clone();
+            let weak = cx.entity().downgrade();
+            cx.spawn(async move |_this, cx| {
+                let res = cx
+                    .background_spawn(async move {
+                        aitoolplus_core::codex_history::restore_codex_official_history_from_backups(
+                            &paths,
+                        )
+                    })
+                    .await;
+
+                let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                    ws.ui.codex_unify_dialog = None;
+                    ws.settings.codex_unify_session_history = false;
+                    ws.settings.codex_unify_migrate_existing = false;
+                    ws.settings.codex_official_history_unify_migration = None;
+                    unsafe {
+                        std::env::set_var("AITOOLPLUS_CODEX_UNIFY_HISTORY", "0");
+                    }
+                    (ws.callbacks.save_settings)(&ws.settings);
+                    ws.reapply_active_codex_provider();
+
+                    let i = ws.i18n;
+                    match res {
+                        Ok(outcome) => {
+                            if outcome.skipped_reason.as_deref() == Some("nothing_to_restore")
+                                || outcome.skipped_reason.as_deref() == Some("no_backup_ledger")
+                            {
+                                let msg = i.t("settings_import.unify_codex_restore_nothing");
+                                (ws.callbacks.notify)(msg.to_string());
+                            } else {
+                                let msg = i.raw(
+                                    format!(
+                                        "已按备份还原官方会话历史（{} 个会话文件、{} 条索引记录）",
+                                        outcome.restored_jsonl_files, outcome.restored_state_rows
+                                    ),
+                                    format!(
+                                        "Restored official history from backup ({} session files, {} index records)",
+                                        outcome.restored_jsonl_files, outcome.restored_state_rows
+                                    ),
+                                );
+                                (ws.callbacks.notify)(msg.to_string());
+                            }
+                        }
+                        Err(err) => {
+                            let msg = i.raw(format!("操作失败: {err}"), format!("Operation failed: {err}"));
+                            (ws.callbacks.notify)(msg.to_string());
+                        }
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        } else {
+            self.ui.codex_unify_dialog = None;
+            self.settings.codex_unify_session_history = false;
+            self.settings.codex_unify_migrate_existing = false;
+            self.settings.codex_official_history_unify_migration = None;
+            unsafe {
+                std::env::set_var("AITOOLPLUS_CODEX_UNIFY_HISTORY", "0");
+            }
+            (self.callbacks.save_settings)(&self.settings);
+            self.reapply_active_codex_provider();
+            let msg = self.i18n.t("settings_import.unify_codex_session_history");
+            (self.callbacks.notify)(format!("已关闭 {}", msg));
+            cx.notify();
+        }
+    }
+
+    pub fn reapply_active_codex_provider(&mut self) {
+        let applied_provider = self
+            .store
+            .store()
+            .tool(ToolId::Codex)
+            .providers
+            .iter()
+            .find(|p| p.is_applied && !p.is_disabled)
+            .cloned();
+        if let Some(p) = applied_provider {
+            let common = self.store.store().tool(ToolId::Codex).common_config.clone();
+            let adapter = aitoolplus_core::adapters::adapter_for(ToolId::Codex);
+            let ctx = aitoolplus_core::adapters::ApplyCtx {
+                paths: &self.paths,
+                common_config: &common,
+                provider: &p,
+                strategy: aitoolplus_core::config::MergeStrategy::default(),
+                provider_optional: false,
+            };
+            let _ = adapter.apply(&ctx);
+        }
+    }
 }
 
 /// Whether the OS prefers dark (cheap heuristic; Windows registry-free).
@@ -1031,6 +1247,7 @@ impl Render for Workspace {
             let antigravity_device = self.ui.antigravity_device_account.clone();
             let antigravity_label_edit = self.ui.antigravity_editing_label.clone();
             let update_install_confirm = self.ui.update_install_confirm_dialog.clone();
+            let codex_unify = self.ui.codex_unify_dialog.clone();
             let mut out = vec![];
             if let Some(d) = dialogs {
                 out.push(pages::tool_page::render_provider_dialog(d, self, cx));
@@ -1043,6 +1260,9 @@ impl Render for Workspace {
             }
             if let Some(d) = confirms {
                 out.push(pages::render_confirm_dialog(d, self, cx));
+            }
+            if let Some(d) = codex_unify {
+                out.push(pages::render_codex_unify_dialog(d, self, cx));
             }
             if let Some((meta, input)) = renames {
                 out.push(pages::tool_page::render_rename_dialog(

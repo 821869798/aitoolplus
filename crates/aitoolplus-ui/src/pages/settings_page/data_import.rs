@@ -492,6 +492,21 @@ pub(super) fn cli_policies_card(
             ),
             settings_row(
                 t,
+                i.t("settings_import.unify_codex_session_history"),
+                Some(i.t("settings_import.unify_codex_session_history_desc")),
+                toggle(
+                    "codex-unify-history",
+                    ws.settings.codex_unify_session_history,
+                    t,
+                    cx,
+                    |ws, _, _, cx| {
+                        let next = !ws.settings.codex_unify_session_history;
+                        ws.open_codex_unify_dialog(next, cx);
+                    },
+                ),
+            ),
+            settings_row(
+                t,
                 i.t("settings_import.openagent_unified_omo_config"),
                 Some(i.t("settings_import.write_unified_config_to")),
                 toggle(

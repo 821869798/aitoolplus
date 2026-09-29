@@ -103,13 +103,13 @@ pub fn import_codex_current(paths: &Paths, providers: &mut Vec<ProviderRecord>) 
         return false;
     }
     let raw = std::fs::read_to_string(&cfg_path).unwrap_or_default();
-    let Ok(doc) = raw.parse::<toml_edit::DocumentMut>() else {
+    let stripped_raw = crate::codex_history::strip_codex_unified_session_bucket(&raw)
+        .unwrap_or_else(|_| raw.clone());
+    let Ok(doc) = stripped_raw.parse::<toml_edit::DocumentMut>() else {
         return false;
     };
 
-    let Some(selector) = doc.get("model_provider").and_then(|v| v.as_str()) else {
-        return false;
-    };
+    let selector = doc.get("model_provider").and_then(|v| v.as_str()).unwrap_or("openai");
     let provider_table = doc
         .get("model_providers")
         .and_then(|t| t.get(selector))
