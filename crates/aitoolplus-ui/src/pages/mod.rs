@@ -2,6 +2,7 @@
 //! Settings.
 
 pub mod antigravity_page;
+pub mod gateway_page;
 pub mod local_env_page;
 pub mod mcp_page;
 pub mod session_detail;
@@ -26,6 +27,7 @@ pub enum Page {
     Mcp,
     Skills,
     Antigravity,
+    Gateway,
     Settings,
 }
 
@@ -36,9 +38,19 @@ impl Page {
             Page::Mcp => "mcp",
             Page::Skills => "skills",
             Page::Antigravity => "antigravity",
+            Page::Gateway => "gateway",
             Page::Settings => "settings",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GatewayTab {
+    #[default]
+    Overview,
+    Failover,
+    Requests,
+    Settings,
 }
 
 /// Tabs within a tool page.
@@ -67,8 +79,49 @@ pub enum PiDropdownField {
     Thinking,
 }
 
+/// Active drag-and-drop item reorder state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragReorderState {
+    Provider {
+        tool: ToolId,
+        from_index: usize,
+        hover_index: Option<usize>,
+    },
+    GatewayFailover {
+        cli: aitoolplus_core::gateway::GatewayCliKey,
+        from_pos: usize,
+        hover_pos: Option<usize>,
+    },
+}
+
+/// Renders a modern drop insertion indicator line between list items.
+pub fn render_drop_indicator_line(t: &Theme) -> impl IntoElement {
+    div()
+        .w_full()
+        .py(px(2.0))
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .child(
+            div()
+                .size(px(6.0))
+                .rounded_full()
+                .bg(t.accent)
+                .shadow_sm(),
+        )
+        .child(
+            div()
+                .h(px(3.0))
+                .flex_1()
+                .bg(t.accent)
+                .rounded(px(1.5))
+                .shadow_sm(),
+        )
+}
+
 /// All transient UI state owned by the workspace.
 pub struct WorkspaceState {
+    pub drag_reorder: Option<DragReorderState>,
     pub tool_tab: ToolTab,
     /// JSON text buffers for the common-config editor, per tool.
     pub common_editors: std::collections::BTreeMap<String, gpui::Entity<TextArea>>,
@@ -313,6 +366,13 @@ pub struct WorkspaceState {
     pub usage_app_pricing_configs: Vec<aitoolplus_core::usage::AppPricingConfig>,
     pub usage_app_pricing_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
     pub usage_app_pricing_sources: std::collections::BTreeMap<String, String>,
+    pub gateway_tab: GatewayTab,
+    pub gateway_status: Option<aitoolplus_core::gateway::GatewayStatus>,
+    pub gateway_takeovers: Vec<aitoolplus_core::gateway::GatewayCliTakeoverStatus>,
+    pub gateway_requests: Vec<aitoolplus_core::gateway::GatewayRequestLogSummary>,
+    pub gateway_selected_request: Option<aitoolplus_core::gateway::GatewayRequestLogDetail>,
+    pub gateway_settings: aitoolplus_core::gateway::GatewaySettings,
+    pub gateway_busy: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -806,7 +866,42 @@ impl WorkspaceState {
             }
         }).detach();
 
+        let drag_reorder = match std::env::var("AITOOLPLUS_TEST_DRAG_HOVER").as_deref() {
+            Ok("provider") => Some(DragReorderState::Provider {
+                tool: ToolId::ClaudeCode,
+                from_index: 0,
+                hover_index: Some(1),
+            }),
+            Ok("failover") => Some(DragReorderState::GatewayFailover {
+                cli: aitoolplus_core::gateway::GatewayCliKey::Claude,
+                from_pos: 0,
+                hover_pos: Some(1),
+            }),
+            Ok(s) if s.starts_with("failover:") => {
+                let parts: Vec<&str> = s.split(':').collect();
+                let from = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+                let to = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1);
+                Some(DragReorderState::GatewayFailover {
+                    cli: aitoolplus_core::gateway::GatewayCliKey::Claude,
+                    from_pos: from,
+                    hover_pos: Some(to),
+                })
+            }
+            Ok(s) if s.starts_with("provider:") => {
+                let parts: Vec<&str> = s.split(':').collect();
+                let from = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+                let to = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1);
+                Some(DragReorderState::Provider {
+                    tool: ToolId::ClaudeCode,
+                    from_index: from,
+                    hover_index: Some(to),
+                })
+            }
+            _ => None,
+        };
+
         Self {
+            drag_reorder,
             tool_tab: ToolTab::Providers,
             common_editors: Default::default(),
             common_dirty: false,
@@ -1012,6 +1107,13 @@ impl WorkspaceState {
             usage_app_pricing_configs: Vec::new(),
             usage_app_pricing_inputs: std::collections::BTreeMap::new(),
             usage_app_pricing_sources: std::collections::BTreeMap::new(),
+            gateway_tab: GatewayTab::Overview,
+            gateway_status: None,
+            gateway_takeovers: Vec::new(),
+            gateway_requests: Vec::new(),
+            gateway_selected_request: None,
+            gateway_settings: aitoolplus_core::gateway::GatewaySettings::default(),
+            gateway_busy: false,
         }
     }
 
@@ -1244,6 +1346,7 @@ impl WorkspaceState {
             || self.antigravity_editing_label.is_some()
             || self.update_install_confirm_dialog.is_some()
             || self.codex_unify_dialog.is_some()
+            || self.gateway_selected_request.is_some()
     }
 
     /// Resolve or lazily create the common-config editor for a tool.
@@ -1863,6 +1966,32 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 aitoolplus_core::providers::delete(&mut section.providers, &id);
             });
             ws.persist_store();
+
+            // Sync with Gateway manifest if this deleted provider was the active P0
+            let cli_key = match tool {
+                aitoolplus_core::ToolId::ClaudeCode => Some(aitoolplus_core::gateway::GatewayCliKey::Claude),
+                aitoolplus_core::ToolId::Codex => Some(aitoolplus_core::gateway::GatewayCliKey::Codex),
+                _ => None,
+            };
+            if let Some(cli) = cli_key {
+                let paths = (*ws.paths).clone();
+                if let Some(mut manifest) = aitoolplus_core::gateway::CliProxyManifest::read(&paths, cli) {
+                    if manifest.enabled && manifest.primary_provider_id == id {
+                        let next_provider = ws.store.store().tool(tool).providers.iter().find(|p| !p.is_disabled).map(|p| p.id.clone());
+                        if let Some(next_id) = next_provider {
+                            manifest.primary_provider_id = next_id.clone();
+                            let _ = manifest.write(&paths);
+                            let _ = ws.store.update(|store| {
+                                let section = store.tool_mut(tool);
+                                aitoolplus_core::providers::select(&mut section.providers, &next_id);
+                            });
+                            ws.persist_store();
+                        }
+                    }
+                }
+            }
+            ws.refresh_gateway_data(cx);
+
             let msg = i.t("pages.provider_deleted").to_string();
             ws.ui.toast(msg, false);
         }
@@ -2098,6 +2227,7 @@ pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
         Page::Mcp => mcp_page::render_mcp_page(ws, cx),
         Page::Skills => skills_page::render_skills_page(ws, cx),
         Page::Antigravity => antigravity_page::render_antigravity_page(ws, cx),
+        Page::Gateway => gateway_page::render_gateway_page(ws, cx),
         Page::Settings => settings_page::render_settings_page(ws, cx),
     }
 }
@@ -2185,5 +2315,51 @@ mod tests {
             }
             _ => panic!("unexpected state"),
         }
+    }
+
+    #[test]
+    fn test_failover_reorder_math_and_p0_reassignment() {
+        // Case 1: Dragging P0 (0) downwards to P1 (1)
+        let candidates = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let from_pos = 0;
+        let to_pos = 1;
+        let mut ordered_ids = candidates.clone();
+        let item = ordered_ids.remove(from_pos);
+        let insert_idx = to_pos.min(ordered_ids.len());
+        ordered_ids.insert(insert_idx, item);
+
+        assert_eq!(ordered_ids, vec!["B", "A", "C"]);
+        let new_p0_id = &ordered_ids[0];
+        assert_eq!(new_p0_id, "B");
+        let p0_changed = candidates.first() != Some(new_p0_id);
+        assert!(p0_changed, "P0 should change from A to B");
+
+        // Case 2: Dragging P2 (2) upwards to P0 (0)
+        let from_pos = 2;
+        let to_pos = 0;
+        let mut ordered_ids = candidates.clone();
+        let item = ordered_ids.remove(from_pos);
+        let insert_idx = to_pos.min(ordered_ids.len());
+        ordered_ids.insert(insert_idx, item);
+
+        assert_eq!(ordered_ids, vec!["C", "A", "B"]);
+        let new_p0_id = &ordered_ids[0];
+        assert_eq!(new_p0_id, "C");
+        let p0_changed = candidates.first() != Some(new_p0_id);
+        assert!(p0_changed, "P0 should change from A to C");
+
+        // Case 3: Dragging P1 (1) to P2 (2) - non-P0 reorder
+        let from_pos = 1;
+        let to_pos = 2;
+        let mut ordered_ids = candidates.clone();
+        let item = ordered_ids.remove(from_pos);
+        let insert_idx = to_pos.min(ordered_ids.len());
+        ordered_ids.insert(insert_idx, item);
+
+        assert_eq!(ordered_ids, vec!["A", "C", "B"]);
+        let new_p0_id = &ordered_ids[0];
+        assert_eq!(new_p0_id, "A");
+        let p0_changed = candidates.first() != Some(new_p0_id);
+        assert!(!p0_changed, "P0 should not change when reordering backups");
     }
 }

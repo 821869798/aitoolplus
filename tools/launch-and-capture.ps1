@@ -30,14 +30,17 @@ param(
   [string]$AntigravityTab = "",
   [string]$TestToast = "",
   [string]$TestToastError = "",
-  [string]$UsageSubTab = ""
+  [string]$UsageSubTab = "",
+  [string]$OpenGatewayRequest = ""
 )
 Get-Process aitoolplus -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = 'D:\program\rust\aitoolplus\target\release\aitoolplus.exe'
 $psi.UseShellExecute = $false
-$psi.EnvironmentVariables['AITOOLPLUS_HOME'] = 'C:\Users\zhuzi'
+$psi.EnvironmentVariables['AITOOLPLUS_HOME'] = 'C:\temp\aitoolplus-visual\home'
+[System.IO.Directory]::CreateDirectory('C:\temp\aitoolplus-visual\home\.claude') | Out-Null
+[System.IO.Directory]::CreateDirectory('C:\temp\aitoolplus-visual\home\.codex') | Out-Null
 $psi.EnvironmentVariables['AITOOLPLUS_APPDATA'] = 'C:\temp\aitoolplus-visual\appdata'
 $psi.EnvironmentVariables['AITOOLPLUS_START_PAGE'] = $Page
 $psi.EnvironmentVariables['AITOOLPLUS_START_TAB'] = $Tab
@@ -73,6 +76,9 @@ if ($env:AITOOLPLUS_CURRENT_VERSION) { $psi.EnvironmentVariables['AITOOLPLUS_CUR
 if ($env:AITOOLPLUS_FORCE_PORTABLE) { $psi.EnvironmentVariables['AITOOLPLUS_FORCE_PORTABLE'] = $env:AITOOLPLUS_FORCE_PORTABLE }
 if ($env:AITOOLPLUS_FORCE_INSTALLER) { $psi.EnvironmentVariables['AITOOLPLUS_FORCE_INSTALLER'] = $env:AITOOLPLUS_FORCE_INSTALLER }
 if ($env:AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL) { $psi.EnvironmentVariables['AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL'] = $env:AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL }
+if ($env:AITOOLPLUS_TEST_DRAG_HOVER) { $psi.EnvironmentVariables['AITOOLPLUS_TEST_DRAG_HOVER'] = $env:AITOOLPLUS_TEST_DRAG_HOVER }
+if ($OpenGatewayRequest -ne "") { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_GATEWAY_REQUEST'] = $OpenGatewayRequest }
+elseif ($env:AITOOLPLUS_OPEN_GATEWAY_REQUEST) { $psi.EnvironmentVariables['AITOOLPLUS_OPEN_GATEWAY_REQUEST'] = $env:AITOOLPLUS_OPEN_GATEWAY_REQUEST }
 
 $launched = [System.Diagnostics.Process]::Start($psi)
 Write-Host "launched pid=$($launched.Id) page=$Page tab=$Tab"

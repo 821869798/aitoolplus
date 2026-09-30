@@ -28,7 +28,19 @@ fn upsert_live(
 ) -> bool {
     let id = live_id(tool);
     let name = name.into();
+    if is_gateway_url(&name) || name == "127.0.0.1" || name.starts_with("127.0.0.1:") {
+        tracing::warn!("Rejecting upsert_live: provider name is gateway address ({name})");
+        return false;
+    }
     let settings_txt = serde_json::to_string_pretty(&settings).unwrap_or_default();
+    if is_gateway_url(&settings_txt)
+        || settings_txt.contains("aitoolplus-gateway")
+        || settings_txt.contains("PROXY_TOKEN_PLACEHOLDER")
+        || settings_txt.contains("PROXY_MANAGED")
+    {
+        tracing::warn!("Rejecting upsert_live: settings contains gateway proxy endpoint ({tool:?})");
+        return false;
+    }
     // The live runtime is authoritative for what is currently applied.
     for provider in providers.iter_mut() {
         provider.is_applied = false;
@@ -59,6 +71,24 @@ fn read_json(path: &std::path::Path) -> Option<Value> {
         .and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
+pub fn is_gateway_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.contains("127.0.0.1")
+        || lower.contains("localhost")
+        || lower.contains("0.0.0.0")
+        || lower.contains("[::1]")
+        || lower.contains("15721")
+        || lower.contains("15728")
+}
+
+pub fn is_gateway_token(token: &str) -> bool {
+    let t = token.trim();
+    t == "aitoolplus-gateway"
+        || t == "PROXY_MANAGED"
+        || t == "PROXY_API_KEY"
+        || t == "PROXY_TOKEN_PLACEHOLDER"
+}
+
 /// Claude Code: reconstruct the provider from settings.json's managed env.
 pub fn import_claude_current(paths: &Paths, providers: &mut Vec<ProviderRecord>) -> bool {
     let settings_path = paths.primary_config(ToolId::ClaudeCode);
@@ -78,11 +108,36 @@ pub fn import_claude_current(paths: &Paths, providers: &mut Vec<ProviderRecord>)
         .get("ANTHROPIC_BASE_URL")
         .and_then(Value::as_str)
         .unwrap_or("official");
+
+    let auth_token = managed
+        .get("ANTHROPIC_AUTH_TOKEN")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    // Never import local gateway proxy redirection as a user provider! (cc-switch parity)
+    if is_gateway_url(base_url) || is_gateway_token(auth_token) {
+        tracing::info!("Skipping Claude live import: config is currently taken over by Gateway proxy");
+        return false;
+    }
+
+    // Also check if manifest exists for Claude
+    let claude_manifest = crate::gateway::cli_proxy::manifest::CliProxyManifest::read(paths, crate::gateway::types::GatewayCliKey::Claude);
+    if claude_manifest.is_some() {
+        tracing::info!("Skipping Claude live import: CLI is currently taken over by Gateway proxy");
+        return false;
+    }
+
     let name = if base_url == "official" {
         "官方 / Official".to_string()
     } else {
         host_of(base_url).unwrap_or_else(|| base_url.to_string())
     };
+
+    if is_gateway_url(&name) {
+        tracing::warn!("Skipping Claude live import: host is gateway address ({name})");
+        return false;
+    }
+
     upsert_live(
         providers,
         ToolId::ClaudeCode,
@@ -119,6 +174,13 @@ pub fn import_codex_current(paths: &Paths, providers: &mut Vec<ProviderRecord>) 
         .and_then(|t| t.get("base_url"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    // Check if manifest exists for Codex
+    let codex_manifest = crate::gateway::cli_proxy::manifest::CliProxyManifest::read(paths, crate::gateway::types::GatewayCliKey::Codex);
+    if codex_manifest.is_some() {
+        tracing::info!("Skipping Codex live import: CLI is currently taken over by Gateway proxy");
+        return false;
+    }
+
     if base_url.is_empty() && selector == "openai" {
         // official OpenAI needs no table
         return upsert_live(
@@ -132,6 +194,10 @@ pub fn import_codex_current(paths: &Paths, providers: &mut Vec<ProviderRecord>) 
         );
     }
     if base_url.is_empty() {
+        return false;
+    }
+    if is_gateway_url(base_url) || is_gateway_token(selector) {
+        tracing::info!("Skipping Codex live import: config is currently taken over by Gateway proxy");
         return false;
     }
 
@@ -576,6 +642,32 @@ mod tests {
         assert!(!import_gemini_current(&paths, &mut providers));
         assert!(!import_opencode_current(&paths, &mut providers));
         assert!(!import_grok_current(&paths, &mut providers));
+        assert!(providers.is_empty());
+    }
+
+    #[test]
+    fn gateway_takeover_configs_never_imported_as_providers() {
+        let (_dir, paths) = setup();
+        let root = paths.tool_root(ToolId::ClaudeCode);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("settings.json"),
+            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "aitoolplus-gateway", "ANTHROPIC_BASE_URL": "http://127.0.0.1:15728/anthropic", "ANTHROPIC_MODEL": "opus"}}"#,
+        )
+        .unwrap();
+        let mut providers = vec![];
+        assert!(!import_claude_current(&paths, &mut providers));
+        assert!(providers.is_empty());
+
+        // Also test upsert_live directly rejects 127.0.0.1
+        let rejected = upsert_live(
+            &mut providers,
+            ToolId::ClaudeCode,
+            "127.0.0.1",
+            "custom",
+            serde_json::json!({ "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:15728" } }),
+        );
+        assert!(!rejected);
         assert!(providers.is_empty());
     }
 }

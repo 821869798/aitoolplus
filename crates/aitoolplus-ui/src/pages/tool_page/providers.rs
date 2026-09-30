@@ -3,7 +3,7 @@ use aitoolplus_core::pi_pages::PiModelSettings;
 use aitoolplus_core::providers::{CATEGORIES, ProviderRecord};
 use aitoolplus_core::session::{self, SessionMeta};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, deferred, div, prelude::*, px, uniform_list};
+use gpui::{Context, IntoElement, MouseButton, deferred, div, prelude::*, px, uniform_list};
 use gpui_kit::base::{Align, ElementExt as _, Placement, Positioner, POPUP_PRIORITY};
 use serde_json::Value;
 
@@ -77,6 +77,167 @@ pub(super) fn providers_section(
                 )),
         );
     }
+    let cli_key = match tool {
+        ToolId::ClaudeCode => Some(aitoolplus_core::gateway::GatewayCliKey::Claude),
+        ToolId::Codex => Some(aitoolplus_core::gateway::GatewayCliKey::Codex),
+        _ => None,
+    };
+
+    if let Some(cli) = cli_key {
+        let manifest = aitoolplus_core::gateway::CliProxyManifest::read(&ws.paths, cli);
+        let is_taken_over = manifest.as_ref().map(|m| m.enabled).unwrap_or(false);
+        let is_aggregate = manifest.as_ref().map(|m| m.mode == aitoolplus_core::gateway::GatewayProxyMode::Aggregate).unwrap_or(false);
+        let gw_running = ws.ui.gateway_status.as_ref().map(|s| s.running).unwrap_or(false);
+        let cli_str = cli.as_str();
+
+        let capsule_label = if is_aggregate {
+            "网关已接管 (聚合模式)"
+        } else {
+            "网关已接管 (故障转移)"
+        };
+
+        let capsule = if is_taken_over && gw_running {
+            div()
+                .id(gpui::SharedString::from(format!("gw-capsule-{cli_str}")))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(10.0))
+                .py(px(4.0))
+                .rounded(px(16.0))
+                .bg(t.success.opacity(0.12))
+                .border_1()
+                .border_color(t.success.opacity(0.35))
+                .hover(|s| s.bg(t.success.opacity(0.2)))
+                .child(
+                    div()
+                        .w(px(7.0))
+                        .h(px(7.0))
+                        .rounded(px(4.0))
+                        .bg(t.success),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.success)
+                        .child(capsule_label),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(t.text_muted)
+                        .hover(|s| s.text_color(t.danger))
+                        .child("· 恢复直连"),
+                )
+                .on_mouse_down(MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                    ws.restore_cli_takeover(cli, cx);
+                }))
+        } else if is_taken_over && !gw_running {
+            div()
+                .id(gpui::SharedString::from(format!("gw-capsule-{cli_str}")))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(10.0))
+                .py(px(4.0))
+                .rounded(px(16.0))
+                .bg(t.warning.opacity(0.12))
+                .border_1()
+                .border_color(t.warning.opacity(0.35))
+                .hover(|s| s.bg(t.warning.opacity(0.2)))
+                .child(
+                    div()
+                        .w(px(7.0))
+                        .h(px(7.0))
+                        .rounded(px(4.0))
+                        .bg(t.warning),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(t.warning)
+                        .child("网关已停止 (点击启动)"),
+                )
+                .on_mouse_down(MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                    ws.start_gateway_server(cx);
+                }))
+        } else {
+            div()
+                .id(gpui::SharedString::from(format!("gw-capsule-{cli_str}")))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(10.0))
+                .py(px(4.0))
+                .rounded(px(16.0))
+                .bg(t.card_bg)
+                .border_1()
+                .border_color(t.card_border)
+                .hover(|s| s.bg(t.card_hover).border_color(t.accent))
+                .child(
+                    div()
+                        .w(px(7.0))
+                        .h(px(7.0))
+                        .rounded(px(4.0))
+                        .bg(t.text_muted),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(t.text_secondary)
+                        .child("官方直连 (点击网关接管)"),
+                )
+                .on_mouse_down(MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                    ws.engage_cli_takeover(cli, cx);
+                }))
+        };
+
+        actions = actions.child(capsule);
+
+        if cli == aitoolplus_core::gateway::GatewayCliKey::Codex && is_taken_over && gw_running {
+            let next_mode = if is_aggregate {
+                aitoolplus_core::gateway::GatewayProxyMode::Failover
+            } else {
+                aitoolplus_core::gateway::GatewayProxyMode::Aggregate
+            };
+            let next_label = if is_aggregate { "切为故障转移" } else { "切为聚合模式" };
+
+            actions = actions.child(
+                div()
+                    .id(gpui::SharedString::from(format!("gw-mode-toggle-{cli_str}")))
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .rounded(px(16.0))
+                    .bg(t.accent.opacity(0.12))
+                    .border_1()
+                    .border_color(t.accent.opacity(0.35))
+                    .hover(|s| s.bg(t.accent.opacity(0.22)))
+                    .child(
+                        crate::icons::svg_icon(crate::icons::LAYOUT_GRID_SVG, px(12.0), t.accent)
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(t.accent)
+                            .child(next_label)
+                    )
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                        ws.switch_gateway_cli_mode(cli, next_mode, cx);
+                    }))
+            );
+        }
+    }
+
     actions = actions
         .child(button_with_icon_l(
             "prov-test-all",
@@ -136,7 +297,65 @@ pub(super) fn providers_section(
         let mut list = div().flex().flex_col().gap(px(10.0));
         let total = providers.len();
         for (index, provider) in providers.iter().enumerate() {
+            // Drop indicator line BEFORE this card (when dragging UP towards index)
+            if let Some(crate::pages::DragReorderState::Provider { tool: dt, from_index, hover_index: Some(h_idx) }) = ws.ui.drag_reorder {
+                if dt == tool && h_idx == index && from_index > index {
+                    list = list.child(crate::pages::render_drop_indicator_line(&t));
+                }
+            }
             list = list.child(provider_row(tool, provider, index, total, ws, cx));
+            // Drop indicator line AFTER this card (when dragging DOWN towards index)
+            if let Some(crate::pages::DragReorderState::Provider { tool: dt, from_index, hover_index: Some(h_idx) }) = ws.ui.drag_reorder {
+                if dt == tool && h_idx == index && from_index < index {
+                    list = list.child(crate::pages::render_drop_indicator_line(&t));
+                }
+            }
+        }
+        if let Some(crate::pages::DragReorderState::Provider { tool: dt, hover_index: Some(h_idx), .. }) = ws.ui.drag_reorder {
+            if dt == tool && h_idx >= total {
+                list = list.child(crate::pages::render_drop_indicator_line(&t));
+            }
+        }
+
+        if let Some(crate::pages::DragReorderState::Provider { tool: dt, .. }) = ws.ui.drag_reorder {
+            if dt == tool {
+                list = list.child(
+                    div()
+                        .h(px(28.0))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(t.accent.opacity(0.3))
+                        .bg(t.accent.opacity(0.04))
+                        .text_xs()
+                        .text_color(t.accent)
+                        .child("移至末尾")
+                        .on_mouse_move(cx.listener(move |ws, _, _, cx| {
+                            if let Some(crate::pages::DragReorderState::Provider { tool: t, from_index, hover_index }) = ws.ui.drag_reorder {
+                                if t == tool && hover_index != Some(total) {
+                                    ws.ui.drag_reorder = Some(crate::pages::DragReorderState::Provider {
+                                        tool,
+                                        from_index,
+                                        hover_index: Some(total),
+                                    });
+                                    cx.notify();
+                                }
+                            }
+                        }))
+                        .on_mouse_up(MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                            if let Some(crate::pages::DragReorderState::Provider { tool: t, from_index, .. }) = ws.ui.drag_reorder.take() {
+                                if t == tool {
+                                    ws.reorder_provider(tool, from_index, total, cx);
+                                }
+                                cx.notify();
+                            }
+                        }))
+                );
+            }
         }
         section = section.child(list);
     }
@@ -151,6 +370,7 @@ pub(super) fn card_icon_btn(
     is_danger: bool,
     t: &crate::theme::Theme,
     cx: &mut Context<Workspace>,
+
     on_click: impl Fn(&mut Workspace, &gpui::ClickEvent, &mut gpui::Window, &mut Context<Workspace>) + 'static,
 ) -> gpui::AnyElement {
     crate::components::icon_button_svg(id, icon_svg, tooltip, is_danger, t, cx, on_click)
@@ -206,7 +426,7 @@ pub(super) fn provider_row(
     tool: ToolId,
     p: &ProviderRecord,
     index: usize,
-    total: usize,
+    _total: usize,
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) -> gpui::AnyElement {
@@ -216,9 +436,17 @@ pub(super) fn provider_row(
     let pid2 = p.id.clone();
     let pid4 = p.id.clone();
     let pid_models = p.id.clone();
-    let pid_up = p.id.clone();
-    let pid_down = p.id.clone();
     let pid_test = p.id.clone();
+
+    let card_cli_key = match tool {
+        ToolId::ClaudeCode => Some(aitoolplus_core::gateway::GatewayCliKey::Claude),
+        ToolId::Codex => Some(aitoolplus_core::gateway::GatewayCliKey::Codex),
+        _ => None,
+    };
+    let card_manifest = card_cli_key
+        .and_then(|cli| aitoolplus_core::gateway::CliProxyManifest::read(&ws.paths, cli));
+    let is_gateway_taken_over = card_manifest.as_ref().map(|m| m.enabled).unwrap_or(false);
+    let is_gateway_aggregate = card_manifest.as_ref().map(|m| m.mode == aitoolplus_core::gateway::GatewayProxyMode::Aggregate).unwrap_or(false);
 
     let avatar_spec = crate::icons::provider_avatar_spec(tool, &p.name, &p.category, &t);
     let subtitle = extract_provider_subtitle(tool, p, &i);
@@ -262,26 +490,65 @@ pub(super) fn provider_row(
     let is_official =
         p.category == "official" || aitoolplus_core::providers::is_official_provider(tool, &p.id);
 
+    let rank_num = index + 1;
+    let is_this_being_dragged = matches!(
+        ws.ui.drag_reorder,
+        Some(crate::pages::DragReorderState::Provider { tool: dt, from_index, .. }) if dt == tool && from_index == index
+    );
+
+    let drag_handle = div()
+        .id(gpui::SharedString::from(format!("drag-handle-{}", p.id)))
+        .flex()
+        .items_center()
+        .gap(px(5.0))
+        .px(px(7.0))
+        .py(px(4.0))
+        .rounded(px(6.0))
+        .bg(if is_this_being_dragged {
+            t.accent.opacity(0.2)
+        } else if p.is_applied {
+            t.accent.opacity(0.12)
+        } else {
+            t.card_border.opacity(0.35)
+        })
+        .border_1()
+        .border_color(if is_this_being_dragged || p.is_applied { t.accent.opacity(0.3) } else { t.card_border })
+        .cursor_grab()
+        .hover(|s| s.bg(t.card_hover).border_color(t.accent))
+        .active(|s| s.cursor_grabbing())
+        .on_mouse_down(MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+            ws.ui.drag_reorder = Some(crate::pages::DragReorderState::Provider {
+                tool,
+                from_index: index,
+                hover_index: Some(index),
+            });
+            cx.notify();
+        }))
+        .tooltip(move |_win, cx| {
+            cx.new(|_| Tooltip::new(format!("第 {} 顺位 · 拖拽调整顺序", rank_num))).into()
+        })
+        .child(
+            gpui::svg()
+                .data(crate::icons::GRIP_VERTICAL_SVG)
+                .size(px(13.0))
+                .text_color(if p.is_applied || is_this_being_dragged { t.accent } else { t.text_muted })
+                .hover(|s| s.text_color(t.accent)),
+        )
+        .child(
+            div()
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(if p.is_applied || is_this_being_dragged { t.accent } else { t.text_secondary })
+                .child(format!("#{}", rank_num)),
+        );
+
     let left = div()
         .flex()
         .items_center()
-        .gap(px(12.0))
+        .gap(px(10.0))
         .min_w(px(0.0))
         .flex_1()
-        .child(
-            div()
-                .size(px(16.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_grab()
-                .child(
-                    gpui::svg()
-                        .data(crate::icons::GRIP_VERTICAL_SVG)
-                        .size(px(14.0))
-                        .text_color(if t.is_dark { crate::rgba_const(0xffffff28) } else { crate::rgba_const(0x00000028) }),
-                ),
-        )
+        .child(drag_handle)
         .child(match avatar_spec {
             crate::icons::ProviderAvatarSpec::Svg { svg_data, bg, fg } => {
                 div()
@@ -342,6 +609,22 @@ pub(super) fn provider_row(
                                 .text_color(t.text_primary)
                                 .child(p.name.clone()),
                         )
+                        .when(tool == ToolId::Codex && is_gateway_taken_over && is_gateway_aggregate, |el| {
+                            let prefix = aitoolplus_core::gateway::cli_proxy::codex::sanitize_prefix(&p.name);
+                            el.child(
+                                div()
+                                    .px(px(6.0))
+                                    .py(px(1.5))
+                                    .rounded(px(4.0))
+                                    .bg(t.accent.opacity(0.12))
+                                    .border_1()
+                                    .border_color(t.accent.opacity(0.25))
+                                    .text_size(px(11.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(t.accent)
+                                    .child(format!("{prefix}.*"))
+                            )
+                        })
                         .children(is_official.then(|| {
                             crate::components::badge(&t, i.t("tool_providers.official"), crate::components::BadgeKind::Neutral)
                         }))
@@ -463,6 +746,11 @@ pub(super) fn provider_row(
                 ))
         );
     } else if p.is_applied {
+        let in_use_text = if is_gateway_taken_over {
+            gpui::SharedString::from(if is_gateway_aggregate { "P0 · 聚合主控" } else { "P0 · 当前接管" })
+        } else {
+            i.t("tool_providers.in_use")
+        };
         actions = actions.child(
             div()
                 .px(px(14.0))
@@ -483,9 +771,14 @@ pub(super) fn provider_row(
                         .text_color(crate::rgba_const(0xffffffff))
                         .flex_none(),
                 )
-                .child(i.t("tool_providers.in_use")),
+                .child(in_use_text),
         );
     } else {
+        let (apply_text, is_p0_action) = if is_gateway_taken_over {
+            (gpui::SharedString::from("设为 P0"), true)
+        } else {
+            (i.t("tool_providers.enable"), false)
+        };
         actions = actions.child(
             div()
                 .id(gpui::SharedString::from(format!("prov-apply-{pid}")))
@@ -493,25 +786,33 @@ pub(super) fn provider_row(
                 .px(px(14.0))
                 .py(px(5.0))
                 .rounded(px(16.0))
-                .bg(t.card_hover)
+                .bg(if is_p0_action { t.accent.opacity(0.12) } else { t.card_hover })
+                .border_1()
+                .border_color(if is_p0_action { t.accent.opacity(0.3) } else { t.card_border.opacity(0.0) })
                 .text_size(px(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(t.text_secondary)
+                .text_color(if is_p0_action { t.accent } else { t.text_secondary })
                 .hover(|h| h.bg(t.row_hover).text_color(t.text_primary))
                 .on_click(cx.listener(move |ws, _, _, cx| {
-                    ws.apply_provider(tool, &pid, cx);
+                    if is_gateway_taken_over {
+                        if let Some(cli) = card_cli_key {
+                            ws.set_gateway_primary_provider(cli, &pid, cx);
+                        }
+                    } else {
+                        ws.apply_provider(tool, &pid, cx);
+                    }
                 }))
                 .flex()
                 .items_center()
                 .gap(px(5.0))
                 .child(
                     gpui::svg()
-                        .data(crate::icons::PLAY_SVG)
+                        .data(if is_p0_action { crate::icons::ZAP_SVG } else { crate::icons::PLAY_SVG })
                         .size(px(10.5))
-                        .text_color(t.text_muted)
+                        .text_color(if is_p0_action { t.accent } else { t.text_muted })
                         .flex_none(),
                 )
-                .child(i.t("tool_providers.enable")),
+                .child(apply_text),
         );
     }
 
@@ -591,49 +892,6 @@ pub(super) fn provider_row(
                 cx.notify();
             },
         ));
-    }
-
-    if total > 1 {
-        if index > 0 {
-            actions = actions.child(card_icon_btn(
-                format!("prov-up-{pid_up}"),
-                crate::icons::CHEVRON_UP_SVG,
-                i.t("tool_providers.move_up"),
-                false,
-                &t,
-                cx,
-                move |ws, _ev, _w, cx| {
-                    let _ = ws.store.update(|store| {
-                        let providers = &mut store.tool_mut(tool).providers;
-                        if let Some(from) = providers.iter().position(|p| p.id == pid_up) {
-                            aitoolplus_core::providers::reorder(providers, from, from - 1);
-                        }
-                    });
-                    ws.persist_store();
-                    cx.notify();
-                },
-            ));
-        }
-        if index + 1 < total {
-            actions = actions.child(card_icon_btn(
-                format!("prov-down-{pid_down}"),
-                crate::icons::CHEVRON_DOWN_SVG,
-                i.t("tool_providers.move_down"),
-                false,
-                &t,
-                cx,
-                move |ws, _ev, _w, cx| {
-                    let _ = ws.store.update(|store| {
-                        let providers = &mut store.tool_mut(tool).providers;
-                        if let Some(from) = providers.iter().position(|p| p.id == pid_down) {
-                            aitoolplus_core::providers::reorder(providers, from, from + 1);
-                        }
-                    });
-                    ws.persist_store();
-                    cx.notify();
-                },
-            ));
-        }
     }
 
     if !is_official {
@@ -727,10 +985,42 @@ pub(super) fn provider_row(
         .px(px(18.0))
         .py(px(14.0))
         .rounded(px(12.0))
-        .bg(bg_color)
+        .bg(if is_this_being_dragged {
+            bg_color.opacity(0.55)
+        } else {
+            bg_color
+        })
         .border_1()
-        .border_color(border_color)
+        .border_color(if is_this_being_dragged {
+            t.accent
+        } else {
+            border_color
+        })
         .shadow_xs()
+        .when(is_this_being_dragged, |el| el.opacity(0.65))
+        .on_mouse_move(cx.listener(move |ws, _, _, cx| {
+            if let Some(crate::pages::DragReorderState::Provider { tool: dt, from_index, hover_index }) = ws.ui.drag_reorder {
+                if dt == tool && hover_index != Some(index) {
+                    ws.ui.drag_reorder = Some(crate::pages::DragReorderState::Provider {
+                        tool,
+                        from_index,
+                        hover_index: Some(index),
+                    });
+                    cx.notify();
+                }
+            }
+        }))
+        .on_mouse_up(MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+            if let Some(crate::pages::DragReorderState::Provider { tool: dt, from_index, hover_index }) = ws.ui.drag_reorder.take() {
+                if dt == tool {
+                    let to = hover_index.unwrap_or(index);
+                    if from_index != to {
+                        ws.reorder_provider(tool, from_index, to, cx);
+                    }
+                }
+                cx.notify();
+            }
+        }))
         .hover(move |h| {
             h.bg(hover_bg).border_color(hover_border)
         })

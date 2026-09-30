@@ -72,7 +72,11 @@ impl TrayMenuUpdater {
     }
 }
 
-pub fn init_tray(initial_groups: ToolGroupSnapshot, cx: &mut GpuiApp) -> TrayMenuUpdater {
+pub fn init_tray(
+    initial_groups: ToolGroupSnapshot,
+    paths: std::sync::Arc<aitoolplus_core::paths::Paths>,
+    cx: &mut GpuiApp,
+) -> TrayMenuUpdater {
     #[cfg(windows)]
     set_main_thread_id(unsafe { windows::Win32::System::Threading::GetCurrentThreadId() });
 
@@ -143,6 +147,7 @@ pub fn init_tray(initial_groups: ToolGroupSnapshot, cx: &mut GpuiApp) -> TrayMen
     }));
 
     let updater_for_pump = updater.clone();
+    let paths_for_quit = paths.clone();
     cx.spawn(async move |cx| {
         while let Ok(action) = rx.recv().await {
             match action {
@@ -154,6 +159,7 @@ pub fn init_tray(initial_groups: ToolGroupSnapshot, cx: &mut GpuiApp) -> TrayMen
                     }
                 }
                 TrayAction::Quit => {
+                    crate::app::cleanup_on_app_exit(&paths_for_quit);
                     crate::app::request_quit();
                     tray_icon.set_visible(false).ok();
                     cx.update(|cx| cx.quit());

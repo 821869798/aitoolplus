@@ -100,7 +100,7 @@ fn main() {
         let initial_groups = tray::snapshot_from_store(
             application.store.as_ref().expect("store").store(),
         );
-        let tray_updater = tray::init_tray(initial_groups, cx);
+        let tray_updater = tray::init_tray(initial_groups, application.paths.clone(), cx);
 
         if let Err(e) = app::open_main_window(&mut application, tray_updater.clone(), cx) {
             tracing::error!("failed to open main window: {e}");

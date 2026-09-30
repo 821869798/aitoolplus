@@ -15,6 +15,28 @@ pub fn request_quit() {
     ALLOW_WINDOW_CLOSE.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// Parity with cc-switch cleanup_before_exit:
+/// If any CLI config is taken over by Gateway proxy (has backup/manifest or 127.0.0.1),
+/// restore the real configuration back before quitting so CLI tools don't try to connect to a dead port!
+pub fn cleanup_on_app_exit(paths: &Paths) {
+    tracing::info!("cleanup_on_app_exit: checking active Gateway CLI takeovers before quit (parity with cc-switch)");
+
+    for cli in [
+        aitoolplus_core::gateway::GatewayCliKey::Claude,
+        aitoolplus_core::gateway::GatewayCliKey::Codex,
+    ] {
+        let manifest_exists = aitoolplus_core::gateway::CliProxyManifest::read(paths, cli).is_some();
+        let status = aitoolplus_core::gateway::get_cli_takeover_status(paths, cli);
+        let backup_dir = aitoolplus_core::gateway::CliProxyManifest::backup_dir(paths, cli);
+        let has_backup = backup_dir.exists() && std::fs::read_dir(&backup_dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+
+        if manifest_exists || status.enabled || has_backup {
+            tracing::info!("Restoring {:?} to direct mode before exit", cli);
+            let _ = aitoolplus_core::gateway::restore_cli_direct(paths, cli);
+        }
+    }
+}
+
 #[cfg(windows)]
 pub fn get_window_hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundation::HWND> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -381,6 +403,7 @@ pub fn open_main_window(
             )
         });
         let weak_workspace = workspace.downgrade();
+        let paths_for_close = paths.clone();
         window.on_window_should_close(cx, move |window, cx| {
             if ALLOW_WINDOW_CLOSE.load(std::sync::atomic::Ordering::SeqCst) {
                 return true;
@@ -401,6 +424,7 @@ pub fn open_main_window(
                 .detach();
                 false
             } else {
+                crate::app::cleanup_on_app_exit(&paths_for_close);
                 crate::app::request_quit();
                 cx.quit();
                 true

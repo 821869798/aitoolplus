@@ -26,6 +26,11 @@ sha2.workspace = true
 hmac.workspace = true
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 opener.workspace = true
+tokio = { workspace = true }
+reqwest = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+futures-util = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [

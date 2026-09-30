@@ -17,6 +17,7 @@ pub mod codex_plugins;
 pub mod config;
 pub mod deeplink;
 pub mod dsh;
+pub mod gateway;
 pub mod grok_plugins;
 pub mod hermes;
 pub mod import_current;
@@ -61,3 +62,8 @@ pub use pi_runtime::PiRuntimePaths;
 pub use presets::ProviderPreset;
 pub use tools::ToolId;
 pub use updater::{DownloadProgress, UpdateAsset, UpdateInfo, UpdateMirror};
+pub use gateway::{
+    CircuitBreakerRegistry, GatewayCliKey, GatewayCliTakeoverStatus, GatewayProxyMode,
+    GatewayRequestLogDetail, GatewayRequestLogSummary, GatewayServer, GatewayServerHandle,
+    GatewaySettings, GatewayStatus, RequestLogStore,
+};

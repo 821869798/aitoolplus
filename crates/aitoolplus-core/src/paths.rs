@@ -188,6 +188,16 @@ impl Paths {
     pub fn sync_file(&self) -> PathBuf {
         self.app_data.join("sync.json")
     }
+
+    /// Dedicated directory for local gateway configuration, logs, and takeover manifests.
+    pub fn gateway_dir(&self) -> PathBuf {
+        self.app_data.join("gateway")
+    }
+
+    /// Dedicated directory for gateway request/response payload logs.
+    pub fn gateway_logs_dir(&self) -> PathBuf {
+        self.gateway_dir().join("logs")
+    }
 }
 
 /// The user home dir on this OS.
