@@ -1636,6 +1636,7 @@ pub fn fused_combobox<V: 'static>(
         .min_w(px(0.0))
         .relative();
 
+    let has_label = label.is_some();
     if let Some(lbl) = label {
         col = col.child(
             div()
@@ -1669,15 +1670,19 @@ pub fn fused_combobox<V: 'static>(
             }
         }));
 
+    let on_open_input = on_open.clone();
     let input_wrapper = div()
         .flex_1()
         .min_w(px(0.0))
         .h_full()
         .flex()
         .items_center()
-        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |view, _, window, cx| {
             cx.stop_propagation();
-        })
+            if !is_open {
+                on_open_input(view, window, cx);
+            }
+        }))
         .child(input_entity.clone());
 
     let mut right_icons = div()
@@ -1700,7 +1705,7 @@ pub fn fused_combobox<V: 'static>(
                 .text_color(t.text_muted)
                 .hover(|h| h.text_color(t.text_primary))
                 .child("✕")
-                .on_click(cx.listener(move |view, _, window, cx| {
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |view, _, window, cx| {
                     cx.stop_propagation();
                     on_clear_click(view, window, cx);
                 })),
@@ -1728,7 +1733,7 @@ pub fn fused_combobox<V: 'static>(
                     .size(px(12.0))
                     .text_color(if is_open { t.accent } else { t.text_muted }),
             )
-            .on_click(cx.listener(move |view, _, window, cx| {
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |view, _, window, cx| {
                 cx.stop_propagation();
                 if is_open {
                     on_close_chevron(view, cx);
@@ -1742,12 +1747,13 @@ pub fn fused_combobox<V: 'static>(
     col = col.child(trigger_box);
 
     if is_open {
+        let top_offset = if has_label { px(60.0) } else { px(38.0) };
         let on_close_out = on_close.clone();
         let mut dropdown_menu = div()
             .id(SharedString::from(format!("{id_str}-menu")))
             .occlude()
             .absolute()
-            .top(px(60.0))
+            .top(top_offset)
             .left_0()
             .w_full()
             .rounded(px(8.0))
@@ -1849,7 +1855,8 @@ pub fn fused_combobox<V: 'static>(
                     );
                 }
 
-                opt_row = opt_row.on_click(cx.listener(move |view, _, window, cx| {
+                opt_row = opt_row.on_mouse_down(gpui::MouseButton::Left, cx.listener(move |view, _, window, cx| {
+                    cx.stop_propagation();
                     on_select_click(view, opt_for_click.clone(), window, cx);
                 }));
 

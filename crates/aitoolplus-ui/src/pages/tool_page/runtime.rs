@@ -770,6 +770,11 @@ pub(super) fn pi_searchable_select(
         &t,
         cx,
         move |ws, window, cx| {
+            if let Some((field, instant)) = ws.ui.pi_dropdown_just_closed {
+                if field == f && instant.elapsed() < std::time::Duration::from_millis(200) {
+                    return;
+                }
+            }
             ws.ui.pi_dropdown_open = Some(f);
             ws.ui.pi_dropdown_typing = false;
             input_ent_open.update(cx, |inp, cx| {
