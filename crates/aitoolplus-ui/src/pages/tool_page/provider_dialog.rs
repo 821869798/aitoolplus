@@ -566,7 +566,7 @@ pub fn open_provider_dialog(
             image_input: false,
             context_window: cw_ent,
             max_tokens: mt_ent,
-            is_expanded: false,
+            is_expanded: true,
         });
     }
 
@@ -2022,7 +2022,7 @@ pub fn render_provider_dialog(
                                                 image_input: false,
                                                 context_window: cw_ent,
                                                 max_tokens: mt_ent,
-                                                is_expanded: false,
+                                                is_expanded: true,
                                             });
                                             let msg = ws.i18n.t("tool_dialog.model_row_added").to_string();
                                             ws.ui.toast(msg, false);
