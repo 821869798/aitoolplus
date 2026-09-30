@@ -9,7 +9,7 @@ use aitoolplus_core::providers::ProviderRecord;
 use aitoolplus_core::settings::{AppSettings, Language as CoreLanguage};
 use aitoolplus_core::store::{Store, StoreHandle};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, MouseButton, Render, Window, div, prelude::*, px};
 
 use crate::i18n::I18n;
 use crate::pages::{self, Page, WorkspaceState};
@@ -41,6 +41,7 @@ pub struct Workspace {
     pub callbacks: WorkspaceCallbacks,
     /// Root focus handle for window focus requests.
     root_focus: gpui::FocusHandle,
+    pub gateway_handle: Option<Arc<aitoolplus_core::gateway::GatewayServerHandle>>,
 }
 
 impl Workspace {
@@ -54,27 +55,51 @@ impl Workspace {
         // Discover the user's existing live configurations before the first
         // render. This is cc-switch first-run parity: already-working CLI
         // configs appear as applied providers instead of empty pages.
+        let claude_taken_over = aitoolplus_core::gateway::get_cli_takeover_status(
+            &paths,
+            aitoolplus_core::gateway::GatewayCliKey::Claude,
+        )
+        .enabled;
+        let codex_taken_over = aitoolplus_core::gateway::get_cli_takeover_status(
+            &paths,
+            aitoolplus_core::gateway::GatewayCliKey::Codex,
+        )
+        .enabled;
+
         let _ = store.update(|db| {
-            let _ = aitoolplus_core::import_current::import_claude_current(
-                &paths,
-                &mut db.tool_mut(ToolId::ClaudeCode).providers,
-            );
-            let _ = aitoolplus_core::import_current::import_codex_current(
-                &paths,
-                &mut db.tool_mut(ToolId::Codex).providers,
-            );
-            let _ = aitoolplus_core::import_current::import_gemini_current(
-                &paths,
-                &mut db.tool_mut(ToolId::GeminiCli).providers,
-            );
-            let _ = aitoolplus_core::import_current::import_opencode_current(
-                &paths,
-                &mut db.tool_mut(ToolId::OpenCode).providers,
-            );
-            let _ = aitoolplus_core::import_current::import_grok_current(
-                &paths,
-                &mut db.tool_mut(ToolId::Grok).providers,
-            );
+            // Parity with cc-switch `should_import_default_config_on_startup`:
+            // Only import initial live config on first run when NO providers exist for the tool.
+            // Once providers exist in store.json, store.json is the Single Source of Truth (SSOT).
+            if db.tool(ToolId::ClaudeCode).providers.is_empty() && !claude_taken_over {
+                let _ = aitoolplus_core::import_current::import_claude_current(
+                    &paths,
+                    &mut db.tool_mut(ToolId::ClaudeCode).providers,
+                );
+            }
+            if db.tool(ToolId::Codex).providers.is_empty() && !codex_taken_over {
+                let _ = aitoolplus_core::import_current::import_codex_current(
+                    &paths,
+                    &mut db.tool_mut(ToolId::Codex).providers,
+                );
+            }
+            if db.tool(ToolId::GeminiCli).providers.is_empty() {
+                let _ = aitoolplus_core::import_current::import_gemini_current(
+                    &paths,
+                    &mut db.tool_mut(ToolId::GeminiCli).providers,
+                );
+            }
+            if db.tool(ToolId::OpenCode).providers.is_empty() {
+                let _ = aitoolplus_core::import_current::import_opencode_current(
+                    &paths,
+                    &mut db.tool_mut(ToolId::OpenCode).providers,
+                );
+            }
+            if db.tool(ToolId::Grok).providers.is_empty() {
+                let _ = aitoolplus_core::import_current::import_grok_current(
+                    &paths,
+                    &mut db.tool_mut(ToolId::Grok).providers,
+                );
+            }
 
             // Ensure cc-switch parity official persistent providers.
             for tool in [
@@ -205,6 +230,7 @@ impl Workspace {
             "mcp" => Page::Mcp,
             "skills" => Page::Skills,
             "antigravity" => Page::Antigravity,
+            "gateway" => Page::Gateway,
             "settings" => Page::Settings,
             key => ToolId::from_key(key)
                 .map(Page::Tool)
@@ -241,12 +267,17 @@ impl Workspace {
                     _ => pages::SkillsPageTab::Installed,
                 };
             }
-            if page == Page::Antigravity {
-                ui.antigravity_tab = match tab.as_str() {
-                    "sessions" => pages::AntigravityPageTab::Sessions,
-                    _ => pages::AntigravityPageTab::Accounts,
+            if page == Page::Gateway {
+                ui.gateway_tab = match tab.as_str() {
+                    "failover" | "queue" => pages::GatewayTab::Failover,
+                    "requests" | "logs" | "audit" => pages::GatewayTab::Requests,
+                    "settings" => pages::GatewayTab::Settings,
+                    _ => pages::GatewayTab::Overview,
                 };
             }
+        }
+        if let Ok(req_id) = std::env::var("AITOOLPLUS_OPEN_GATEWAY_REQUEST") {
+            ui.gateway_selected_request = aitoolplus_core::gateway::RequestLogStore::get_detail(&paths, &req_id).unwrap_or(None);
         }
         if let Ok(sess_id) = std::env::var("AITOOLPLUS_START_SESSION") {
             match page {
@@ -271,6 +302,8 @@ impl Workspace {
             };
         }
 
+        ui.gateway_settings = aitoolplus_core::gateway::GatewaySettings::load(&paths);
+
         let root_focus = cx.focus_handle();
         let mut ws = Self {
             paths,
@@ -282,6 +315,7 @@ impl Workspace {
             ui,
             callbacks,
             root_focus,
+            gateway_handle: None,
         };
 
         if let Ok(skill_name_or_id) = std::env::var("AITOOLPLUS_OPEN_SKILL") {
@@ -676,6 +710,34 @@ impl Workspace {
         })
         .detach();
 
+        // Parity with cc-switch restore_proxy_state_on_startup & cleanup_takeover_placeholders_in_live:
+        let mut apps_to_takeover = Vec::new();
+        for (app_key, setting) in &ws.ui.gateway_settings.takeover_apps {
+            if setting.enabled {
+                if let Some(cli) = match app_key.as_str() {
+                    "claude_code" | "claude" => Some(aitoolplus_core::gateway::GatewayCliKey::Claude),
+                    "codex" => Some(aitoolplus_core::gateway::GatewayCliKey::Codex),
+                    _ => None,
+                } {
+                    apps_to_takeover.push((cli, setting.mode, setting.primary_provider_id.clone()));
+                }
+            }
+        }
+
+        let should_start_gateway = ws.ui.gateway_settings.enabled_on_startup || !apps_to_takeover.is_empty();
+        if should_start_gateway {
+            ws.start_gateway_server(cx);
+            let port = ws.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
+            let paths = (*ws.paths).clone();
+            for (cli, mode, primary_id) in apps_to_takeover {
+                let _ = aitoolplus_core::gateway::engage_cli_proxy(&paths, cli, port, mode, primary_id, None);
+            }
+        } else {
+            // Clean up any stale takeover placeholders from a prior force quit / crash
+            aitoolplus_core::gateway::cleanup_takeover_placeholders_in_live(&ws.paths, aitoolplus_core::gateway::GatewayCliKey::Claude);
+            aitoolplus_core::gateway::cleanup_takeover_placeholders_in_live(&ws.paths, aitoolplus_core::gateway::GatewayCliKey::Codex);
+        }
+
         ws
     }
 
@@ -857,25 +919,72 @@ impl Workspace {
             return;
         };
 
-        let adapter = adapter_for(tool);
-        let ctx = ApplyCtx {
-            paths: &self.paths,
-            common_config: &common,
-            provider: &provider,
-            strategy: MergeStrategy::default(),
-            provider_optional: false,
+        let cli_key = match tool {
+            ToolId::ClaudeCode => Some(aitoolplus_core::gateway::GatewayCliKey::Claude),
+            ToolId::Codex => Some(aitoolplus_core::gateway::GatewayCliKey::Codex),
+            _ => None,
         };
-        match adapter.apply(&ctx) {
-            Ok(report) => {
-                let msg = i.raw(
-                    &format!("已应用 {}（{} 个文件）", provider.name, report.files.len()),
-                    &format!("applied {} ({} files)", provider.name, report.files.len()),
+        let takeover_status = cli_key.map(|k| aitoolplus_core::gateway::get_cli_takeover_status(&self.paths, k));
+        let is_taken_over = takeover_status.as_ref().map(|s| s.enabled).unwrap_or(false);
+
+        if is_taken_over {
+            // Parity with cc-switch `sync_live_for_provider_respecting_takeover`:
+            // 1) Update restore snapshot with the provider's direct settings
+            let _ = aitoolplus_core::gateway::update_live_backup_from_provider(
+                &self.paths,
+                cli_key.unwrap(),
+                &provider,
+                &common,
+            );
+            // 2) Project proxy settings on the live file
+            if tool == ToolId::ClaudeCode {
+                let settings_path = self.paths.tool_root(ToolId::ClaudeCode).join("settings.json");
+                let port = self.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
+                let endpoint = aitoolplus_core::gateway::cli_proxy::cli_gateway_endpoint(aitoolplus_core::gateway::GatewayCliKey::Claude, port);
+                let _ = aitoolplus_core::gateway::cli_proxy::claude::patch_claude_settings(
+                    &settings_path,
+                    &endpoint,
+                    Some(&provider),
                 );
-                (self.callbacks.notify)(msg.to_string());
+            } else if tool == ToolId::Codex {
+                let config_path = self.paths.tool_root(ToolId::Codex).join("config.toml");
+                let auth_path = self.paths.tool_root(ToolId::Codex).join("auth.json");
+                let port = self.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
+                let endpoint = aitoolplus_core::gateway::cli_proxy::cli_gateway_endpoint(aitoolplus_core::gateway::GatewayCliKey::Codex, port);
+                let is_aggregate = takeover_status.as_ref().map(|s| s.mode == aitoolplus_core::gateway::GatewayProxyMode::Aggregate).unwrap_or(false);
+                let _ = aitoolplus_core::gateway::cli_proxy::codex::patch_codex_config(
+                    &config_path,
+                    &auth_path,
+                    &endpoint,
+                    is_aggregate,
+                );
             }
-            Err(e) => {
-                let msg = i.raw(&format!("应用失败：{e}"), &format!("apply failed: {e}"));
-                (self.callbacks.notify)(msg.to_string());
+            let msg = i.raw(
+                &format!("已切换至 {}（网关接管中）", provider.name),
+                &format!("switched to {} (gateway takeover active)", provider.name),
+            );
+            (self.callbacks.notify)(msg.to_string());
+        } else {
+            let adapter = adapter_for(tool);
+            let ctx = ApplyCtx {
+                paths: &self.paths,
+                common_config: &common,
+                provider: &provider,
+                strategy: MergeStrategy::default(),
+                provider_optional: false,
+            };
+            match adapter.apply(&ctx) {
+                Ok(report) => {
+                    let msg = i.raw(
+                        &format!("已应用 {}（{} 个文件）", provider.name, report.files.len()),
+                        &format!("applied {} ({} files)", provider.name, report.files.len()),
+                    );
+                    (self.callbacks.notify)(msg.to_string());
+                }
+                Err(e) => {
+                    let msg = i.raw(&format!("应用失败：{e}"), &format!("apply failed: {e}"));
+                    (self.callbacks.notify)(msg.to_string());
+                }
             }
         }
         self.persist_store();
@@ -1217,6 +1326,26 @@ impl Render for Workspace {
             .flex()
             .bg(self.theme.bg)
             .text_color(self.theme.text_primary)
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|ws, _, _, cx| {
+                    if let Some(dragging) = ws.ui.drag_reorder.take() {
+                        match dragging {
+                            crate::pages::DragReorderState::Provider { tool, from_index, hover_index } => {
+                                if let Some(to) = hover_index {
+                                    ws.reorder_provider(tool, from_index, to, cx);
+                                }
+                            }
+                            crate::pages::DragReorderState::GatewayFailover { cli, from_pos, hover_pos } => {
+                                if let Some(to) = hover_pos {
+                                    ws.reorder_gateway_failover_candidate(cli, from_pos, to, cx);
+                                }
+                            }
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
             .child(sidebar)
             .child(right_col);
 
@@ -1248,6 +1377,7 @@ impl Render for Workspace {
             let antigravity_label_edit = self.ui.antigravity_editing_label.clone();
             let update_install_confirm = self.ui.update_install_confirm_dialog.clone();
             let codex_unify = self.ui.codex_unify_dialog.clone();
+            let gateway_selected_req = self.ui.gateway_selected_request.clone();
             let mut out = vec![];
             if let Some(d) = dialogs {
                 out.push(pages::tool_page::render_provider_dialog(d, self, cx));
@@ -1348,6 +1478,9 @@ impl Render for Workspace {
             }
             if let Some(path) = update_install_confirm {
                 out.push(pages::render_update_install_dialog(path, self, cx));
+            }
+            if let Some(req_detail) = gateway_selected_req {
+                out.push(pages::gateway_page::render_request_detail_modal(&req_detail, self, cx));
             }
             out
         } else {
@@ -1571,5 +1704,443 @@ impl Workspace {
             });
         })
         .detach();
+    }
+
+    pub fn refresh_gateway_data(&mut self, cx: &mut Context<Self>) {
+        let paths = (*self.paths).clone();
+        let takeovers = aitoolplus_core::gateway::list_all_takeover_statuses(&paths);
+        let requests = aitoolplus_core::gateway::RequestLogStore::list(&paths, 50, 0).unwrap_or_default();
+        self.ui.gateway_takeovers = takeovers;
+        self.ui.gateway_requests = requests;
+
+        if let Some(h) = &self.gateway_handle {
+            self.ui.gateway_status = Some(h.status());
+        } else {
+            self.ui.gateway_status = Some(aitoolplus_core::gateway::GatewayStatus {
+                running: false,
+                host: "127.0.0.1".into(),
+                port: self.ui.gateway_settings.port,
+                ..Default::default()
+            });
+        }
+        cx.notify();
+    }
+
+    pub fn start_gateway_server(&mut self, cx: &mut Context<Self>) {
+        if self.gateway_handle.is_some() {
+            return;
+        }
+        self.ui.gateway_busy = true;
+        cx.notify();
+
+        let paths = (*self.paths).clone();
+        let settings = self.ui.gateway_settings.clone();
+        let weak = cx.entity().downgrade();
+
+        cx.spawn(async move |_this, cx| {
+            let res = cx
+                .background_spawn(async move {
+                    aitoolplus_core::gateway::GatewayServer::start_sync(paths, settings)
+                })
+                .await;
+
+            let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                ws.ui.gateway_busy = false;
+                match res {
+                    Ok(handle) => {
+                        ws.ui.gateway_status = Some(handle.status());
+                        ws.gateway_handle = Some(Arc::new(handle));
+                        ws.ui.toast("本地网关已启动", false);
+                    }
+                    Err(e) => {
+                        ws.ui.toast(format!("启动网关失败: {e}"), true);
+                    }
+                }
+                ws.refresh_gateway_data(cx);
+            });
+        })
+        .detach();
+    }
+
+    pub fn stop_gateway_server(&mut self, cx: &mut Context<Self>) {
+        // Preflight check: are any CLIs currently taken over?
+        let paths = (*self.paths).clone();
+        let taken_over_clis = [
+            aitoolplus_core::gateway::GatewayCliKey::Claude,
+            aitoolplus_core::gateway::GatewayCliKey::Codex,
+        ]
+        .into_iter()
+        .filter(|&cli| {
+            aitoolplus_core::gateway::CliProxyManifest::read(&paths, cli)
+                .map(|m| m.enabled)
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+
+        if !taken_over_clis.is_empty() {
+            // Auto-restore direct mode for all taken over CLIs to protect the user
+            for cli in &taken_over_clis {
+                let _ = aitoolplus_core::gateway::restore_cli_direct(&paths, *cli);
+            }
+            let names = taken_over_clis
+                .iter()
+                .map(|c| c.display_name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.ui.toast(
+                format!("网关已停止，并已自动将 {} 恢复为直连模式以防止断网", names),
+                false,
+            );
+        } else {
+            self.ui.toast("本地网关已停止", false);
+        }
+
+        if let Some(handle) = self.gateway_handle.take() {
+            handle.stop();
+        }
+        self.refresh_gateway_data(cx);
+    }
+
+    pub fn set_gateway_primary_provider(
+        &mut self,
+        cli: aitoolplus_core::gateway::GatewayCliKey,
+        provider_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let tool = match cli {
+            aitoolplus_core::gateway::GatewayCliKey::Claude => ToolId::ClaudeCode,
+            aitoolplus_core::gateway::GatewayCliKey::Codex => ToolId::Codex,
+            _ => return,
+        };
+        let _ = self.store.update(|store| {
+            let section = store.tool_mut(tool);
+            aitoolplus_core::providers::select(&mut section.providers, provider_id);
+        });
+        self.persist_store();
+
+        // If currently in takeover mode, update manifest primary_provider_id
+        let paths = (*self.paths).clone();
+        if let Some(mut manifest) = aitoolplus_core::gateway::CliProxyManifest::read(&paths, cli) {
+            if manifest.enabled {
+                manifest.primary_provider_id = provider_id.to_string();
+                let _ = manifest.write(&paths);
+            }
+        }
+
+        self.refresh_gateway_data(cx);
+        self.ui.toast("已成功设为 P0 主渠道", false);
+        cx.notify();
+    }
+
+    pub fn move_gateway_failover_provider(
+        &mut self,
+        cli: aitoolplus_core::gateway::GatewayCliKey,
+        provider_id: &str,
+        up: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let tool = match cli {
+            aitoolplus_core::gateway::GatewayCliKey::Claude => ToolId::ClaudeCode,
+            aitoolplus_core::gateway::GatewayCliKey::Codex => ToolId::Codex,
+            _ => return,
+        };
+        let paths = (*self.paths).clone();
+        let candidates = aitoolplus_core::gateway::GatewayRouter::resolve_candidates(
+            &paths,
+            cli,
+            aitoolplus_core::gateway::GatewayProxyMode::Failover,
+            None,
+        );
+
+        let Some(pos) = candidates.iter().position(|c| c.provider_id == provider_id) else {
+            return;
+        };
+
+        let target_pos = if up && pos > 1 {
+            pos - 1
+        } else if !up && pos > 0 && pos + 1 < candidates.len() {
+            pos + 1
+        } else {
+            return;
+        };
+
+        let other_id = candidates[target_pos].provider_id.clone();
+
+        let _ = self.store.update(|store| {
+            let section = store.tool_mut(tool);
+            // Reindex non-P0 candidates first
+            for (idx, cand) in candidates.iter().enumerate() {
+                if let Some(p) = section.providers.iter_mut().find(|p| p.id == cand.provider_id) {
+                    p.sort_index = idx as i32;
+                }
+            }
+            // Swap sort_index of the two providers
+            let idx_a = section.providers.iter().position(|p| p.id == provider_id);
+            let idx_b = section.providers.iter().position(|p| p.id == other_id);
+            if let (Some(ia), Some(ib)) = (idx_a, idx_b) {
+                let temp = section.providers[ia].sort_index;
+                section.providers[ia].sort_index = section.providers[ib].sort_index;
+                section.providers[ib].sort_index = temp;
+            }
+        });
+
+        self.persist_store();
+        self.refresh_gateway_data(cx);
+        cx.notify();
+    }
+
+    pub fn reorder_provider(&mut self, tool: ToolId, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to {
+            return;
+        }
+        let mut moved_name = String::new();
+        let result = self.store.update(|store| {
+            let providers = &mut store.tool_mut(tool).providers;
+            if from < providers.len() && to <= providers.len() {
+                moved_name = providers[from].name.clone();
+                let item = providers.remove(from);
+                let insert_idx = to.min(providers.len());
+                providers.insert(insert_idx, item);
+                aitoolplus_core::providers::reindex(providers);
+            }
+        });
+        if result.is_ok() {
+            self.persist_store();
+            if !moved_name.is_empty() {
+                self.ui.toast(format!("已调整「{}」的顺序", moved_name), false);
+            }
+            self.refresh_gateway_data(cx);
+            cx.notify();
+        }
+    }
+
+    pub fn reorder_gateway_failover_candidate(
+        &mut self,
+        cli: aitoolplus_core::gateway::GatewayCliKey,
+        from_pos: usize,
+        to_pos: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if from_pos == to_pos {
+            return;
+        }
+        let tool = match cli {
+            aitoolplus_core::gateway::GatewayCliKey::Claude => ToolId::ClaudeCode,
+            aitoolplus_core::gateway::GatewayCliKey::Codex => ToolId::Codex,
+            _ => return,
+        };
+        let paths = (*self.paths).clone();
+        let candidates = aitoolplus_core::gateway::GatewayRouter::resolve_candidates(
+            &paths,
+            cli,
+            aitoolplus_core::gateway::GatewayProxyMode::Failover,
+            None,
+        );
+        if from_pos >= candidates.len() || to_pos >= candidates.len() {
+            return;
+        }
+        let from_name = candidates[from_pos].provider_name.clone();
+
+        let mut ordered_ids: Vec<String> = candidates.iter().map(|c| c.provider_id.clone()).collect();
+        let item = ordered_ids.remove(from_pos);
+        let insert_idx = to_pos.min(ordered_ids.len());
+        ordered_ids.insert(insert_idx, item);
+
+        let new_p0_id = ordered_ids[0].clone();
+        let old_p0_id = candidates.first().map(|c| c.provider_id.clone());
+        let p0_changed = old_p0_id.as_deref() != Some(&new_p0_id);
+
+        let new_p0_name = candidates
+            .iter()
+            .find(|c| c.provider_id == new_p0_id)
+            .map(|c| c.provider_name.clone())
+            .unwrap_or_else(|| "提供商".to_string());
+
+        let _ = self.store.update(|store| {
+            let section = store.tool_mut(tool);
+            // 1. If P0 changed, mark the new provider at position 0 as selected/applied
+            if p0_changed {
+                aitoolplus_core::providers::select(&mut section.providers, &new_p0_id);
+            }
+
+            // 2. Set sort_index for all candidates according to new failover order
+            for (idx, id) in ordered_ids.iter().enumerate() {
+                if let Some(p) = section.providers.iter_mut().find(|p| p.id == *id) {
+                    p.sort_index = idx as i32;
+                }
+            }
+            section.providers.sort_by_key(|p| p.sort_index);
+            aitoolplus_core::providers::reindex(&mut section.providers);
+        });
+
+        self.persist_store();
+
+        // 3. If currently in takeover mode and P0 changed, update manifest primary_provider_id
+        if p0_changed {
+            if let Some(mut manifest) = aitoolplus_core::gateway::CliProxyManifest::read(&paths, cli) {
+                if manifest.enabled {
+                    manifest.primary_provider_id = new_p0_id.clone();
+                    let _ = manifest.write(&paths);
+                }
+            }
+        }
+
+        self.refresh_gateway_data(cx);
+        if p0_changed {
+            self.ui.toast(format!("已将「{}」设为 P0 主渠道", new_p0_name), false);
+        } else {
+            self.ui.toast(format!("已调整「{}」故障转移顺序", from_name), false);
+        }
+        cx.notify();
+    }
+
+    pub fn engage_cli_takeover(&mut self, cli: aitoolplus_core::gateway::GatewayCliKey, cx: &mut Context<Self>) {
+        self.engage_cli_takeover_with_mode(cli, aitoolplus_core::gateway::GatewayProxyMode::Failover, cx);
+    }
+
+    pub fn engage_cli_takeover_with_mode(
+        &mut self,
+        cli: aitoolplus_core::gateway::GatewayCliKey,
+        mode: aitoolplus_core::gateway::GatewayProxyMode,
+        cx: &mut Context<Self>,
+    ) {
+        let paths = (*self.paths).clone();
+        let port = self.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
+
+        // Auto-start gateway if not already running
+        if self.gateway_handle.is_none() {
+            self.start_gateway_server(cx);
+        }
+
+        let mode_desc = match mode {
+            aitoolplus_core::gateway::GatewayProxyMode::Aggregate => " (聚合模式)",
+            aitoolplus_core::gateway::GatewayProxyMode::Failover => " (故障转移)",
+            aitoolplus_core::gateway::GatewayProxyMode::Single => " (单站点)",
+        };
+
+        let tool_id = match cli {
+            aitoolplus_core::gateway::GatewayCliKey::Claude => ToolId::ClaudeCode,
+            aitoolplus_core::gateway::GatewayCliKey::Codex => ToolId::Codex,
+            _ => ToolId::ClaudeCode,
+        };
+        let store = self.store.store();
+        let tool_section = store.tool(tool_id);
+        let primary_provider = tool_section.providers.iter()
+            .find(|p| p.is_applied && !p.is_disabled)
+            .or_else(|| tool_section.providers.iter().find(|p| !p.is_disabled));
+        let primary_id = primary_provider.map(|p| p.id.clone());
+        let primary_name = primary_provider.map(|p| p.name.clone());
+
+        match aitoolplus_core::gateway::engage_cli_proxy(&paths, cli, port, mode, primary_id.clone(), primary_name) {
+            Ok(_) => {
+                let app_key = match cli {
+                    aitoolplus_core::gateway::GatewayCliKey::Claude => "claude_code".to_string(),
+                    aitoolplus_core::gateway::GatewayCliKey::Codex => "codex".to_string(),
+                    _ => cli.key().to_string(),
+                };
+                self.ui.gateway_settings.takeover_apps.insert(
+                    app_key,
+                    aitoolplus_core::gateway::settings::GatewayCliTakeoverSetting {
+                        enabled: true,
+                        mode,
+                        primary_provider_id: primary_id,
+                    },
+                );
+                self.persist_gateway_settings(cx);
+                self.ui.toast(format!("已成功接管 {} 配置{}", cli.display_name(), mode_desc), false);
+                self.refresh_gateway_data(cx);
+            }
+            Err(e) => {
+                self.ui.toast(format!("接管失败: {e}"), true);
+            }
+        }
+    }
+
+    pub fn switch_gateway_cli_mode(
+        &mut self,
+        cli: aitoolplus_core::gateway::GatewayCliKey,
+        new_mode: aitoolplus_core::gateway::GatewayProxyMode,
+        cx: &mut Context<Self>,
+    ) {
+        let paths = (*self.paths).clone();
+        let port = self.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
+        let manifest = aitoolplus_core::gateway::cli_proxy::manifest::CliProxyManifest::read(&paths, cli);
+        let primary_id = manifest.as_ref().map(|m| m.primary_provider_id.clone());
+
+        let mode_desc = match new_mode {
+            aitoolplus_core::gateway::GatewayProxyMode::Aggregate => "聚合模式",
+            aitoolplus_core::gateway::GatewayProxyMode::Failover => "故障转移模式",
+            aitoolplus_core::gateway::GatewayProxyMode::Single => "单站点模式",
+        };
+
+        match aitoolplus_core::gateway::engage_cli_proxy(&paths, cli, port, new_mode, primary_id.clone(), None) {
+            Ok(_) => {
+                let app_key = match cli {
+                    aitoolplus_core::gateway::GatewayCliKey::Claude => "claude_code".to_string(),
+                    aitoolplus_core::gateway::GatewayCliKey::Codex => "codex".to_string(),
+                    _ => cli.key().to_string(),
+                };
+                if let Some(entry) = self.ui.gateway_settings.takeover_apps.get_mut(&app_key) {
+                    entry.mode = new_mode;
+                    if primary_id.is_some() {
+                        entry.primary_provider_id = primary_id;
+                    }
+                }
+                self.persist_gateway_settings(cx);
+                self.ui.toast(format!("{} 已切换为 {}", cli.display_name(), mode_desc), false);
+                self.refresh_gateway_data(cx);
+            }
+            Err(e) => {
+                self.ui.toast(format!("模式切换失败: {e}"), true);
+            }
+        }
+    }
+
+    pub fn restore_cli_takeover(&mut self, cli: aitoolplus_core::gateway::GatewayCliKey, cx: &mut Context<Self>) {
+        let paths = (*self.paths).clone();
+        match aitoolplus_core::gateway::restore_cli_direct(&paths, cli) {
+            Ok(_) => {
+                let app_key = match cli {
+                    aitoolplus_core::gateway::GatewayCliKey::Claude => "claude_code".to_string(),
+                    aitoolplus_core::gateway::GatewayCliKey::Codex => "codex".to_string(),
+                    _ => cli.key().to_string(),
+                };
+                if let Some(entry) = self.ui.gateway_settings.takeover_apps.get_mut(&app_key) {
+                    entry.enabled = false;
+                }
+                self.persist_gateway_settings(cx);
+                self.ui.toast(format!("已恢复 {} 官方直连", cli.display_name()), false);
+                self.refresh_gateway_data(cx);
+            }
+            Err(e) => {
+                self.ui.toast(format!("恢复失败: {e}"), true);
+            }
+        }
+    }
+
+    pub fn refresh_gateway_requests(&mut self, cx: &mut Context<Self>) {
+        let paths = (*self.paths).clone();
+        self.ui.gateway_requests = aitoolplus_core::gateway::RequestLogStore::list(&paths, 50, 0).unwrap_or_default();
+        cx.notify();
+    }
+
+    pub fn inspect_gateway_request(&mut self, id: &str, cx: &mut Context<Self>) {
+        let paths = (*self.paths).clone();
+        self.ui.gateway_selected_request = aitoolplus_core::gateway::RequestLogStore::get_detail(&paths, id).unwrap_or(None);
+        cx.notify();
+    }
+
+    pub fn clear_gateway_logs(&mut self, cx: &mut Context<Self>) {
+        let paths = (*self.paths).clone();
+        let _ = aitoolplus_core::gateway::RequestLogStore::clear(&paths);
+        self.ui.gateway_requests.clear();
+        self.ui.gateway_selected_request = None;
+        self.ui.toast("网关请求日志已清空", false);
+        cx.notify();
+    }
+
+    pub fn persist_gateway_settings(&mut self, cx: &mut Context<Self>) {
+        let _ = self.ui.gateway_settings.save(&self.paths);
+        cx.notify();
     }
 }

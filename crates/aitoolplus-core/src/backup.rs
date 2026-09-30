@@ -155,6 +155,14 @@ pub fn create_backup(
         &mut manifest,
         &mut report,
     )?;
+    add_file_if_exists(
+        &mut zip,
+        &paths.gateway_dir().join("settings.json"),
+        "appdata/gateway/settings.json",
+        "appdata/gateway/settings.json",
+        &mut manifest,
+        &mut report,
+    )?;
 
     if settings.backup_cli_config_files_enabled {
         for file in cli_config_files(paths) {
@@ -242,6 +250,24 @@ pub fn create_backup(
     Ok(report)
 }
 
+/// Checks if a filesystem path points to gateway audit logs or SQLite database files.
+pub fn is_gateway_audit_path(file: &Path) -> bool {
+    let s = file.to_string_lossy().replace('\\', "/");
+    s.contains("/gateway/logs/")
+        || s.ends_with("/gateway/logs")
+        || s.ends_with("/gateway.db")
+        || s.contains("/gateway.db-")
+}
+
+/// Checks if an archive or restore target path points to gateway audit logs or SQLite database.
+pub fn is_gateway_audit_target(target: &str) -> bool {
+    let s = target.replace('\\', "/");
+    s.contains("gateway/logs/")
+        || s.ends_with("gateway/logs")
+        || s.ends_with("gateway.db")
+        || s.contains("gateway.db-")
+}
+
 fn add_file_if_exists<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     source: &Path,
@@ -251,6 +277,11 @@ fn add_file_if_exists<W: Write + Seek>(
     report: &mut BackupReport,
 ) -> Result<(), String> {
     if !source.is_file() {
+        return Ok(());
+    }
+    // Never include gateway audit logs or SQLite audit databases in backups
+    if is_gateway_audit_path(source) || is_gateway_audit_target(archive) || is_gateway_audit_target(target) {
+        report.skipped.push(format!("excluded gateway audit: {}", source.display()));
         return Ok(());
     }
     let options = zip::write::SimpleFileOptions::default()
@@ -277,13 +308,23 @@ fn add_directory<W: Write + Seek>(
     report: &mut BackupReport,
 ) -> Result<(), String> {
     for file in walk_files(source)? {
+        if is_gateway_audit_path(&file) {
+            report.skipped.push(format!("excluded gateway audit: {}", file.display()));
+            continue;
+        }
         let relative = file.strip_prefix(source).map_err(|e| e.to_string())?;
         let relative = slash(relative);
+        let archive = format!("{archive_root}/{relative}");
+        let target = format!("{restore_root}/{relative}");
+        if is_gateway_audit_target(&archive) || is_gateway_audit_target(&target) {
+            report.skipped.push(format!("excluded gateway audit: {}", file.display()));
+            continue;
+        }
         add_file_if_exists(
             zip,
             &file,
-            &format!("{archive_root}/{relative}"),
-            &format!("{restore_root}/{relative}"),
+            &archive,
+            &target,
             manifest,
             report,
         )?;
@@ -300,8 +341,14 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>, String> {
             let path = entry.path();
             let kind = entry.file_type().map_err(|e| e.to_string())?;
             if kind.is_dir() {
+                if is_gateway_audit_path(&path) {
+                    continue;
+                }
                 stack.push(path);
             } else if kind.is_file() {
+                if is_gateway_audit_path(&path) {
+                    continue;
+                }
                 files.push(path);
             }
         }
@@ -462,6 +509,10 @@ fn resolve_restore_target(
     }
     // Never restore sync.json (remote sync credentials and transport configuration)
     if target == "appdata/sync.json" || target.ends_with("/sync.json") {
+        return None;
+    }
+    // Never restore gateway request audit logs or SQLite database
+    if is_gateway_audit_target(target) {
         return None;
     }
     if let Some(rest) = target.strip_prefix("home/") {
@@ -898,5 +949,55 @@ mod tests {
         assert_eq!(reloaded_b.webdav.url, "https://dav.machine-b.com");
         assert_eq!(reloaded_b.webdav.username, "user_b");
         assert_eq!(reloaded_b.webdav.password, "machine_b_local_password");
+    }
+
+    #[test]
+    fn backup_excludes_gateway_audit_data_and_logs() {
+        let (directory, paths, mut settings) = setup();
+
+        // Prepare gateway files:
+        // 1. settings.json (should be backed up)
+        let gw_dir = paths.gateway_dir();
+        fs::create_dir_all(&gw_dir).unwrap();
+        fs::write(gw_dir.join("settings.json"), r#"{"port":15721,"failover_enabled":true}"#).unwrap();
+
+        // 2. gateway.db and journal files (MUST NOT be backed up)
+        fs::write(gw_dir.join("gateway.db"), "SQLITE_AUDIT_LOG_DATABASE_DATA").unwrap();
+        fs::write(gw_dir.join("gateway.db-wal"), "WAL_DATA").unwrap();
+
+        // 3. gateway/logs/{req_id}.json payload files (MUST NOT be backed up)
+        let logs_dir = paths.gateway_logs_dir();
+        fs::create_dir_all(&logs_dir).unwrap();
+        fs::write(logs_dir.join("req_12345.json"), r#"{"inbound":"large payload"}"#).unwrap();
+        fs::write(logs_dir.join("req_67890.json"), r#"{"response":"huge stream"}"#).unwrap();
+
+        // Even if custom backup entries include the appdata directory
+        settings.backup_custom_entries.push(crate::settings::BackupCustomEntry {
+            id: "appdata-custom".into(),
+            source_path: paths.app_data.to_string_lossy().to_string(),
+            restore_path: None,
+        });
+
+        let backup = directory.path().join("backup_with_gw.zip");
+        let report = create_backup(&paths, &settings, &backup).unwrap();
+        assert!(report.file_count >= 4);
+
+        // Inspect backup manifest
+        let manifest = inspect_backup(&backup).unwrap();
+
+        // Ensure gateway settings IS in manifest
+        assert!(manifest.entries.iter().any(|e| e.archive_path == "appdata/gateway/settings.json"));
+
+        // Ensure gateway.db and gateway/logs are NOT anywhere in manifest
+        for entry in &manifest.entries {
+            assert!(!entry.archive_path.contains("gateway.db"), "gateway.db must not be in archive: {}", entry.archive_path);
+            assert!(!entry.archive_path.contains("gateway/logs"), "gateway logs must not be in archive: {}", entry.archive_path);
+            assert!(!entry.restore_target.contains("gateway.db"), "gateway.db must not be in restore target: {}", entry.restore_target);
+            assert!(!entry.restore_target.contains("gateway/logs"), "gateway logs must not be in restore target: {}", entry.restore_target);
+        }
+
+        // Test restore safety
+        assert!(resolve_restore_target(&paths, "appdata/gateway/gateway.db", false).is_none());
+        assert!(resolve_restore_target(&paths, "appdata/gateway/logs/req_123.json", false).is_none());
     }
 }

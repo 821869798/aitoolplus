@@ -70,6 +70,7 @@ impl Workspace {
         }
 
         nav_list = nav_list.child(self.sidebar_group(i.t("layout.shared_resources")));
+        nav_list = nav_list.child(self.sidebar_item(cx, Page::Gateway));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Mcp));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Skills));
 
@@ -118,6 +119,7 @@ impl Workspace {
             Page::Mcp => (crate::icons::MCP_SVG, i.t("layout.mcp_servers")),
             Page::Skills => (crate::icons::SPARKLES_SVG, i.t("layout.skills")),
             Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("layout.antigravity")),
+            Page::Gateway => (crate::icons::SERVER_SVG, i.raw("本地网关", "Gateway")),
             Page::Settings => (crate::icons::SETTINGS_SVG, i.t("layout.settings")),
         };
 
@@ -225,6 +227,10 @@ impl Workspace {
                     )
                 }
             }
+            Page::Gateway => (
+                i.raw("本地代理网关", "Local Gateway"),
+                i.raw("协议转换与自动故障转移", "Protocol translation & automatic failover"),
+            ),
             Page::Settings => (
                 i.t("layout.settings"),
                 i.t("layout.preferences_paths_backups"),

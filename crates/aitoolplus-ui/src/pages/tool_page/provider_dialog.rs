@@ -4576,20 +4576,63 @@ pub(super) fn save_provider(
     } else if was_applied || should_apply_new {
         let common = ws.store.store().tool(tool).common_config.clone();
         if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == saved_target_id).cloned() {
-            let adapter = aitoolplus_core::adapters::adapter_for(tool);
-            let ctx = aitoolplus_core::adapters::ApplyCtx {
-                paths: &ws.paths,
-                common_config: &common,
-                provider: &saved,
-                strategy: aitoolplus_core::config::MergeStrategy::default(),
-                provider_optional: false,
+            let cli_key = match tool {
+                ToolId::ClaudeCode => Some(aitoolplus_core::gateway::GatewayCliKey::Claude),
+                ToolId::Codex => Some(aitoolplus_core::gateway::GatewayCliKey::Codex),
+                _ => None,
             };
-            match adapter.apply(&ctx) {
-                Ok(report) => {
-                    tracing::info!("Auto-applied updated provider {} for {:?} ({} files)", saved_target_id, tool, report.files.len());
+            let takeover_status = cli_key.map(|k| aitoolplus_core::gateway::get_cli_takeover_status(&ws.paths, k));
+            let is_taken_over = takeover_status.as_ref().map(|s| s.enabled).unwrap_or(false);
+
+            if is_taken_over {
+                // Parity with cc-switch sync_live_for_provider_respecting_takeover:
+                // 1) Update the restore source (backup snapshot) so future restores retain this provider's settings.
+                let _ = aitoolplus_core::gateway::update_live_backup_from_provider(
+                    &ws.paths,
+                    cli_key.unwrap(),
+                    &saved,
+                    &common,
+                );
+                // 2) Keep the live file pointing to Gateway, but update friendly model names / non-conflicting fields.
+                if tool == ToolId::ClaudeCode {
+                    let settings_path = ws.paths.tool_root(ToolId::ClaudeCode).join("settings.json");
+                    let port = ws.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
+                    let endpoint = aitoolplus_core::gateway::cli_proxy::cli_gateway_endpoint(aitoolplus_core::gateway::GatewayCliKey::Claude, port);
+                    let _ = aitoolplus_core::gateway::cli_proxy::claude::patch_claude_settings(
+                        &settings_path,
+                        &endpoint,
+                        Some(&saved),
+                    );
+                } else if tool == ToolId::Codex {
+                    let config_path = ws.paths.tool_root(ToolId::Codex).join("config.toml");
+                    let auth_path = ws.paths.tool_root(ToolId::Codex).join("auth.json");
+                    let port = ws.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
+                    let endpoint = aitoolplus_core::gateway::cli_proxy::cli_gateway_endpoint(aitoolplus_core::gateway::GatewayCliKey::Codex, port);
+                    let is_aggregate = takeover_status.as_ref().map(|s| s.mode == aitoolplus_core::gateway::GatewayProxyMode::Aggregate).unwrap_or(false);
+                    let _ = aitoolplus_core::gateway::cli_proxy::codex::patch_codex_config(
+                        &config_path,
+                        &auth_path,
+                        &endpoint,
+                        is_aggregate,
+                    );
                 }
-                Err(e) => {
-                    tracing::error!("Failed to re-apply updated provider {} for {:?}: {e}", saved_target_id, tool);
+                tracing::info!("Updated provider {} while takeover is active (backup updated, proxy preserved)", saved.name);
+            } else {
+                let adapter = aitoolplus_core::adapters::adapter_for(tool);
+                let ctx = aitoolplus_core::adapters::ApplyCtx {
+                    paths: &ws.paths,
+                    common_config: &common,
+                    provider: &saved,
+                    strategy: aitoolplus_core::config::MergeStrategy::default(),
+                    provider_optional: false,
+                };
+                match adapter.apply(&ctx) {
+                    Ok(report) => {
+                        tracing::info!("Auto-applied updated provider {} for {:?} ({} files)", saved_target_id, tool, report.files.len());
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to re-apply updated provider {} for {:?}: {e}", saved_target_id, tool);
+                    }
                 }
             }
         }

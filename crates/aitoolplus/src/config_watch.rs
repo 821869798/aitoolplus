@@ -134,28 +134,32 @@ fn is_runtime_config(path: &std::path::Path) -> bool {
 fn refresh_runtime(workspace: &mut aitoolplus_ui::Workspace) {
     let paths = workspace.paths.clone();
     let store = workspace.store.store_mut();
-    let _ = aitoolplus_core::import_current::import_claude_current(
+
+    let claude_taken_over = aitoolplus_core::gateway::get_cli_takeover_status(
         &paths,
-        &mut store
-            .tool_mut(aitoolplus_core::ToolId::ClaudeCode)
-            .providers,
-    );
-    let _ = aitoolplus_core::import_current::import_codex_current(
+        aitoolplus_core::gateway::GatewayCliKey::Claude,
+    )
+    .enabled;
+    let codex_taken_over = aitoolplus_core::gateway::get_cli_takeover_status(
         &paths,
-        &mut store.tool_mut(aitoolplus_core::ToolId::Codex).providers,
-    );
-    let _ = aitoolplus_core::import_current::import_gemini_current(
-        &paths,
-        &mut store.tool_mut(aitoolplus_core::ToolId::GeminiCli).providers,
-    );
-    let _ = aitoolplus_core::import_current::import_opencode_current(
-        &paths,
-        &mut store.tool_mut(aitoolplus_core::ToolId::OpenCode).providers,
-    );
-    let _ = aitoolplus_core::import_current::import_grok_current(
-        &paths,
-        &mut store.tool_mut(aitoolplus_core::ToolId::Grok).providers,
-    );
+        aitoolplus_core::gateway::GatewayCliKey::Codex,
+    )
+    .enabled;
+
+    if store.tool(aitoolplus_core::ToolId::ClaudeCode).providers.is_empty() && !claude_taken_over {
+        let _ = aitoolplus_core::import_current::import_claude_current(
+            &paths,
+            &mut store
+                .tool_mut(aitoolplus_core::ToolId::ClaudeCode)
+                .providers,
+        );
+    }
+    if store.tool(aitoolplus_core::ToolId::Codex).providers.is_empty() && !codex_taken_over {
+        let _ = aitoolplus_core::import_current::import_codex_current(
+            &paths,
+            &mut store.tool_mut(aitoolplus_core::ToolId::Codex).providers,
+        );
+    }
     let _ = aitoolplus_core::pi_runtime::import_runtime(
         &paths,
         &mut store.tool_mut(aitoolplus_core::ToolId::Pi).providers,
