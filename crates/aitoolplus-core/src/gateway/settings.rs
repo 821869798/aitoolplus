@@ -42,7 +42,7 @@ pub struct GatewaySettings {
     #[serde(default = "default_true")]
     pub port_auto_select: bool,
     #[serde(default = "default_false")]
-    pub enabled_on_startup: bool,
+    pub enabled: bool,
     #[serde(default = "default_true")]
     pub request_log_enabled: bool,
     #[serde(default = "default_true")]
@@ -97,7 +97,7 @@ impl Default for GatewaySettings {
             host: default_host(),
             port: default_port(),
             port_auto_select: true,
-            enabled_on_startup: false,
+            enabled: false,
             request_log_enabled: true,
             request_log_body_enabled: true,
             streaming_idle_timeout_secs: DEFAULT_STREAMING_IDLE_TIMEOUT_SECS,
@@ -153,6 +153,27 @@ mod tests {
 
         let from_json: GatewaySettings = serde_json::from_str("{}").unwrap();
         assert!(!from_json.failover_enabled, "Deserialized from empty JSON must default to false");
+    }
+
+    #[test]
+    fn test_gateway_settings_takeover_disabled_startup_state() {
+        let mut settings = GatewaySettings::default();
+        settings.takeover_apps.insert(
+            "claude_code".to_string(),
+            GatewayCliTakeoverSetting {
+                enabled: false,
+                mode: crate::gateway::GatewayProxyMode::Failover,
+                primary_provider_id: Some("p1".to_string()),
+            },
+        );
+        let serialized = serde_json::to_string(&settings).unwrap();
+        let reloaded: GatewaySettings = serde_json::from_str(&serialized).unwrap();
+        assert!(!reloaded.enabled);
+        assert_eq!(reloaded.takeover_apps["claude_code"].enabled, false);
+
+        let any_takeover_enabled = reloaded.takeover_apps.values().any(|s| s.enabled);
+        let should_start = reloaded.enabled || any_takeover_enabled;
+        assert!(!should_start, "When stopped/disabled, gateway must not start on boot");
     }
 }
 

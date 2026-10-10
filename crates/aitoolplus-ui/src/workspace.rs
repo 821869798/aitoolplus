@@ -725,7 +725,7 @@ impl Workspace {
             }
         }
 
-        let should_start_gateway = ws.ui.gateway_settings.enabled_on_startup || !apps_to_takeover.is_empty();
+        let should_start_gateway = ws.ui.gateway_settings.enabled || !apps_to_takeover.is_empty();
         if should_start_gateway {
             ws.start_gateway_server(cx);
             let port = ws.ui.gateway_status.as_ref().map(|s| s.port).unwrap_or(15721);
@@ -1900,6 +1900,10 @@ impl Workspace {
             return;
         }
         self.ui.gateway_busy = true;
+        if !self.ui.gateway_settings.enabled {
+            self.ui.gateway_settings.enabled = true;
+            self.persist_gateway_settings(cx);
+        }
         cx.notify();
 
         let paths = (*self.paths).clone();
@@ -1940,9 +1944,22 @@ impl Workspace {
         ]
         .into_iter()
         .filter(|&cli| {
-            aitoolplus_core::gateway::CliProxyManifest::read(&paths, cli)
+            let manifest_active = aitoolplus_core::gateway::CliProxyManifest::read(&paths, cli)
                 .map(|m| m.enabled)
-                .unwrap_or(false)
+                .unwrap_or(false);
+            let takeover_key = match cli {
+                aitoolplus_core::gateway::GatewayCliKey::Claude => "claude_code",
+                aitoolplus_core::gateway::GatewayCliKey::Codex => "codex",
+                _ => cli.key(),
+            };
+            let setting_active = self
+                .ui
+                .gateway_settings
+                .takeover_apps
+                .get(takeover_key)
+                .map(|s| s.enabled)
+                .unwrap_or(false);
+            manifest_active || setting_active
         })
         .collect::<Vec<_>>();
 
@@ -1963,6 +1980,16 @@ impl Workspace {
         } else {
             self.ui.toast("本地网关已停止", false);
         }
+
+        aitoolplus_core::gateway::cleanup_takeover_placeholders_in_live(&paths, aitoolplus_core::gateway::GatewayCliKey::Claude);
+        aitoolplus_core::gateway::cleanup_takeover_placeholders_in_live(&paths, aitoolplus_core::gateway::GatewayCliKey::Codex);
+
+        // Mark all takeover apps as disabled and clear startup flag so next launch remembers stopped state
+        for setting in self.ui.gateway_settings.takeover_apps.values_mut() {
+            setting.enabled = false;
+        }
+        self.ui.gateway_settings.enabled = false;
+        self.persist_gateway_settings(cx);
 
         if let Some(handle) = self.gateway_handle.take() {
             handle.stop();
