@@ -341,6 +341,9 @@ layout:
   preferences_paths_backups:
     zh-CN: 个性化偏好、CLI 根目录与自动备份管理
     en: Preferences, paths & backups
+  apps:
+    zh-CN: 应用
+    en: Apps
   settings:
     zh-CN: 系统设置
     en: Settings
@@ -423,6 +426,45 @@ local_env:
   checking_2:
     zh-CN: 正在检查…
     en: Checking…
+  column_app:
+    zh-CN: 应用
+    en: App
+  column_version:
+    zh-CN: 版本
+    en: Version
+  column_action:
+    zh-CN: 操作
+    en: Action
+  column_visible:
+    zh-CN: 侧栏显示
+    en: Sidebar
+  check_updates:
+    zh-CN: 检查更新
+    en: Check Updates
+  update_all:
+    zh-CN: 全部升级
+    en: Update All
+  connected:
+    zh-CN: 已配置
+    en: Configured
+  not_connected:
+    zh-CN: 未配置
+    en: Not configured
+  app_subtitle:
+    zh-CN: 管理各 Agent CLI 的安装状态、版本检测与侧栏可见性。
+    en: Manage Agent CLI installation, versions, and sidebar visibility.
+  retry:
+    zh-CN: 重试
+    en: Retry
+  last_checked:
+    zh-CN: 上次检查
+    en: Last checked
+  never_checked:
+    zh-CN: 未检查
+    en: Never checked
+  all_up_to_date:
+    zh-CN: 所有应用已是最新版本，未发现可用更新
+    en: All apps are up to date, no updates available
 mcp:
   saved_and_synced:
     zh-CN: 已保存并同步
@@ -1582,8 +1624,8 @@ settings_tab:
     zh-CN: 关于
     en: About
   local_environment:
-    zh-CN: 本地环境
-    en: Local Environment
+    zh-CN: 应用
+    en: Apps
   advanced:
     zh-CN: 高级选项
     en: Advanced

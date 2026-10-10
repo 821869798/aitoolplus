@@ -19,6 +19,7 @@ pub struct ToolStatus {
     pub latest_version: Option<String>,
     /// mise / nvm / volta / pnpm / scoop / homebrew / npm，用来决定升级写回哪里。
     pub source: String,
+    pub path: Option<String>,
     pub error: Option<String>,
     pub installed_but_broken: bool,
 }
@@ -126,14 +127,14 @@ impl Source {
 
     fn latest(&self, tool: &ToolSpec) -> Option<String> {
         match self {
-            Self::Mise(package) => mise_latest(package),
-            Self::Brew(formula) => brew_latest(formula),
-            Self::Scoop(app) => scoop_latest(app),
+            Self::Mise(package) => mise_latest(package).or_else(|| fetch_latest(tool, None)),
+            Self::Brew(formula) => brew_latest(formula).or_else(|| fetch_latest(tool, None)),
+            Self::Scoop(app) => scoop_latest(app).or_else(|| fetch_latest(tool, None)),
             Self::Volta(_) | Self::Bun(_) | Self::Pnpm(_) | Self::Npm(_) => {
                 fetch_latest(tool, None)
             }
             Self::Official if tool.id == "hermes" => github_latest("NousResearch/hermes-agent"),
-            Self::Official | Self::Script | Self::Unknown => None,
+            Self::Official | Self::Script | Self::Unknown => fetch_latest(tool, None),
         }
     }
 
@@ -268,17 +269,23 @@ fn upgrade_command(tool: &ToolSpec) -> Option<String> {
 
 fn check_one(tool: &ToolSpec) -> ToolStatus {
     let located = resolve_on_path(tool.id).or_else(|| find_fallback(tool.id));
-    let (label, latest_version, probe) = match &located {
+    let (label, latest_version, probe, path_str) = match &located {
         Some(path) => {
             let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
             let source = classify(tool.id, path, &real);
             let latest = source.latest(tool);
-            (source.label().to_string(), latest, run_version(path))
+            (
+                source.label().to_string(),
+                latest,
+                run_version(path),
+                Some(windows_shell_compatible_path(path).to_string_lossy().to_string()),
+            )
         }
         None => (
             "未安装".to_string(),
             None,
             Probe::Missing("未安装或不在 PATH 中".to_string()),
+            None,
         ),
     };
     let (version, error, broken) = match probe {
@@ -292,6 +299,7 @@ fn check_one(tool: &ToolSpec) -> ToolStatus {
         version,
         latest_version,
         source: label,
+        path: path_str,
         error,
         installed_but_broken: broken,
     }
@@ -301,7 +309,11 @@ fn find_fallback(id: &str) -> Option<PathBuf> {
     for dir in fallback_dirs() {
         for candidate in executable_candidates(id, &dir) {
             if candidate.exists() && !is_windows_apps_alias(&candidate) {
-                return Some(candidate);
+                #[cfg(windows)]
+                let preferred = windows_runnable_sibling_for_extensionless_tool(&candidate).unwrap_or(candidate);
+                #[cfg(not(windows))]
+                let preferred = candidate;
+                return Some(preferred);
             }
         }
     }
@@ -333,24 +345,139 @@ fn resolve_on_path(id: &str) -> Option<PathBuf> {
     if !output.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = decode_command_output(&output.stdout);
     text.lines().map(str::trim).find_map(|line| {
-        let path = PathBuf::from(line);
-        if path.exists() && !is_windows_apps_alias(&path) {
-            Some(path)
+        let p = Path::new(line);
+        if !p.as_os_str().is_empty() && !is_windows_apps_alias(p) {
+            #[cfg(windows)]
+            let preferred = windows_runnable_sibling_for_extensionless_tool(p).unwrap_or_else(|| p.to_path_buf());
+            #[cfg(not(windows))]
+            let preferred = p.to_path_buf();
+            if preferred.exists() {
+                Some(preferred)
+            } else {
+                None
+            }
         } else {
             None
         }
     })
 }
 
+#[cfg(windows)]
+fn is_windows_command_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn windows_shell_compatible_path(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(local) = raw.strip_prefix(r"\\?\") {
+        PathBuf::from(local)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_shell_compatible_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+#[cfg(windows)]
+fn windows_runnable_sibling_for_extensionless_tool(path: &Path) -> Option<PathBuf> {
+    if path.extension().is_some() {
+        return None;
+    }
+    ["cmd", "exe"]
+        .iter()
+        .map(|ext| path.with_extension(ext))
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(windows)]
+fn win_double_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\\\""))
+}
+
+#[cfg(windows)]
+fn windows_cmd_double_quote_arg(value: &str) -> String {
+    win_double_quote(value)
+}
+
+#[cfg(windows)]
+fn win_quote_path_for_batch(p: &str) -> String {
+    let escaped = if p.contains('%') {
+        p.replace('%', "%%%%")
+    } else {
+        p.to_string()
+    };
+    let needs_quote = p
+        .chars()
+        .any(|c| matches!(c, ' ' | '&' | '(' | ')' | '^' | ';' | '<' | '>' | '|' | ','));
+    if needs_quote {
+        win_double_quote(&escaped)
+    } else {
+        escaped
+    }
+}
+
+fn build_tool_command(tool_path: &Path, args: &[&str], path_env: &str) -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        if is_windows_command_script(tool_path) {
+            let shell_path = windows_shell_compatible_path(tool_path);
+            let path = shell_path.to_string_lossy();
+            let formatted_args = args
+                .iter()
+                .map(|arg| windows_cmd_double_quote_arg(arg))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let command_str = format!(
+                "call {}{}",
+                win_quote_path_for_batch(&path),
+                if formatted_args.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {formatted_args}")
+                }
+            );
+            let mut cmd = Command::new("cmd");
+            cmd.args(["/D", "/S", "/C"])
+                .raw_arg(&command_str)
+                .env("PATH", path_env)
+                .creation_flags(CREATE_NO_WINDOW);
+            return cmd;
+        }
+
+        let mut cmd = Command::new(tool_path);
+        cmd.args(args)
+            .env("PATH", path_env)
+            .creation_flags(CREATE_NO_WINDOW);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new(tool_path);
+        cmd.args(args).env("PATH", path_env);
+        cmd
+    }
+}
+
 fn run_version(path: &Path) -> Probe {
-    let mut command = Command::new(path);
     let parent = path.parent().unwrap_or(Path::new("."));
     let path_env = format!("{};{}", parent.display(), effective_path());
+    let mut command = build_tool_command(path, &["--version"], &path_env);
     command
-        .arg("--version")
-        .env("PATH", path_env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -359,8 +486,8 @@ fn run_version(path: &Path) -> Probe {
         Ok(output) => output,
         Err(error) => return Probe::Broken(error),
     };
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = decode_command_output(&output.stdout).trim().to_string();
+    let stderr = decode_command_output(&output.stderr).trim().to_string();
     if output.status.success() {
         let raw = if stdout.is_empty() { stderr } else { stdout };
         if raw.is_empty() {
@@ -562,6 +689,7 @@ fn run_batch(command: &str) -> Result<(), String> {
         std::fs::write(&file, &script).map_err(|e| format!("写入安装脚本失败: {e}"))?;
         let mut process = Command::new("cmd");
         process.arg("/C").arg(&file);
+        process.env("PATH", effective_path());
         (process, TempFile(file))
     };
     #[cfg(not(windows))]
@@ -579,8 +707,8 @@ fn run_batch(command: &str) -> Result<(), String> {
     if output.status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = decode_command_output(&output.stderr);
+    let stdout = decode_command_output(&output.stdout);
     let raw = if stderr.trim().is_empty() {
         stdout.trim()
     } else {
@@ -874,6 +1002,69 @@ fn registry_path(user: bool) -> String {
     }
 }
 
+pub(crate) fn decode_command_output(bytes: &[u8]) -> String {
+    #[cfg(windows)]
+    {
+        decode_windows_command_output(bytes)
+    }
+    #[cfg(not(windows))]
+    {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+#[cfg(windows)]
+fn decode_windows_command_output(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
+    }
+
+    use windows::Win32::Globalization::{GetACP, GetOEMCP, MultiByteToWideChar, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
+
+    fn decode_codepage(bytes: &[u8], codepage: u32) -> Option<String> {
+        if codepage == 0 {
+            return None;
+        }
+        unsafe {
+            let wide_len = MultiByteToWideChar(
+                codepage,
+                MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+                bytes,
+                None,
+            );
+            if wide_len <= 0 {
+                return None;
+            }
+            let mut wide = vec![0u16; wide_len as usize];
+            let written = MultiByteToWideChar(
+                codepage,
+                MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+                bytes,
+                Some(&mut wide),
+            );
+            if written <= 0 {
+                return None;
+            }
+            Some(String::from_utf16_lossy(&wide[..written as usize]))
+        }
+    }
+
+    let oem_cp = unsafe { GetOEMCP() };
+    if let Some(decoded) = decode_codepage(bytes, oem_cp) {
+        return decoded;
+    }
+    let ansi_cp = unsafe { GetACP() };
+    if ansi_cp != oem_cp {
+        if let Some(decoded) = decode_codepage(bytes, ansi_cp) {
+            return decoded;
+        }
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 fn expand_percents(raw: &str) -> String {
     let mut out = String::new();
     let mut rest = raw;
@@ -951,5 +1142,78 @@ mod tests {
         assert!(update_available("1.2.3", "1.2.4"));
         assert!(!update_available("1.2.4", "1.2.3"));
         assert!(update_available("2.0.0-beta.1", "2.0.0"));
+    }
+
+    #[test]
+    fn test_windows_shell_compatible_path() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                windows_shell_compatible_path(Path::new(r"\\?\C:\Users\foo\npm\claude.cmd")),
+                PathBuf::from(r"C:\Users\foo\npm\claude.cmd")
+            );
+            assert_eq!(
+                windows_shell_compatible_path(Path::new(r"\\?\UNC\server\share\tool.cmd")),
+                PathBuf::from(r"\\server\share\tool.cmd")
+            );
+            assert_eq!(
+                windows_shell_compatible_path(Path::new(r"C:\Users\foo\npm\claude.cmd")),
+                PathBuf::from(r"C:\Users\foo\npm\claude.cmd")
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_windows_command_script() {
+        #[cfg(windows)]
+        {
+            assert!(is_windows_command_script(Path::new("claude.cmd")));
+            assert!(is_windows_command_script(Path::new("claude.CMD")));
+            assert!(is_windows_command_script(Path::new("setup.bat")));
+            assert!(!is_windows_command_script(Path::new("claude.exe")));
+            assert!(!is_windows_command_script(Path::new("claude")));
+        }
+    }
+
+    #[test]
+    fn test_win_quote_path_for_batch() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                win_quote_path_for_batch(r"C:\Users\foo\claude.cmd"),
+                r"C:\Users\foo\claude.cmd"
+            );
+            assert_eq!(
+                win_quote_path_for_batch(r"C:\Program Files\nodejs\npm.cmd"),
+                r#""C:\Program Files\nodejs\npm.cmd""#
+            );
+            assert_eq!(
+                win_quote_path_for_batch(r"C:\tools&dev\npm.cmd"),
+                r#""C:\tools&dev\npm.cmd""#
+            );
+            assert_eq!(
+                win_quote_path_for_batch(r"C:\path%foo%\npm.cmd"),
+                r"C:\path%%%%foo%%%%\npm.cmd"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decode_command_output() {
+        let utf8 = "hello world\n";
+        assert_eq!(decode_command_output(utf8.as_bytes()), utf8);
+        assert_eq!(decode_command_output(b""), "");
+    }
+
+    #[test]
+    fn test_live_check_tools() {
+        let results = check_all();
+        for tool in &results {
+            println!(
+                "Tool: {} ({}) => version: {:?}, broken: {}, path: {:?}",
+                tool.id, tool.name, tool.version, tool.installed_but_broken, tool.path
+            );
+        }
+        assert_eq!(results.len(), TOOLS.len());
     }
 }

@@ -227,6 +227,7 @@ impl Workspace {
             "resolved workspace start route"
         );
         let page = match requested_page.as_str() {
+            "apps" | "local_env" => Page::Apps,
             "mcp" => Page::Mcp,
             "skills" => Page::Skills,
             "antigravity" => Page::Antigravity,

@@ -35,7 +35,6 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         (SettingsTab::Usage, i.t("settings_tab.usage_statistics"), false),
         (SettingsTab::Backup, i.t("settings_tab.backup"), false),
         (SettingsTab::Advanced, i.t("settings_tab.advanced"), false),
-        (SettingsTab::LocalEnv, i.t("settings_tab.local_environment"), false),
         (SettingsTab::About, i.t("settings_tab.about"), has_update),
     ];
 
