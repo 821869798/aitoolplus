@@ -28,6 +28,7 @@ pub enum Page {
     Skills,
     Antigravity,
     Gateway,
+    Apps,
     Settings,
 }
 
@@ -39,6 +40,7 @@ impl Page {
             Page::Skills => "skills",
             Page::Antigravity => "antigravity",
             Page::Gateway => "gateway",
+            Page::Apps => "apps",
             Page::Settings => "settings",
         }
     }
@@ -297,6 +299,7 @@ pub struct WorkspaceState {
     pub local_env_loaded: bool,
     /// Tool id currently installing/updating, or "*" for update-all.
     pub local_env_busy: Option<String>,
+    pub local_env_last_checked: Option<chrono::DateTime<chrono::Local>>,
     pub antigravity_refreshing_ids: std::collections::HashSet<String>,
     pub antigravity_search: gpui::Entity<TextInput>,
     pub antigravity_quota_window: AntigravityQuotaWindow,
@@ -1060,6 +1063,7 @@ impl WorkspaceState {
             local_env_loading: false,
             local_env_loaded: false,
             local_env_busy: None,
+            local_env_last_checked: None,
             antigravity_refreshing_ids: std::collections::HashSet::new(),
             antigravity_search,
             antigravity_quota_window: if std::env::var("AITOOLPLUS_ANTIGRAVITY_WINDOW").map(|v| v.to_lowercase()).as_deref() == Ok("weekly") {
@@ -2252,6 +2256,7 @@ pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
         Page::Skills => skills_page::render_skills_page(ws, cx),
         Page::Antigravity => antigravity_page::render_antigravity_page(ws, cx),
         Page::Gateway => gateway_page::render_gateway_page(ws, cx),
+        Page::Apps => local_env_page::local_env_tab(ws, cx),
         Page::Settings => settings_page::render_settings_page(ws, cx),
     }
 }

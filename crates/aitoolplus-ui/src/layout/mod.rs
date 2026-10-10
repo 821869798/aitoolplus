@@ -74,12 +74,44 @@ impl Workspace {
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Mcp));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Skills));
 
-        // 3. Docked Settings at Bottom
+        // 3. Docked Apps & Settings at Bottom (parity with cc-switch dual-grid bottom bar)
+        let apps_update = self.ui.local_env_tools.iter().any(|t| {
+            t.version
+                .as_deref()
+                .zip(t.latest_version.as_deref())
+                .is_some_and(|(local, latest)| {
+                    aitoolplus_core::local_env::update_available(local, latest)
+                })
+        });
+        let settings_update = self
+            .ui
+            .update_info
+            .as_ref()
+            .map(|u| u.update_available)
+            .unwrap_or(false);
+
         let footer = div()
-            .p(px(8.0))
+            .px(px(8.0))
+            .py(px(6.0))
             .border_t_1()
             .border_color(t.sidebar_border)
-            .child(self.sidebar_item(cx, Page::Settings));
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(self.sidebar_footer_item(
+                cx,
+                Page::Apps,
+                crate::icons::LAYOUT_GRID_SVG,
+                i.t("layout.apps"),
+                apps_update,
+            ))
+            .child(self.sidebar_footer_item(
+                cx,
+                Page::Settings,
+                crate::icons::SETTINGS_SVG,
+                i.t("layout.settings"),
+                settings_update,
+            ));
 
         div()
             .id("sidebar")
@@ -95,6 +127,81 @@ impl Workspace {
             .child(nav_list)
             .child(footer)
             .into_any_element()
+    }
+
+    fn sidebar_footer_item(
+        &self,
+        cx: &mut Context<Self>,
+        page: Page,
+        icon_svg: &'static [u8],
+        label: SharedString,
+        has_dot: bool,
+    ) -> impl IntoElement {
+        let t = &self.theme;
+        let is_active = self.page == page;
+
+        div()
+            .id(gpui::ElementId::Name(
+                format!("sidebar-footer-{}", page.key()).into(),
+            ))
+            .cursor_pointer()
+            .flex_1()
+            .min_w(px(0.0))
+            .h(px(34.0))
+            .px(px(8.0))
+            .rounded(px(7.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.0))
+            .when(is_active, |s| {
+                s.bg(t.accent_subtle)
+                    .text_color(t.accent)
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+            })
+            .when(!is_active, |s| s.text_color(t.text_secondary))
+            .hover(|h| {
+                if is_active {
+                    h
+                } else {
+                    h.bg(t.card_hover).text_color(t.text_primary)
+                }
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.navigate(page, cx);
+            }))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        gpui::svg()
+                            .data(icon_svg)
+                            .size(px(14.0))
+                            .when(is_active, |s| s.text_color(t.accent))
+                            .when(!is_active, |s| s.text_color(t.text_muted))
+                            .flex_none(),
+                    )
+                    .when(has_dot, |s| {
+                        s.child(
+                            div()
+                                .absolute()
+                                .top(px(-2.0))
+                                .right(px(-3.0))
+                                .size(px(6.0))
+                                .rounded_full()
+                                .bg(t.accent),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .truncate()
+                    .child(label),
+            )
     }
 
     fn sidebar_group(&self, label: SharedString) -> impl IntoElement {
@@ -120,6 +227,7 @@ impl Workspace {
             Page::Skills => (crate::icons::SPARKLES_SVG, i.t("layout.skills")),
             Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("layout.antigravity")),
             Page::Gateway => (crate::icons::SERVER_SVG, i.raw("本地网关", "Gateway")),
+            Page::Apps => (crate::icons::LAYOUT_GRID_SVG, i.t("layout.apps")),
             Page::Settings => (crate::icons::SETTINGS_SVG, i.t("layout.settings")),
         };
 
@@ -230,6 +338,10 @@ impl Workspace {
             Page::Gateway => (
                 i.raw("本地代理网关", "Local Gateway"),
                 i.raw("协议转换与自动故障转移", "Protocol translation & automatic failover"),
+            ),
+            Page::Apps => (
+                i.t("local_env.local_environment"),
+                i.t("local_env.app_subtitle"),
             ),
             Page::Settings => (
                 i.t("layout.settings"),
