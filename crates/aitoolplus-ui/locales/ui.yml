@@ -3216,6 +3216,9 @@ usage:
   real_consumption_tokens:
     zh-CN: 真实消耗 Tokens
     en: Real Consumption Tokens
+  more_metrics:
+    zh-CN: 更多指标
+    en: More Metrics
   all_tools:
     zh-CN: 全部工具
     en: All Tools
