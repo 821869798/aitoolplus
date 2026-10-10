@@ -32,7 +32,7 @@ http = "1"
 futures-util = "0.3"
 
 # GPUI Kit (crates.io, without gpui-shell)
-gpui-kit = { version = "0.7.0", default-features = false, features = ["component", "assets"] }
+gpui-kit = { version = "0.7.1", default-features = false, features = ["component", "assets"] }
 async-channel = "2"
 rfd = "0.15"
 opener = { version = "0.8", features = ["reveal"] }
