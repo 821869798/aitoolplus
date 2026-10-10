@@ -1951,27 +1951,7 @@ fn render_settings_tab(ws: &Workspace, cx: &mut Context<Workspace>) -> gpui::Any
                             })
                         )
                 )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0))
-                                .child(div().text_sm().font_weight(gpui::FontWeight::MEDIUM).text_color(t.text_primary).child("应用启动时自动开启网关"))
-                                .child(div().text_xs().text_color(t.text_muted).child("随 aitoolplus 启动在后台静默监听"))
-                        )
-                        .child(
-                            toggle("tg-auto-start", settings.enabled_on_startup, t, cx, |ws, _, _, cx| {
-                                ws.ui.gateway_settings.enabled_on_startup = !ws.ui.gateway_settings.enabled_on_startup;
-                                ws.persist_gateway_settings(cx);
-                                cx.notify();
-                            })
-                        )
-                )
+
                 .child(
                     div()
                         .flex()
