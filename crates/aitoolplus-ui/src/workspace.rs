@@ -1037,6 +1037,174 @@ impl Workspace {
         cx.notify();
     }
 
+    pub fn current_pi_dropdown_options(&self) -> Vec<String> {
+        let Some(field) = self.ui.pi_dropdown_open else {
+            return Vec::new();
+        };
+        let catalog = aitoolplus_core::pi_pages::models_catalog(&self.paths).unwrap_or_default();
+        match field {
+            crate::pages::PiDropdownField::Provider => catalog.keys().cloned().collect(),
+            crate::pages::PiDropdownField::Model => {
+                if let Some(p) = &self.ui.pi_ms_provider {
+                    catalog.get(p).cloned().unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            }
+            crate::pages::PiDropdownField::Thinking => aitoolplus_core::pi_pages::KNOWN_THINKING_LEVELS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+
+    pub fn step_pi_dropdown(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let options = self.current_pi_dropdown_options();
+        let query = self.ui.pi_dropdown_search.read(cx).text().trim().to_string();
+        let ranked = crate::components::filter_indices(&query, &options);
+        self.ui.pi_dropdown_active_index = crate::components::menu_step(self.ui.pi_dropdown_active_index, ranked.len(), delta);
+        cx.notify();
+    }
+
+    pub fn confirm_pi_dropdown(&mut self, cx: &mut Context<Self>) {
+        let Some(field) = self.ui.pi_dropdown_open else {
+            return;
+        };
+        let options = self.current_pi_dropdown_options();
+        let query = self.ui.pi_dropdown_search.read(cx).text().trim().to_string();
+        let ranked = crate::components::filter_indices(&query, &options);
+        if let Some(active) = self.ui.pi_dropdown_active_index {
+            if let Some(&opt_idx) = ranked.get(active) {
+                if let Some(val) = options.get(opt_idx) {
+                    let val = val.clone();
+                    match field {
+                        crate::pages::PiDropdownField::Provider => {
+                            self.ui.pi_ms_provider = Some(val);
+                            self.ui.pi_ms_model = None;
+                        }
+                        crate::pages::PiDropdownField::Model => {
+                            self.ui.pi_ms_model = Some(val);
+                        }
+                        crate::pages::PiDropdownField::Thinking => {
+                            self.ui.pi_ms_thinking = Some(val);
+                        }
+                    }
+                    self.ui.pi_dropdown_open = None;
+                    self.ui.pi_dropdown_active_index = None;
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub fn get_ranked_provider_models<'a>(
+        fetched_models: &'a [aitoolplus_core::api_hub::FetchedModel],
+        query: &str,
+    ) -> (
+        Vec<String>,
+        std::collections::HashMap<String, Vec<&'a aitoolplus_core::api_hub::FetchedModel>>,
+        Vec<&'a aitoolplus_core::api_hub::FetchedModel>,
+    ) {
+        let filtered = crate::components::filter_models(query, fetched_models);
+        let mut vendor_order: Vec<String> = Vec::new();
+        let mut grouped: std::collections::HashMap<String, Vec<&aitoolplus_core::api_hub::FetchedModel>> =
+            std::collections::HashMap::new();
+        for m in &filtered {
+            let vendor = m.owned_by.clone().unwrap_or_else(|| "Other".to_string());
+            if !grouped.contains_key(&vendor) {
+                vendor_order.push(vendor.clone());
+            }
+            grouped.entry(vendor).or_default().push(m);
+        }
+        let mut flat: Vec<&aitoolplus_core::api_hub::FetchedModel> = Vec::new();
+        for v in &vendor_order {
+            if let Some(models) = grouped.get(v) {
+                for m in models {
+                    flat.push(*m);
+                }
+            }
+        }
+        (vendor_order, grouped, flat)
+    }
+
+    pub fn step_provider_model_dropdown(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(dialog) = self.ui.provider_dialog.as_mut() else { return; };
+        if dialog.active_model_dropdown.is_none() { return; };
+        let query = dialog.model_search.read(cx).text().trim().to_string();
+        let (_, _, flat) = Self::get_ranked_provider_models(&dialog.fetched_models, &query);
+        dialog.model_dropdown_active_index =
+            crate::components::menu_step(dialog.model_dropdown_active_index, flat.len(), delta);
+        cx.notify();
+    }
+
+    pub fn apply_provider_model_selection(
+        &mut self,
+        target_id: &str,
+        selected_id: &str,
+        selected_disp: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.ui.provider_dialog.as_mut() else { return; };
+        if target_id == "claude_model" || target_id == "default_model" {
+            dialog.model.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+        } else if let Some(idx_str) = target_id.strip_prefix("pi_") {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                if let Some(pi_m) = dialog.pi_models.get_mut(idx) {
+                    pi_m.id.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                    let curr_name = pi_m.name.read(cx).text().trim().to_string();
+                    if curr_name.is_empty() {
+                        let fallback = selected_disp.unwrap_or(selected_id);
+                        pi_m.name.update(cx, |inp, cx| inp.set_text_silent(fallback, cx));
+                    }
+                }
+            }
+        } else if let Some(idx_str) = target_id.strip_prefix("codex_") {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                if let Some(cdx_m) = dialog.codex_catalog_models.get_mut(idx) {
+                    cdx_m.model.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                    let curr_name = cdx_m.display_name.read(cx).text().trim().to_string();
+                    if curr_name.is_empty() {
+                        let fallback = selected_disp.unwrap_or(selected_id);
+                        cdx_m.display_name.update(cx, |inp, cx| inp.set_text_silent(fallback, cx));
+                    }
+                }
+            }
+        } else if let Some(idx_str) = target_id.strip_prefix("rewrite_req_") {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                if let Some(rw) = dialog.model_rewrites.get_mut(idx) {
+                    rw.from.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                }
+            }
+        } else if let Some(idx_str) = target_id.strip_prefix("rewrite_target_") {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                if let Some(rw) = dialog.model_rewrites.get_mut(idx) {
+                    rw.to.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                }
+            }
+        }
+        dialog.active_model_dropdown = None;
+        dialog.model_dropdown_active_index = None;
+        let msg = self.i18n.raw(
+            &format!("已选择模型: {selected_id}"),
+            &format!("Selected model: {selected_id}"),
+        ).to_string();
+        self.ui.toast(msg, false);
+        cx.notify();
+    }
+
+    pub fn confirm_provider_model_dropdown(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.ui.provider_dialog.as_ref() else { return; };
+        let Some(target_id) = dialog.active_model_dropdown.clone() else { return; };
+        let query = dialog.model_search.read(cx).text().trim().to_string();
+        let (_, _, flat) = Self::get_ranked_provider_models(&dialog.fetched_models, &query);
+        let Some(active_idx) = dialog.model_dropdown_active_index else { return; };
+        let Some(m) = flat.get(active_idx) else { return; };
+        let selected_id = m.id.clone();
+        let selected_disp = m.display_name.clone();
+
+        self.apply_provider_model_selection(&target_id, &selected_id, selected_disp.as_deref(), cx);
+    }
+
     pub fn open_codex_unify_dialog(&mut self, target_state: bool, cx: &mut Context<Self>) {
         if target_state {
             self.ui.codex_unify_dialog = Some(pages::CodexUnifyDialogState::Enable {

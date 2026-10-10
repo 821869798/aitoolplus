@@ -8,6 +8,10 @@ use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 
 use crate::theme::Theme;
 
+pub mod combobox;
+
+pub use combobox::*;
+
 // ---------------------------------------------------------------------------
 // Buttons
 // ---------------------------------------------------------------------------

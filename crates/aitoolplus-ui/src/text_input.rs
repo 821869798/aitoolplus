@@ -15,6 +15,8 @@ pub enum TextInputEvent {
     Change(String),
     Escape,
     Enter,
+    Up,
+    Down,
 }
 
 pub struct TextInput {
@@ -265,6 +267,12 @@ impl TextInput {
                         self.move_to(len, cx);
                     }
                 }
+                "up" => {
+                    cx.emit(TextInputEvent::Up);
+                }
+                "down" => {
+                    cx.emit(TextInputEvent::Down);
+                }
                 "escape" => {
                     cx.emit(TextInputEvent::Escape);
                 }
@@ -275,6 +283,14 @@ impl TextInput {
 
         if event.keystroke.modifiers.control || event.keystroke.modifiers.platform {
             match key {
+                "p" | "P" => {
+                    cx.emit(TextInputEvent::Up);
+                    return;
+                }
+                "n" | "N" => {
+                    cx.emit(TextInputEvent::Down);
+                    return;
+                }
                 "a" | "A" => {
                     self.selected_range = 0..self.content.len();
                     self.selection_reversed = false;
@@ -362,6 +378,12 @@ impl TextInput {
                     }
                 }
                 self.replace_text_in_range(None, "", window, cx);
+            }
+            "up" => {
+                cx.emit(TextInputEvent::Up);
+            }
+            "down" => {
+                cx.emit(TextInputEvent::Down);
             }
             "escape" => {
                 cx.emit(TextInputEvent::Escape);

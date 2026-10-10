@@ -647,9 +647,9 @@ pub(super) fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                     &t,
                     cx,
                     move |ws, _, _, cx| {
-                        let p_txt = ws.ui.pi_ms_provider_input.read(cx).text().trim().to_string();
-                        let m_txt = ws.ui.pi_ms_model_input.read(cx).text().trim().to_string();
-                        let t_txt = ws.ui.pi_ms_thinking_input.read(cx).text().trim().to_string();
+                        let p_txt = ws.ui.pi_ms_provider.clone().unwrap_or_else(|| ws.ui.pi_ms_provider_input.read(cx).text().trim().to_string());
+                        let m_txt = ws.ui.pi_ms_model.clone().unwrap_or_else(|| ws.ui.pi_ms_model_input.read(cx).text().trim().to_string());
+                        let t_txt = ws.ui.pi_ms_thinking.clone().unwrap_or_else(|| ws.ui.pi_ms_thinking_input.read(cx).text().trim().to_string());
                         let settings = PiModelSettings {
                             provider_key: if p_txt.is_empty() { None } else { Some(p_txt) },
                             model_id: if m_txt.is_empty() { None } else { Some(m_txt) },
@@ -699,7 +699,6 @@ pub(super) fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                     "pi-ms-prov-select",
                     crate::pages::PiDropdownField::Provider,
                     "默认供应商",
-                    ws.ui.pi_ms_provider_input.clone(),
                     provider_options,
                     ws,
                     cx,
@@ -708,7 +707,6 @@ pub(super) fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                     "pi-ms-model-select",
                     crate::pages::PiDropdownField::Model,
                     "默认模型",
-                    ws.ui.pi_ms_model_input.clone(),
                     model_options,
                     ws,
                     cx,
@@ -717,7 +715,6 @@ pub(super) fn pi_model_settings_section(ws: &mut Workspace, cx: &mut Context<Wor
                     "pi-ms-think-select",
                     crate::pages::PiDropdownField::Thinking,
                     "思考等级",
-                    ws.ui.pi_ms_thinking_input.clone(),
                     thinking_options,
                     ws,
                     cx,
@@ -744,7 +741,6 @@ pub(super) fn pi_searchable_select(
     id: &'static str,
     field: crate::pages::PiDropdownField,
     label: &'static str,
-    input_entity: gpui::Entity<TextInput>,
     options: Vec<String>,
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
@@ -752,57 +748,82 @@ pub(super) fn pi_searchable_select(
     let t = ws.theme.clone();
     let i = ws.i18n;
     let is_open = ws.ui.pi_dropdown_open == Some(field);
-    let is_typing = ws.ui.pi_dropdown_typing;
+    let active_index = ws.ui.pi_dropdown_active_index;
 
+    let current_value: Option<String> = match field {
+        crate::pages::PiDropdownField::Provider => ws.ui.pi_ms_provider.clone(),
+        crate::pages::PiDropdownField::Model => ws.ui.pi_ms_model.clone(),
+        crate::pages::PiDropdownField::Thinking => ws.ui.pi_ms_thinking.clone(),
+    };
+
+    let placeholder = match field {
+        crate::pages::PiDropdownField::Provider => "请选择或输入默认供应商…",
+        crate::pages::PiDropdownField::Model => "请选择或输入默认模型…",
+        crate::pages::PiDropdownField::Thinking => "请选择思考等级…",
+    };
+
+    let search_input = ws.ui.pi_dropdown_search.clone();
+    let search_input_open = search_input.clone();
     let f = field;
-    let input_ent_open = input_entity.clone();
-    let input_ent_clear = input_entity.clone();
-    let input_ent_pick = input_entity.clone();
 
-    components::fused_combobox(
+    components::searchable_combobox(
         id,
         Some(i.raw(label, label)),
-        input_entity,
+        current_value.as_deref(),
+        placeholder,
+        &search_input,
         is_open,
-        is_typing,
-        options,
+        &options,
+        active_index,
         Some(i.t("tool_runtime.no_matches_found")),
         &t,
         cx,
-        move |ws, window, cx| {
-            if let Some((field, instant)) = ws.ui.pi_dropdown_just_closed {
-                if field == f && instant.elapsed() < std::time::Duration::from_millis(200) {
+        move |ws, open, window, cx| {
+            if open {
+                if ws.ui.pi_dropdown_pressed_while_open {
+                    ws.ui.pi_dropdown_open = None;
+                    ws.ui.pi_dropdown_pressed_while_open = false;
+                    cx.notify();
                     return;
                 }
+                ws.ui.pi_dropdown_open = Some(f);
+                ws.ui.pi_dropdown_active_index = Some(0);
+                search_input_open.update(cx, |inp, cx| {
+                    inp.clear(cx);
+                    inp.focus_handle.focus(window, cx);
+                    inp.start_blink(cx);
+                });
+            } else {
+                ws.ui.pi_dropdown_open = None;
+                ws.ui.pi_dropdown_active_index = None;
             }
-            ws.ui.pi_dropdown_open = Some(f);
-            ws.ui.pi_dropdown_typing = false;
-            input_ent_open.update(cx, |inp, cx| {
-                inp.focus_handle.focus(window, cx);
-                inp.start_blink(cx);
-                inp.select_all(cx);
-            });
             cx.notify();
         },
-        move |ws, cx| {
-            if ws.ui.pi_dropdown_open == Some(f) {
-                ws.ui.pi_dropdown_open = None;
-                ws.ui.pi_dropdown_typing = false;
-                ws.ui.pi_dropdown_just_closed = Some((f, std::time::Instant::now()));
-                cx.notify();
-            }
+        move |ws, _cx| {
+            ws.ui.pi_dropdown_pressed_while_open = ws.ui.pi_dropdown_open == Some(f);
         },
-        move |ws, window, cx| {
-            input_ent_clear.update(cx, |inp, cx| {
-                inp.set_text_silent("", cx);
-                inp.focus_handle.focus(window, cx);
-                inp.start_blink(cx);
-            });
+        move |ws, opt, cx| {
+            match f {
+                crate::pages::PiDropdownField::Provider => {
+                    ws.ui.pi_ms_provider = Some(opt);
+                    ws.ui.pi_ms_model = None;
+                }
+                crate::pages::PiDropdownField::Model => {
+                    ws.ui.pi_ms_model = Some(opt);
+                }
+                crate::pages::PiDropdownField::Thinking => {
+                    ws.ui.pi_ms_thinking = Some(opt);
+                }
+            }
+            ws.ui.pi_dropdown_open = None;
+            ws.ui.pi_dropdown_active_index = None;
+            cx.notify();
+        },
+        Some(move |ws: &mut Workspace, cx: &mut Context<Workspace>| {
             match f {
                 crate::pages::PiDropdownField::Provider => {
                     ws.ui.pi_ms_provider = None;
                     ws.ui.pi_ms_model = None;
-                    ws.ui.pi_ms_model_input.update(cx, |inp, cx| inp.set_text_silent("", cx));
                 }
                 crate::pages::PiDropdownField::Model => {
                     ws.ui.pi_ms_model = None;
@@ -811,31 +832,14 @@ pub(super) fn pi_searchable_select(
                     ws.ui.pi_ms_thinking = None;
                 }
             }
-            ws.ui.pi_dropdown_open = Some(f);
-            ws.ui.pi_dropdown_typing = true;
-            cx.notify();
-        },
-        move |ws, opt, _window, cx| {
-            input_ent_pick.update(cx, |inp, cx| {
-                inp.set_text_silent(opt.clone(), cx);
-            });
-            match f {
-                crate::pages::PiDropdownField::Provider => {
-                    ws.ui.pi_ms_provider = Some(opt.clone());
-                    ws.ui.pi_ms_model = None;
-                    ws.ui.pi_ms_model_input.update(cx, |inp, cx| inp.set_text_silent("", cx));
-                }
-                crate::pages::PiDropdownField::Model => {
-                    ws.ui.pi_ms_model = Some(opt.clone());
-                }
-                crate::pages::PiDropdownField::Thinking => {
-                    ws.ui.pi_ms_thinking = Some(opt.clone());
-                }
-            }
             ws.ui.pi_dropdown_open = None;
-            ws.ui.pi_dropdown_typing = false;
+            ws.ui.pi_dropdown_active_index = None;
             cx.notify();
-        },
+        }),
+        Some(move |ws: &mut Workspace, active_pos, cx: &mut Context<Workspace>| {
+            ws.ui.pi_dropdown_active_index = Some(active_pos);
+            cx.notify();
+        }),
     )
 }
 
