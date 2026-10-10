@@ -571,11 +571,39 @@ pub fn open_provider_dialog(
     }
 
     let model_search = cx.new(|cx| {
-        TextInput::new(
+        let mut inp = TextInput::new(
             i.t("tool_dialog.search_models_by_id"),
             cx,
-        )
+        );
+        inp.set_borderless(true);
+        inp
     });
+    cx.subscribe(&model_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+        match event {
+            crate::text_input::TextInputEvent::Change(_) => {
+                if let Some(d) = this.ui.provider_dialog.as_mut() {
+                    d.model_dropdown_active_index = Some(0);
+                }
+                cx.notify();
+            }
+            crate::text_input::TextInputEvent::Up => {
+                this.step_provider_model_dropdown(-1, cx);
+            }
+            crate::text_input::TextInputEvent::Down => {
+                this.step_provider_model_dropdown(1, cx);
+            }
+            crate::text_input::TextInputEvent::Enter => {
+                this.confirm_provider_model_dropdown(cx);
+            }
+            crate::text_input::TextInputEvent::Escape => {
+                if let Some(d) = this.ui.provider_dialog.as_mut() {
+                    d.active_model_dropdown = None;
+                    d.model_dropdown_active_index = None;
+                }
+                cx.notify();
+            }
+        }
+    }).detach();
 
     let meta = existing.as_ref().map(|p| p.parsed_meta()).unwrap_or_default();
 
@@ -742,6 +770,8 @@ pub fn open_provider_dialog(
         is_fetching_models: false,
         fetch_error: None,
         active_model_dropdown: None,
+        model_dropdown_active_index: None,
+        model_dropdown_pressed_while_open: false,
         model_search,
         model_bounds: std::collections::BTreeMap::new(),
     });
@@ -890,6 +920,8 @@ pub fn render_provider_dialog(
         is_fetching_models,
         fetch_error,
         active_model_dropdown,
+        model_dropdown_active_index,
+        model_dropdown_pressed_while_open: _,
         model_search,
         model_bounds,
     } = state;
@@ -1531,19 +1563,9 @@ pub fn render_provider_dialog(
     let model_section = {
         let has_models = !fetched_models.is_empty();
         let active_target = active_model_dropdown.clone();
-        let query = model_search.read(cx).text().trim().to_lowercase();
-        let filtered_models: Vec<_> = fetched_models
-            .iter()
-            .filter(|m| {
-                if query.is_empty() {
-                    true
-                } else {
-                    m.id.to_lowercase().contains(&query)
-                        || m.owned_by.as_deref().unwrap_or("").to_lowercase().contains(&query)
-                        || m.display_name.as_deref().unwrap_or("").to_lowercase().contains(&query)
-                }
-            })
-            .collect();
+        let query = model_search.read(cx).text().trim().to_string();
+        let (vendor_order, grouped_models, flat_models) =
+            Workspace::get_ranked_provider_models(&fetched_models, &query);
 
         // Universal Model Input with Dropdown Component
         let render_model_input_with_fetch = {
@@ -1552,20 +1574,17 @@ pub fn render_provider_dialog(
             let is_fetching = is_fetching_models;
             let has_models = has_models;
             let active_target = active_target.clone();
-            let filtered_len = filtered_models.len();
+            let filtered_len = flat_models.len();
             let total_models_len = fetched_models.len();
             let model_search = model_search.clone();
             let model_bounds = model_bounds.clone();
-
-            let mut grouped_models: std::collections::BTreeMap<String, Vec<&aitoolplus_core::api_hub::FetchedModel>> = std::collections::BTreeMap::new();
-            for m in &filtered_models {
-                let vendor = m.owned_by.clone().unwrap_or_else(|| "Other".to_string());
-                grouped_models.entry(vendor).or_default().push(m);
-            }
+            let active_dropdown_index = model_dropdown_active_index;
+            let vendor_order = vendor_order.clone();
+            let grouped_models = grouped_models.clone();
 
             move |target_id: String,
                   model_ent: gpui::Entity<TextInput>,
-                  display_name_ent: Option<gpui::Entity<TextInput>>,
+                  _display_name_ent: Option<gpui::Entity<TextInput>>,
                   cx: &mut Context<Workspace>| -> gpui::AnyElement {
                 let is_open = active_target.as_deref() == Some(&target_id);
                 let target_str = target_id.clone();
@@ -1610,27 +1629,56 @@ pub fn render_provider_dialog(
                     );
                 } else if has_models {
                     let ts = target_str.clone();
-                    let was_open = is_open;
+                    let ts_cap = target_str.clone();
+                    let search_ent_for_toggle = model_search.clone();
                     input_row = input_row.child(
-                        crate::components::icon_button_svg(
-                            format!("btn-drop-{target_id}"),
-                            if is_open { crate::icons::CHEVRON_UP_SVG } else { crate::icons::CHEVRON_DOWN_SVG },
-                            if is_open { i.t("tool_dialog.close_2") } else { i.t("tool_dialog.select_2") },
-                            false,
-                            &t2,
-                            cx,
-                            move |ws, _ev, _w, cx| {
-                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                    if was_open {
-                                        d.active_model_dropdown = None;
-                                    } else {
-                                        d.model_search.update(cx, |inp, cx| inp.set_text_silent("", cx));
-                                        d.active_model_dropdown = Some(ts.clone());
+                        div()
+                            .id(gpui::SharedString::from(format!("btn-drop-{target_id}")))
+                            .cursor_pointer()
+                            .p(px(6.0))
+                            .rounded(px(5.0))
+                            .hover(|h| h.bg(t2.row_hover))
+                            .capture_any_mouse_down(cx.listener({
+                                let ts_cap = ts_cap.clone();
+                                move |ws, _ev: &gpui::MouseDownEvent, _window, _cx| {
+                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                        d.model_dropdown_pressed_while_open =
+                                            d.active_model_dropdown.as_deref() == Some(&ts_cap);
                                     }
                                 }
-                                cx.notify();
-                            },
-                        )
+                            }))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener({
+                                    let ts = ts.clone();
+                                    let search_ent = search_ent_for_toggle.clone();
+                                    move |ws, _ev: &gpui::MouseDownEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                            let was_open = std::mem::take(&mut d.model_dropdown_pressed_while_open);
+                                            if was_open {
+                                                d.active_model_dropdown = None;
+                                                d.model_dropdown_active_index = None;
+                                            } else {
+                                                search_ent.update(cx, |inp, cx| {
+                                                    inp.clear(cx);
+                                                    inp.focus_handle.focus(window, cx);
+                                                    inp.start_blink(cx);
+                                                });
+                                                d.active_model_dropdown = Some(ts.clone());
+                                                d.model_dropdown_active_index = Some(0);
+                                            }
+                                        }
+                                        cx.notify();
+                                    }
+                                }),
+                            )
+                            .child(
+                                gpui::svg()
+                                    .data(if is_open { crate::icons::CHEVRON_UP_SVG } else { crate::icons::CHEVRON_DOWN_SVG })
+                                    .size(px(14.0))
+                                    .text_color(if is_open { t2.accent } else { t2.text_muted })
+                            )
                     );
                 }
 
@@ -1652,37 +1700,63 @@ pub fn render_provider_dialog(
                         .gap(px(6.0))
                         .on_mouse_down_out({
                             let entity = cx.entity().clone();
-                            move |_ev, _window, cx| {
-                                entity.update(cx, |ws, cx| {
-                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                        d.active_model_dropdown = None;
-                                    }
-                                    cx.notify();
+                            move |_ev, window, cx| {
+                                let entity = entity.clone();
+                                window.defer(cx, move |window, cx| {
+                                    let _ = entity.update(cx, |ws, cx| {
+                                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                            d.active_model_dropdown = None;
+                                            d.model_dropdown_active_index = None;
+                                        }
+                                        cx.notify();
+                                    });
+                                    window.refresh();
                                 });
                             }
                         });
 
                     panel = panel.child(
                         div()
+                            .id(gpui::SharedString::from(format!("model-search-row-{target_id}")))
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .child(gpui::svg().data(crate::icons::SEARCH_SVG).size(px(13.0)).text_color(t2.text_secondary))
-                            .child(div().flex_1().child(input_container(&t2, model_search.clone())))
-                            .child(crate::components::icon_button_svg(
-                                format!("btn-close-pop-{target_str_close}"),
-                                crate::icons::X_SVG,
-                                i.t("tool_dialog.close"),
-                                false,
-                                &t2,
-                                cx,
-                                |ws, _, _, cx| {
-                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                        d.active_model_dropdown = None;
-                                    }
-                                    cx.notify();
-                                },
-                            ))
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .rounded(px(6.0))
+                            .bg(t2.input_bg)
+                            .border_1()
+                            .border_color(t2.input_border)
+                            .child(
+                                gpui::svg()
+                                    .data(crate::icons::SEARCH_SVG)
+                                    .size(px(13.0))
+                                    .text_color(t2.text_muted)
+                                    .flex_none(),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .child(model_search.clone())
+                            )
+                            .child(
+                                crate::components::icon_button_svg(
+                                    format!("btn-close-pop-{target_str_close}"),
+                                    crate::icons::X_SVG,
+                                    i.t("tool_dialog.close"),
+                                    false,
+                                    &t2,
+                                    cx,
+                                    |ws, _, _, cx| {
+                                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                            d.active_model_dropdown = None;
+                                            d.model_dropdown_active_index = None;
+                                        }
+                                        cx.notify();
+                                    },
+                                )
+                            )
                     );
 
                     panel = panel.child(
@@ -1701,7 +1775,7 @@ pub fn render_provider_dialog(
 
                     let mut list_container = div()
                         .id(gpui::SharedString::from(format!("list-scroll-{target_id}")))
-                        .max_h(px(200.0))
+                        .max_h(px(220.0))
                         .overflow_y_scroll()
                         .flex()
                         .flex_col()
@@ -1710,7 +1784,7 @@ pub fn render_provider_dialog(
                     if filtered_len == 0 {
                         list_container = list_container.child(
                             div()
-                                .py(px(12.0))
+                                .py(px(14.0))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -1719,116 +1793,138 @@ pub fn render_provider_dialog(
                                 .child(i.t("tool_dialog.no_matching_models_found"))
                         );
                     } else {
-                        for (vendor, m_list) in &grouped_models {
-                            list_container = list_container.child(
-                                div()
-                                    .px(px(6.0))
-                                    .pt(px(4.0))
-                                    .pb(px(1.0))
-                                    .text_size(px(10.0))
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(t2.accent)
-                                    .child(vendor.to_uppercase())
-                            );
-
-                            for m in m_list {
-                                let m_id = m.id.clone();
-                                let m_disp = m.display_name.clone();
-                                let m_ent_c = model_ent.clone();
-                                let d_ent_c = display_name_ent.clone();
-                                let t3 = t2.clone();
-
-                                let mut row_el = div()
-                                    .id(gpui::SharedString::from(format!("opt-{}-{target_id}", m_id)))
-                                    .cursor_pointer()
-                                    .px(px(8.0))
-                                    .py(px(4.0))
-                                    .rounded(px(5.0))
-                                    .bg(t3.input_bg)
-                                    .border_1()
-                                    .border_color(t3.input_border)
-                                    .hover(|h| h.bg(t3.row_hover).border_color(t3.accent))
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap(px(6.0))
-                                    .on_click({
-                                        let m_id_c = m_id.clone();
-                                        let m_disp_c = m_disp.clone();
-                                        let entity = cx.entity().clone();
-                                        move |_ev, _window, cx| {
-                                            entity.update(cx, |ws, cx| {
-                                                m_ent_c.update(cx, |inp, cx| inp.set_text_silent(&m_id_c, cx));
-                                                if let Some(dn_ent) = &d_ent_c {
-                                                    let curr_dn = dn_ent.read(cx).text().trim().to_string();
-                                                    if curr_dn.is_empty() {
-                                                        let fallback_name = m_disp_c.as_deref().unwrap_or(&m_id_c);
-                                                        dn_ent.update(cx, |inp, cx| inp.set_text_silent(fallback_name, cx));
-                                                    }
-                                                }
-                                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                                    d.active_model_dropdown = None;
-                                                }
-                                                let msg = ws.i18n.raw(
-                                                    &format!("已选择模型: {m_id_c}"),
-                                                    &format!("Selected model: {m_id_c}"),
-                                                ).to_string();
-                                                ws.ui.toast(msg, false);
-                                                cx.notify();
-                                            });
-                                        }
-                                    });
-
-                                let mut left_col = div().flex_1().flex().items_center().gap(px(6.0)).min_w(px(0.0));
-                                left_col = left_col.child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(t3.text_primary)
-                                        .child(m.id.clone())
-                                );
-
-                                if let Some(dn) = &m.display_name {
-                                    if dn != &m.id {
-                                        left_col = left_col.child(
-                                            div()
-                                                .text_size(px(10.5))
-                                                .text_color(t3.text_muted)
-                                                .child(format!("({dn})"))
-                                        );
-                                    }
-                                }
-
-                                if let Some(ctx_len) = m.context_length {
-                                    let k_len = ctx_len / 1000;
-                                    left_col = left_col.child(
-                                        div()
-                                            .px(px(4.0))
-                                            .py(px(1.0))
-                                            .rounded(px(3.0))
-                                            .bg(t3.sidebar_bg)
-                                            .text_size(px(9.5))
-                                            .text_color(t3.text_muted)
-                                            .child(format!("{k_len}k"))
-                                    );
-                                }
-
-                                row_el = row_el.child(left_col);
-                                row_el = row_el.child(
+                        let mut flat_idx = 0;
+                        for vendor in &vendor_order {
+                            if let Some(m_list) = grouped_models.get(vendor) {
+                                list_container = list_container.child(
                                     div()
                                         .px(px(6.0))
-                                        .py(px(2.0))
-                                        .rounded(px(4.0))
-                                        .bg(t3.accent_subtle)
-                                        .border_1()
-                                        .border_color(t3.accent)
+                                        .pt(px(4.0))
+                                        .pb(px(1.0))
                                         .text_size(px(10.0))
-                                        .text_color(t3.accent)
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .child(i.t("tool_dialog.select"))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .text_color(t2.accent)
+                                        .child(vendor.to_uppercase())
                                 );
 
-                                list_container = list_container.child(row_el);
+                                for m in m_list {
+                                    let cur_idx = flat_idx;
+                                    flat_idx += 1;
+
+                                    let m_id = m.id.clone();
+                                    let m_disp = m.display_name.clone();
+                                    let current_text = model_ent.read(cx).text().trim().to_string();
+                                    let is_selected = current_text == m.id;
+                                    let is_active = active_dropdown_index == Some(cur_idx);
+                                    let t3 = t2.clone();
+                                    let ts_for_click = target_str.clone();
+
+                                    let mut row_el = div()
+                                        .id(gpui::SharedString::from(format!("opt-{}-{target_id}", m_id)))
+                                        .cursor_pointer()
+                                        .px(px(8.0))
+                                        .py(px(5.0))
+                                        .rounded(px(5.0))
+                                        .bg(if is_active {
+                                            t3.row_hover
+                                        } else if is_selected {
+                                            t3.accent_subtle
+                                        } else {
+                                            t3.input_bg
+                                        })
+                                        .border_1()
+                                        .border_color(if is_active || is_selected {
+                                            t3.accent
+                                        } else {
+                                            t3.input_border
+                                        })
+                                        .hover(|h| h.bg(t3.row_hover).border_color(t3.accent))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap(px(6.0))
+                                        .on_mouse_move(cx.listener(move |ws, _, _, cx| {
+                                            if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                d.model_dropdown_active_index = Some(cur_idx);
+                                            }
+                                            cx.notify();
+                                        }))
+                                        .on_click(cx.listener({
+                                            let m_id_c = m_id.clone();
+                                            let m_disp_c = m_disp.clone();
+                                            let ts_c = ts_for_click.clone();
+                                            move |ws, _ev, _window, cx| {
+                                                ws.apply_provider_model_selection(
+                                                    &ts_c,
+                                                    &m_id_c,
+                                                    m_disp_c.as_deref(),
+                                                    cx,
+                                                );
+                                            }
+                                        }));
+
+                                    let mut left_col = div().flex_1().flex().items_center().gap(px(6.0)).min_w(px(0.0));
+
+                                    if is_selected {
+                                        left_col = left_col.child(
+                                            gpui::svg()
+                                                .data(crate::icons::CHECK_SVG)
+                                                .size(px(12.0))
+                                                .text_color(t3.accent)
+                                                .flex_none(),
+                                        );
+                                    }
+
+                                    left_col = left_col.child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .font_weight(if is_selected { gpui::FontWeight::SEMIBOLD } else { gpui::FontWeight::MEDIUM })
+                                            .text_color(if is_selected { t3.accent } else { t3.text_primary })
+                                            .child(m.id.clone())
+                                    );
+
+                                    if let Some(dn) = &m.display_name {
+                                        if dn != &m.id {
+                                            left_col = left_col.child(
+                                                div()
+                                                    .text_size(px(10.5))
+                                                    .text_color(t3.text_muted)
+                                                    .child(format!("({dn})"))
+                                            );
+                                        }
+                                    }
+
+                                    if let Some(ctx_len) = m.context_length {
+                                        let k_len = ctx_len / 1000;
+                                        left_col = left_col.child(
+                                            div()
+                                                .px(px(4.0))
+                                                .py(px(1.0))
+                                                .rounded(px(3.0))
+                                                .bg(t3.sidebar_bg)
+                                                .text_size(px(9.5))
+                                                .text_color(t3.text_muted)
+                                                .child(format!("{k_len}k"))
+                                        );
+                                    }
+
+                                    row_el = row_el.child(left_col);
+                                    row_el = row_el.child(
+                                        div()
+                                            .px(px(6.0))
+                                            .py(px(2.0))
+                                            .rounded(px(4.0))
+                                            .bg(if is_selected { t3.accent } else { t3.accent_subtle })
+                                            .border_1()
+                                            .border_color(t3.accent)
+                                            .text_size(px(10.0))
+                                            .text_color(if is_selected { crate::rgba_const(0xffffffff) } else { t3.accent })
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .child(if is_selected { i.raw("已选择", "Selected") } else { i.t("tool_dialog.select") })
+                                    );
+
+                                    list_container = list_container.child(row_el);
+                                }
                             }
                         }
                     }

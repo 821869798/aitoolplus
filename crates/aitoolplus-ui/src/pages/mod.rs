@@ -264,6 +264,8 @@ pub struct WorkspaceState {
     pub pi_dropdown_open: Option<PiDropdownField>,
     pub pi_dropdown_typing: bool,
     pub pi_dropdown_search: gpui::Entity<TextInput>,
+    pub pi_dropdown_active_index: Option<usize>,
+    pub pi_dropdown_pressed_while_open: bool,
     pub pi_dropdown_just_closed: Option<(PiDropdownField, std::time::Instant)>,
     pub codex_plugins: Option<
         Result<
@@ -661,6 +663,8 @@ pub struct ProviderDialogState {
     pub is_fetching_models: bool,
     pub fetch_error: Option<String>,
     pub active_model_dropdown: Option<String>,
+    pub model_dropdown_active_index: Option<usize>,
+    pub model_dropdown_pressed_while_open: bool,
     pub model_search: gpui::Entity<TextInput>,
     pub model_bounds: std::collections::BTreeMap<String, gpui::Bounds<gpui::Pixels>>,
 }
@@ -767,14 +771,29 @@ impl WorkspaceState {
         let skill_store_repos_search = cx.new(|cx| TextInput::new("搜索仓库中的技能（例如：notion, git, rust, comic...）", cx));
         let skill_store_new_repo_url = cx.new(|cx| TextInput::new("https://github.com/owner/repo", cx));
         let skill_store_new_repo_branch = cx.new(|cx| TextInput::new("main", cx));
-        let pi_dropdown_search = cx.new(|cx| TextInput::new("输入搜索…", cx));
+        let pi_dropdown_search = cx.new(|cx| {
+            let mut inp = TextInput::new("输入搜索…", cx);
+            inp.set_borderless(true);
+            inp
+        });
         cx.subscribe(&pi_dropdown_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
             match event {
-                crate::text_input::TextInputEvent::Escape => {
-                    this.ui.pi_dropdown_open = None;
+                crate::text_input::TextInputEvent::Change(_) => {
+                    this.ui.pi_dropdown_active_index = Some(0);
                     cx.notify();
                 }
-                _ => {
+                crate::text_input::TextInputEvent::Up => {
+                    this.step_pi_dropdown(-1, cx);
+                }
+                crate::text_input::TextInputEvent::Down => {
+                    this.step_pi_dropdown(1, cx);
+                }
+                crate::text_input::TextInputEvent::Enter => {
+                    this.confirm_pi_dropdown(cx);
+                }
+                crate::text_input::TextInputEvent::Escape => {
+                    this.ui.pi_dropdown_open = None;
+                    this.ui.pi_dropdown_active_index = None;
                     cx.notify();
                 }
             }
@@ -808,6 +827,7 @@ impl WorkspaceState {
                     this.ui.pi_dropdown_typing = false;
                     cx.notify();
                 }
+                _ => {}
             }
         }).detach();
 
@@ -824,6 +844,7 @@ impl WorkspaceState {
                     this.ui.pi_dropdown_typing = false;
                     cx.notify();
                 }
+                _ => {}
             }
         }).detach();
 
@@ -840,6 +861,7 @@ impl WorkspaceState {
                     this.ui.pi_dropdown_typing = false;
                     cx.notify();
                 }
+                _ => {}
             }
         }).detach();
 
@@ -1012,6 +1034,8 @@ impl WorkspaceState {
             pi_dropdown_open: None,
             pi_dropdown_typing: false,
             pi_dropdown_search,
+            pi_dropdown_active_index: None,
+            pi_dropdown_pressed_while_open: false,
             pi_dropdown_just_closed: None,
             codex_plugins: None,
             codex_plugins_loading: false,
