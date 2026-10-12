@@ -64,6 +64,12 @@ const TOOLS: &[ToolSpec] = &[
         update: Some("grok update"),
     },
     ToolSpec {
+        id: "kimi",
+        name: "Kimi",
+        npm: Some("npm i -g @moonshot-ai/kimi-code@latest"),
+        update: Some("kimi update"),
+    },
+    ToolSpec {
         id: "opencode",
         name: "OpenCode",
         npm: Some("npm i -g opencode-ai@latest"),
@@ -76,15 +82,27 @@ const TOOLS: &[ToolSpec] = &[
         update: Some("openclaw update --yes"),
     },
     ToolSpec {
+        id: "pi",
+        name: "Pi",
+        npm: Some("npm i -g @earendil-works/pi-coding-agent@latest"),
+        update: None,
+    },
+    ToolSpec {
+        id: "omp",
+        name: "Oh My Pi",
+        npm: Some("npm i -g @oh-my-pi/pi-coding-agent@latest"),
+        update: Some("omp update"),
+    },
+    ToolSpec {
         id: "hermes",
         name: "Hermes",
         npm: None,
         update: Some("hermes update"),
     },
     ToolSpec {
-        id: "pi",
-        name: "Pi",
-        npm: Some("npm i -g @earendil-works/pi-coding-agent@latest"),
+        id: "dsh",
+        name: "DSH",
+        npm: Some("npm i -g @deepseek-ai/dsh@latest"),
         update: None,
     },
 ];
@@ -208,7 +226,7 @@ fn classify(id: &str, bin: &Path, real: &Path) -> Source {
     if let Some(bin) = sibling_bin(&bin_text, "pnpm", &["cmd", "exe", ""]) {
         return Source::Pnpm(bin);
     }
-    if matches!(id, "claude" | "openclaw") {
+    if matches!(id, "claude" | "openclaw" | "kimi" | "omp") {
         return Source::Official;
     }
     if let Some(bin) = sibling_bin(&bin_text, "npm", &["cmd", "exe", ""]) {
@@ -527,7 +545,10 @@ fn fallback_dirs() -> Vec<PathBuf> {
         );
     }
     if let Ok(home) = std::env::var("USERPROFILE") {
-        dirs.push(PathBuf::from(home).join(".local").join("bin"));
+        let home = Path::new(&home);
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join(".bun").join("bin"));
+        dirs.push(home.join(".omp").join("bin"));
     }
     dirs
 }
@@ -610,7 +631,7 @@ fn quote_batch(path: &str) -> String {
 
 fn official_args(id: &str) -> Option<&'static str> {
     match id {
-        "claude" | "codex" | "grok" | "hermes" => Some("update"),
+        "claude" | "codex" | "grok" | "hermes" | "kimi" | "omp" => Some("update"),
         "openclaw" => Some("update --yes"),
         "opencode" => Some("upgrade"),
         _ => None,
@@ -624,9 +645,12 @@ fn npm_package(id: &str) -> Option<&'static str> {
         "codex" => Some("@openai/codex"),
         "agy" => Some("@google/antigravity-cli"),
         "grok" => Some("@xai-official/grok"),
+        "kimi" => Some("@moonshot-ai/kimi-code"),
         "opencode" => Some("opencode-ai"),
         "openclaw" => Some("openclaw"),
         "pi" => Some("@earendil-works/pi-coding-agent"),
+        "omp" => Some("@oh-my-pi/pi-coding-agent"),
+        "dsh" => Some("@deepseek-ai/dsh"),
         _ => None,
     }
 }

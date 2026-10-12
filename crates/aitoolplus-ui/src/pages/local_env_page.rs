@@ -103,10 +103,13 @@ fn tool_sidebar_key(id: &str) -> &'static str {
         "codex" => "codex",
         "agy" => "antigravity",
         "grok" => "grok",
+        "kimi" => "kimi",
         "opencode" => "opencode",
         "openclaw" => "openclaw",
-        "hermes" => "hermes",
         "pi" => "pi",
+        "omp" | "oh_my_pi" => "oh_my_pi",
+        "hermes" => "hermes",
+        "dsh" => "dsh",
         _ => "",
     }
 }
@@ -153,10 +156,13 @@ fn local_env_icon(id: &str) -> &'static [u8] {
         "codex" => crate::icons::OPENAI_SVG,
         "agy" => crate::icons::GEMINI_SVG,
         "grok" => crate::icons::GROK_SVG,
+        "kimi" => crate::icons::KIMI_SVG,
         "opencode" => crate::icons::OPENCODE_SVG,
         "openclaw" => crate::icons::CLAW_SVG,
-        "hermes" => crate::icons::HERMES_SVG,
         "pi" => crate::icons::PI_SVG,
+        "omp" | "oh_my_pi" => crate::icons::OMP_SVG,
+        "hermes" => crate::icons::HERMES_SVG,
+        "dsh" => crate::icons::DEEPSEEK_SVG,
         _ => crate::icons::TERMINAL_SVG,
     }
 }
@@ -227,10 +233,13 @@ pub(super) fn local_env_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         ("codex", "Codex"),
         ("agy", "Antigravity CLI"),
         ("grok", "Grok Build"),
+        ("kimi", "Kimi"),
         ("opencode", "OpenCode"),
         ("openclaw", "OpenClaw"),
-        ("hermes", "Hermes"),
         ("pi", "Pi"),
+        ("omp", "Oh My Pi"),
+        ("hermes", "Hermes"),
+        ("dsh", "DSH"),
     ];
 
     let mut rows: Vec<AppRowData> = Vec::new();

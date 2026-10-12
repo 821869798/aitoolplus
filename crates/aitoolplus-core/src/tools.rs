@@ -100,6 +100,7 @@ impl ToolId {
 
     pub const ALL: [ToolId; 11] = [
         ToolId::ClaudeCode,
+        ToolId::ClaudeDesktop,
         ToolId::Codex,
         ToolId::Grok,
         ToolId::Kimi,
@@ -107,7 +108,6 @@ impl ToolId {
         ToolId::OpenClaw,
         ToolId::Pi,
         ToolId::OhMyPi,
-        ToolId::ClaudeDesktop,
         ToolId::Hermes,
         ToolId::Dsh,
     ];
