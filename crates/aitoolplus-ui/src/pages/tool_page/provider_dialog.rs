@@ -512,6 +512,13 @@ pub fn open_provider_dialog(
                 .unwrap_or(false);
             let cw_str = item.get("contextWindow").map(|v| v.to_string()).unwrap_or_else(|| "1000000".into());
             let mt_str = item.get("maxTokens").map(|v| v.to_string()).unwrap_or_else(|| "128000".into());
+            let raw_compat = item.get("compat").and_then(Value::as_object).cloned();
+            let raw_thinking_level_map = item.get("thinkingLevelMap").and_then(Value::as_object).cloned();
+            let force_adaptive_thinking = raw_compat
+                .as_ref()
+                .and_then(|c| c.get("forceAdaptiveThinking"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
 
             let id_ent = cx.new(|cx| {
                 let mut inp = TextInput::new(i.t("tool_dialog.model_id_2"), cx);
@@ -539,6 +546,9 @@ pub fn open_provider_dialog(
                 name: name_ent,
                 reasoning,
                 image_input,
+                force_adaptive_thinking,
+                raw_compat,
+                raw_thinking_level_map,
                 context_window: cw_ent,
                 max_tokens: mt_ent,
                 is_expanded: false,
@@ -564,6 +574,9 @@ pub fn open_provider_dialog(
             name: name_ent,
             reasoning: false,
             image_input: false,
+            force_adaptive_thinking: false,
+            raw_compat: None,
+            raw_thinking_level_map: None,
             context_window: cw_ent,
             max_tokens: mt_ent,
             is_expanded: true,
@@ -1126,6 +1139,16 @@ pub fn render_provider_dialog(
                                                         .unwrap_or(false);
                                                     let cw_str = item.get("contextWindow").map(|v| v.to_string()).unwrap_or_default();
                                                     let mt_str = item.get("maxTokens").map(|v| v.to_string()).unwrap_or_default();
+                                                    let raw_compat = item.get("compat").and_then(Value::as_object).cloned();
+                                                    let raw_thinking_level_map = item.get("thinkingLevelMap").and_then(Value::as_object).cloned();
+                                                    let is_anthropic = dialog.pi_api_format == "anthropic-messages" || dialog.pi_api_format == "bedrock-converse-stream";
+                                                    let force_adaptive_thinking = raw_compat
+                                                        .as_ref()
+                                                        .and_then(|c| c.get("forceAdaptiveThinking"))
+                                                        .and_then(Value::as_bool)
+                                                        .unwrap_or_else(|| {
+                                                            is_anthropic && (m_id.contains("opus-5") || m_id.contains("sonnet-5") || m_id.contains("haiku-5"))
+                                                        });
                                                     let id_ent = cx.new(|cx| {
                                                         let mut inp = TextInput::new("模型 ID", cx);
                                                         inp.set_text_silent(m_id, cx);
@@ -1152,6 +1175,9 @@ pub fn render_provider_dialog(
                                                         name: name_ent,
                                                         reasoning,
                                                         image_input,
+                                                        force_adaptive_thinking,
+                                                        raw_compat,
+                                                        raw_thinking_level_map,
                                                         context_window: cw_ent,
                                                         max_tokens: mt_ent,
                                                         is_expanded: false,
@@ -2063,7 +2089,9 @@ pub fn render_provider_dialog(
                                                         inp.set_text_silent("128000".to_string(), cx);
                                                         inp
                                                     });
-                                                    let reasoning = fm.id.contains("reasoner") || fm.id.contains("r1");
+                                                    let reasoning = fm.id.contains("reasoner") || fm.id.contains("r1") || fm.id.contains("claude") || fm.id.contains("o1") || fm.id.contains("o3");
+                                                    let is_anthropic = d.pi_api_format == "anthropic-messages" || d.pi_api_format == "bedrock-converse-stream";
+                                                    let force_adaptive_thinking = is_anthropic && (fm.id.contains("opus-5") || fm.id.contains("sonnet-5") || fm.id.contains("haiku-5"));
                                                     let key = format!("pi_model_{}", d.pi_models.len());
                                                     d.pi_models.push(crate::pages::PiModelDraft {
                                                         key,
@@ -2073,6 +2101,9 @@ pub fn render_provider_dialog(
                                                         max_tokens: max_ent,
                                                         reasoning,
                                                         image_input: false,
+                                                        force_adaptive_thinking,
+                                                        raw_compat: None,
+                                                        raw_thinking_level_map: None,
                                                         is_expanded: false,
                                                     });
                                                     added += 1;
@@ -2116,6 +2147,9 @@ pub fn render_provider_dialog(
                                                 name: name_ent,
                                                 reasoning: false,
                                                 image_input: false,
+                                                force_adaptive_thinking: false,
+                                                raw_compat: None,
+                                                raw_thinking_level_map: None,
                                                 context_window: cw_ent,
                                                 max_tokens: mt_ent,
                                                 is_expanded: true,
@@ -2192,6 +2226,9 @@ pub fn render_provider_dialog(
                     let is_expanded = draft.is_expanded;
                     let is_reasoning = draft.reasoning;
                     let has_image = draft.image_input;
+                    let is_adaptive = draft.force_adaptive_thinking;
+                    let is_anthropic_api = pi_api_format == "anthropic-messages" || pi_api_format == "bedrock-converse-stream";
+                    let show_adaptive_toggle = is_anthropic_api || draft.force_adaptive_thinking;
                     let t2 = t.clone();
 
                     let mut row_card = div()
@@ -2271,7 +2308,7 @@ pub fn render_provider_dialog(
 
                     // Expanded detail panel
                     if is_expanded {
-                        let exp_panel = div()
+                        let mut exp_panel = div()
                             .pl(px(34.0))
                             .pt(px(4.0))
                             .pb(px(2.0))
@@ -2279,77 +2316,188 @@ pub fn render_provider_dialog(
                             .border_color(t2.card_border)
                             .flex()
                             .flex_col()
-                            .gap(px(6.0))
-                            .child(
+                            .gap(px(6.0));
+
+                        // 1. Reasoning toggle row
+                        exp_panel = exp_panel.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .py(px(5.0))
+                                .px(px(8.0))
+                                .rounded(px(6.0))
+                                .bg(t2.input_bg.opacity(0.35))
+                                .border_1()
+                                .border_color(t2.card_border.opacity(0.5))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(1.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(t2.text_primary)
+                                                .child("🧠 思考推理 (Reasoning)")
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(t2.text_muted)
+                                                .child("开启模型思维链与深度推理能力")
+                                        )
+                                )
+                                .child(
+                                    crate::components::toggle(
+                                        format!("btn-toggle-reasoning-{idx}"),
+                                        is_reasoning,
+                                        &t2,
+                                        cx,
+                                        move |ws, _ev, _w, cx| {
+                                            if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                if let Some(m) = d.pi_models.get_mut(idx) {
+                                                    m.reasoning = !m.reasoning;
+                                                }
+                                            }
+                                            cx.notify();
+                                        },
+                                    )
+                                )
+                        );
+
+                        // 2. Image input toggle row
+                        exp_panel = exp_panel.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .py(px(5.0))
+                                .px(px(8.0))
+                                .rounded(px(6.0))
+                                .bg(t2.input_bg.opacity(0.35))
+                                .border_1()
+                                .border_color(t2.card_border.opacity(0.5))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(1.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(t2.text_primary)
+                                                .child("🖼️ 支持图片输入 (Image Input)")
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(t2.text_muted)
+                                                .child("允许向该模型发送图像等视觉内容")
+                                        )
+                                )
+                                .child(
+                                    crate::components::toggle(
+                                        format!("btn-toggle-img-{idx}"),
+                                        has_image,
+                                        &t2,
+                                        cx,
+                                        move |ws, _ev, _w, cx| {
+                                            if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                if let Some(m) = d.pi_models.get_mut(idx) {
+                                                    m.image_input = !m.image_input;
+                                                }
+                                            }
+                                            cx.notify();
+                                        },
+                                    )
+                                )
+                        );
+
+                        // 3. Adaptive thinking toggle row (Anthropic only)
+                        if show_adaptive_toggle {
+                            exp_panel = exp_panel.child(
                                 div()
                                     .flex()
-                                    .gap(px(8.0))
                                     .items_center()
-                                    // Reasoning toggle switch
-                                    .child(
-                                        gpui_kit::component::checkbox::Checkbox::new(gpui::SharedString::from(format!("btn-toggle-reasoning-{idx}")))
-                                            .checked(is_reasoning)
-                                            .label("🧠 思考推理 (Reasoning)")
-                                            .on_click({
-                                                let entity = cx.entity().clone();
-                                                move |_checked, _window, cx| {
-                                                    entity.update(cx, |ws, cx| {
-                                                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                                            if let Some(m) = d.pi_models.get_mut(idx) {
-                                                                m.reasoning = !m.reasoning;
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }
-                                            })
-                                    )
-                                    // Image input switch
-                                    .child(
-                                        gpui_kit::component::checkbox::Checkbox::new(gpui::SharedString::from(format!("btn-toggle-img-{idx}")))
-                                            .checked(has_image)
-                                            .label("🖼️ 支持图片输入 (image)")
-                                            .on_click({
-                                                let entity = cx.entity().clone();
-                                                move |_checked, _window, cx| {
-                                                    entity.update(cx, |ws, cx| {
-                                                        if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                                            if let Some(m) = d.pi_models.get_mut(idx) {
-                                                                m.image_input = !m.image_input;
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    });
-                                                }
-                                            })
-                                    )
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(8.0))
-                                    .items_center()
-                                    // Context Window
+                                    .justify_between()
+                                    .py(px(5.0))
+                                    .px(px(8.0))
+                                    .rounded(px(6.0))
+                                    .bg(t2.input_bg.opacity(0.35))
+                                    .border_1()
+                                    .border_color(t2.card_border.opacity(0.5))
                                     .child(
                                         div()
-                                            .flex_1()
                                             .flex()
-                                            .items_center()
-                                            .gap(px(4.0))
-                                            .child(div().text_size(px(11.0)).text_color(t2.text_muted).child("上下文窗口:"))
-                                            .child(div().flex_1().child(input_container(&t2, draft.context_window.clone())))
+                                            .flex_col()
+                                            .gap(px(1.0))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.0))
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .text_color(t2.text_primary)
+                                                    .child("⚡ 自适应思考 (Adaptive Thinking)")
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.5))
+                                                    .text_color(t2.text_muted)
+                                                    .child("Anthropic 协议自适应思考模式 (thinking.type: adaptive)")
+                                            )
                                     )
-                                    // Max Tokens
                                     .child(
-                                        div()
-                                            .flex_1()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(4.0))
-                                            .child(div().text_size(px(11.0)).text_color(t2.text_muted).child("最大输出:"))
-                                            .child(div().flex_1().child(input_container(&t2, draft.max_tokens.clone())))
+                                        crate::components::toggle(
+                                            format!("btn-toggle-adaptive-{idx}"),
+                                            is_adaptive,
+                                            &t2,
+                                            cx,
+                                            move |ws, _ev, _w, cx| {
+                                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                    if let Some(m) = d.pi_models.get_mut(idx) {
+                                                        m.force_adaptive_thinking = !m.force_adaptive_thinking;
+                                                        if m.force_adaptive_thinking && !m.reasoning {
+                                                            m.reasoning = true;
+                                                        }
+                                                    }
+                                                }
+                                                cx.notify();
+                                            },
+                                        )
                                     )
                             );
+                        }
+
+                        // 4. Numeric parameters row (Context Window & Max Tokens)
+                        exp_panel = exp_panel.child(
+                            div()
+                                .flex()
+                                .gap(px(8.0))
+                                .items_center()
+                                .pt(px(2.0))
+                                // Context Window
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.0))
+                                        .child(div().text_size(px(11.0)).text_color(t2.text_muted).child("上下文窗口:"))
+                                        .child(div().flex_1().child(input_container(&t2, draft.context_window.clone())))
+                                )
+                                // Max Tokens
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.0))
+                                        .child(div().text_size(px(11.0)).text_color(t2.text_muted).child("最大输出:"))
+                                        .child(div().flex_1().child(input_container(&t2, draft.max_tokens.clone())))
+                                )
+                        );
                         row_card = row_card.child(exp_panel);
                     }
 
@@ -4476,6 +4624,30 @@ pub(super) fn save_provider(
             let mt = draft.max_tokens.update(cx, |inp, _| inp.text().trim().to_string());
             if let Ok(mt_num) = mt.parse::<u64>() {
                 m_obj.insert("maxTokens".into(), Value::Number(mt_num.into()));
+            }
+            if draft.force_adaptive_thinking {
+                let mut compat_obj = draft.raw_compat.clone().unwrap_or_default();
+                compat_obj.insert("forceAdaptiveThinking".into(), Value::Bool(true));
+                compat_obj.insert("supportsTemperature".into(), Value::Bool(false));
+                m_obj.insert("compat".into(), Value::Object(compat_obj));
+
+                let mut map_obj = draft.raw_thinking_level_map.clone().unwrap_or_default();
+                if map_obj.is_empty() {
+                    map_obj.insert("xhigh".into(), Value::String("xhigh".into()));
+                    map_obj.insert("max".into(), Value::String("max".into()));
+                    map_obj.insert("minimal".into(), Value::String("low".into()));
+                }
+                m_obj.insert("thinkingLevelMap".into(), Value::Object(map_obj));
+            } else if let Some(mut compat_obj) = draft.raw_compat.clone() {
+                compat_obj.remove("forceAdaptiveThinking");
+                if !compat_obj.is_empty() {
+                    m_obj.insert("compat".into(), Value::Object(compat_obj));
+                }
+                if let Some(map_obj) = draft.raw_thinking_level_map.clone() {
+                    if !map_obj.is_empty() {
+                        m_obj.insert("thinkingLevelMap".into(), Value::Object(map_obj));
+                    }
+                }
             }
             pi_models_json.push(Value::Object(m_obj));
         }

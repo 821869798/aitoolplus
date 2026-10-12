@@ -928,6 +928,73 @@ mod tests {
     }
 
     #[test]
+    fn test_pi_provider_adaptive_thinking_serialization() {
+        let pi_models = vec![
+            serde_json::json!({
+                "id": "claude-opus-5-5",
+                "name": "claude-opus-5-5",
+                "reasoning": true,
+                "input": ["text", "image"],
+                "contextWindow": 1000000,
+                "maxTokens": 128000,
+                "thinkingLevelMap": {
+                    "xhigh": "xhigh",
+                    "max": "max",
+                    "minimal": "low"
+                },
+                "compat": {
+                    "forceAdaptiveThinking": true,
+                    "supportsTemperature": false
+                }
+            }),
+        ];
+
+        let form = ProviderFormData {
+            tool: ToolId::Pi,
+            category: "custom",
+            base_url: "https://api.krill-code.net/coding",
+            api_key: "nb_test",
+            api_format: "anthropic-messages",
+            model: "",
+            sonnet_model: "",
+            sonnet_name: "",
+            opus_model: "",
+            opus_name: "",
+            haiku_model: "",
+            haiku_name: "",
+            fable_model: "",
+            fable_name: "",
+            subagent_model: "",
+            sonnet_1m: false,
+            opus_1m: false,
+            haiku_1m: false,
+            fable_1m: false,
+            subagent_1m: false,
+            pi_provider_key: "krillclaude",
+            pi_api_format: "anthropic-messages",
+            pi_models: &pi_models,
+            codex_wire_api: "",
+            codex_reasoning_effort: "",
+            codex_catalog_models: &[],
+            custom_user_agent: "",
+            custom_headers: "",
+            headers_map: &[],
+            raw_settings_json: "{}",
+        };
+
+        let settings_str = build_provider_settings(&form).expect("should build Pi settings");
+        let parsed: Value = serde_json::from_str(&settings_str).expect("must be valid JSON");
+        let models = parsed.get("models").and_then(Value::as_array).expect("models array");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "claude-opus-5-5");
+        assert_eq!(models[0]["compat"]["forceAdaptiveThinking"], true);
+        assert_eq!(models[0]["compat"]["supportsTemperature"], false);
+        assert_eq!(models[0]["thinkingLevelMap"]["xhigh"], "xhigh");
+        assert_eq!(models[0]["thinkingLevelMap"]["max"], "max");
+        assert_eq!(models[0]["thinkingLevelMap"]["minimal"], "low");
+    }
+
+    #[test]
     fn test_codex_provider_settings_building() {
         let catalog = vec![
             serde_json::json!({
