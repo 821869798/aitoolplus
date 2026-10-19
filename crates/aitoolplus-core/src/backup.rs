@@ -616,27 +616,40 @@ pub fn run_auto_backup_if_due(
         settings.auto_backup_max_keep as usize
     };
     if settings.backup_type == BackupType::Webdav && !settings.webdav.url.trim().is_empty() {
-        crate::webdav::upload(&settings.webdav, &output)?;
-        prune_remote_backups(&settings.webdav, keep_count as u32)?;
+        // Cloud parity with CC-Switch: keep a single unified backup (aitoolplus-sync.zip) on the cloud,
+        // while local retains multi-version timestamped snapshots.
+        let sync_dir = paths.app_data.join("backups").join("sync");
+        fs::create_dir_all(&sync_dir).map_err(|e| e.to_string())?;
+        let sync_file = sync_dir.join("aitoolplus-sync.zip");
+        let _ = fs::copy(&output, &sync_file);
+        crate::webdav::upload(&settings.webdav, &sync_file)?;
+        prune_remote_backups(&settings.webdav)?;
     } else if settings.backup_type == BackupType::S3
         && !settings.s3.endpoint.trim().is_empty()
         && !settings.s3.bucket.trim().is_empty()
     {
-        crate::s3::upload(&settings.s3, &output)?;
-        crate::s3::prune_remote_backups(&settings.s3, keep_count as u32)?;
+        // Cloud parity with CC-Switch: keep a single unified backup (aitoolplus-sync.zip) on the cloud,
+        // while local retains multi-version timestamped snapshots.
+        let sync_dir = paths.app_data.join("backups").join("sync");
+        fs::create_dir_all(&sync_dir).map_err(|e| e.to_string())?;
+        let sync_file = sync_dir.join("aitoolplus-sync.zip");
+        let _ = fs::copy(&output, &sync_file);
+        crate::s3::upload(&settings.s3, &sync_file)?;
+        crate::s3::prune_remote_backups(&settings.s3)?;
     }
     settings.last_auto_backup_time = Some(now.to_rfc3339());
     prune_local_backups(&directory, keep_count)?;
     Ok(Some(report))
 }
 
-fn prune_remote_backups(config: &crate::settings::WebDavConfig, keep: u32) -> Result<(), String> {
-    if keep == 0 {
-        return Ok(());
-    }
+/// Prune legacy timestamped remote backups (aitoolplus-auto-* or aitoolplus-backup-*),
+/// ensuring the cloud stores only the single unified sync file (aitoolplus-sync.zip).
+pub fn prune_remote_backups(config: &crate::settings::WebDavConfig) -> Result<(), String> {
     let backups = crate::webdav::list(config)?;
-    for backup in backups.into_iter().skip(keep as usize) {
-        crate::webdav::delete(config, &backup.name)?;
+    for backup in backups {
+        if backup.name.starts_with("aitoolplus-auto-") || backup.name.starts_with("aitoolplus-backup-") {
+            let _ = crate::webdav::delete(config, &backup.name);
+        }
     }
     Ok(())
 }
@@ -999,5 +1012,92 @@ mod tests {
         // Test restore safety
         assert!(resolve_restore_target(&paths, "appdata/gateway/gateway.db", false).is_none());
         assert!(resolve_restore_target(&paths, "appdata/gateway/logs/req_123.json", false).is_none());
+    }
+
+    #[test]
+    fn cloud_parity_single_backup_and_prune_legacy() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let remote_files = Arc::new(Mutex::new(vec![
+            "aitoolplus-sync.zip".to_string(),
+            "aitoolplus-auto-20261018-015045.zip".to_string(),
+            "aitoolplus-auto-20261019-015105.zip".to_string(),
+            "aitoolplus-backup-manual.zip".to_string(),
+        ]));
+        let deleted_files = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let files_for_server = remote_files.clone();
+        let deleted_for_server = deleted_files.clone();
+
+        let server = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() || line.is_empty() {
+                    break;
+                }
+                let mut parts = line.split_whitespace();
+                let method = parts.next().unwrap_or("").to_string();
+                let path = parts.next().unwrap_or("").to_string();
+
+                // Consume headers
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                }
+
+                if method == "PROPFIND" {
+                    let guard = files_for_server.lock().unwrap();
+                    let mut body = String::from(r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">"#);
+                    for f in guard.iter() {
+                        body.push_str(&format!(
+                            r#"<d:response><d:href>/aitoolplus/{f}</d:href></d:response>"#
+                        ));
+                    }
+                    body.push_str("</d:multistatus>");
+                    let resp = format!(
+                        "HTTP/1.1 207 Multi-Status\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if method == "DELETE" {
+                    let fname = path.rsplit('/').next().unwrap_or("").to_string();
+                    deleted_for_server.lock().unwrap().push(fname);
+                    let resp = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(resp.as_bytes());
+                } else if method == "PUT" || method == "MKCOL" {
+                    let resp = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(resp.as_bytes());
+                }
+            }
+        });
+
+        let config = crate::settings::WebDavConfig {
+            url: format!("http://{addr}"),
+            username: "u".into(),
+            password: "p".into(),
+            remote_directory: "aitoolplus".into(),
+        };
+
+        // Run prune_remote_backups: it should delete all auto and backup files, leaving aitoolplus-sync.zip untouched.
+        assert!(prune_remote_backups(&config).is_ok());
+        let deleted = deleted_files.lock().unwrap().clone();
+        assert_eq!(deleted.len(), 3);
+        assert!(deleted.contains(&"aitoolplus-auto-20261018-015045.zip".to_string()));
+        assert!(deleted.contains(&"aitoolplus-auto-20261019-015105.zip".to_string()));
+        assert!(deleted.contains(&"aitoolplus-backup-manual.zip".to_string()));
+        assert!(!deleted.contains(&"aitoolplus-sync.zip".to_string()));
+
+        let _ = server.join();
     }
 }

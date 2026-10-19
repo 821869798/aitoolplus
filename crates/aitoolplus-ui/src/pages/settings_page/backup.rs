@@ -798,7 +798,9 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                     let report = aitoolplus_core::backup::create_backup(
                                         &paths, &settings, &output,
                                     )?;
-                                    aitoolplus_core::webdav::upload(&webdav, &report.output)
+                                    let res = aitoolplus_core::webdav::upload(&webdav, &report.output)?;
+                                    let _ = aitoolplus_core::backup::prune_remote_backups(&webdav);
+                                    Ok::<_, String>(res)
                                 },
                                 |ws, cx, result| {
                                     ws.ui.backup_busy = false;
@@ -1090,7 +1092,9 @@ pub(super) fn backup_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
                                     let report = aitoolplus_core::backup::create_backup(
                                         &paths, &settings, &output,
                                     )?;
-                                    aitoolplus_core::s3::upload(&s3, &report.output)
+                                    let res = aitoolplus_core::s3::upload(&s3, &report.output)?;
+                                    let _ = aitoolplus_core::s3::prune_remote_backups(&s3);
+                                    Ok::<_, String>(res)
                                 },
                                 |ws, cx, result| {
                                     ws.ui.backup_busy = false;
