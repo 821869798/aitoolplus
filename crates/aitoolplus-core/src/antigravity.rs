@@ -2524,16 +2524,22 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
 
             // If prompt was empty, inspect the first line of transcript
             if title.is_empty() && source_path.is_file() {
-                if let Ok(first_line) = std::fs::read_to_string(&source_path) {
-                    if let Some(line) = first_line.lines().next() {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                            if let Some(content) = val.get("content").and_then(|c| c.as_str()) {
-                                title = clean_antigravity_snippet(content);
-                            }
-                            if ts.is_none() {
-                                if let Some(created_at) = val.get("created_at").and_then(|c| c.as_str()) {
-                                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
-                                        ts = Some(dt.timestamp_millis());
+                if let Ok(file) = std::fs::File::open(&source_path) {
+                    use std::io::BufRead;
+                    let mut reader = std::io::BufReader::new(file);
+                    let mut first_line = String::new();
+                    if reader.read_line(&mut first_line).is_ok() {
+                        let line = first_line.trim();
+                        if !line.is_empty() {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                                if let Some(content) = val.get("content").and_then(|c| c.as_str()) {
+                                    title = clean_antigravity_snippet(content);
+                                }
+                                if ts.is_none() {
+                                    if let Some(created_at) = val.get("created_at").and_then(|c| c.as_str()) {
+                                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
+                                            ts = Some(dt.timestamp_millis());
+                                        }
                                     }
                                 }
                             }

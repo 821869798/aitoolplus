@@ -126,6 +126,13 @@ pub(super) fn agent_sessions_section(
         }
     }
 
+    if let Some(ref open_ag) = ws.ui.antigravity_open_session.clone() {
+        if tool == ToolId::Agents {
+            let meta: aitoolplus_core::session::SessionMeta = open_ag.clone().into();
+            return render_agent_session_detail(tool, &meta, ws, cx);
+        }
+    }
+
     let query = ws.ui.agent_session_search.read(cx).text().trim().to_lowercase();
     let empty_vec = vec![];
     let sessions = ws
@@ -676,6 +683,16 @@ pub(crate) fn render_rename_dialog(
                         match session::rename_session(&meta, &title) {
                             Ok(()) => {
                                 session::invalidate_cache();
+                                if let Some(ref mut list) = ws.ui.antigravity_sessions {
+                                    if let Some(item) = list.iter_mut().find(|s| s.session_id == meta.session_id) {
+                                        item.title = title.clone();
+                                    }
+                                }
+                                if let Some(ref mut open) = ws.ui.antigravity_open_session {
+                                    if open.session_id == meta.session_id {
+                                        open.title = title.clone();
+                                    }
+                                }
                                 ws.ui.toast(ws.i18n.t("tool_sessions.renamed").to_string(), false);
                             }
                             Err(e) => ws.ui.toast(format!("rename failed: {e}"), true),

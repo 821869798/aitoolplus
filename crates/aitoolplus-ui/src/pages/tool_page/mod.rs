@@ -57,6 +57,13 @@ pub fn render_tool_page(
         }
     }
 
+    if let Some(ref open_ag) = ws.ui.antigravity_open_session.clone() {
+        if tool == ToolId::Agents {
+            let meta: aitoolplus_core::session::SessionMeta = open_ag.clone().into();
+            return crate::pages::session_detail::render_session_detail(tool, &meta, ws, cx);
+        }
+    }
+
     let _i = ws.i18n;
     let _t = ws.theme.clone();
 

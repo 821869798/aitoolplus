@@ -958,7 +958,7 @@ fn load_jsonl_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         // 1. Filter out internal noise / meta events
         if let Some(type_str) = value.get("type").and_then(Value::as_str) {
             match type_str {
-                "mode" | "permission-mode" | "atis-latch" | "file-history-snapshot"
+                "CHECKPOINT" | "mode" | "permission-mode" | "atis-latch" | "file-history-snapshot"
                 | "attachment" | "last-prompt" | "turn_context" | "session_meta"
                 | "session" | "session_info" => {
                     continue;
@@ -1061,6 +1061,64 @@ fn load_jsonl_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
                     id: None,
                     message_type: Some(msg_type.into()),
                     blocks,
+                    model: None,
+                });
+            }
+            continue;
+        }
+
+        // 2d. Antigravity GENERIC (Tool execution results)
+        if value.get("type").and_then(Value::as_str) == Some("GENERIC") {
+            let content = value.get("content").and_then(Value::as_str).unwrap_or("");
+            let mut attached = false;
+            if let Some(last_msg) = out.last_mut() {
+                if last_msg.role == "assistant" {
+                    if let Some(blk) = last_msg
+                        .blocks
+                        .iter_mut()
+                        .find(|b| (b.kind == "command" || b.kind == "tool_call") && b.output.is_none())
+                    {
+                        blk.output = Some(content.to_string());
+                        blk.status = Some("completed".into());
+                        attached = true;
+                    }
+                }
+            }
+            if !attached && !content.trim().is_empty() {
+                out.push(SessionMessage {
+                    role: "tool".to_string(),
+                    content: content.to_string(),
+                    ts,
+                    id: None,
+                    message_type: Some("tool_call".into()),
+                    blocks: vec![SessionMessageBlock {
+                        kind: "tool_result".into(),
+                        text: Some(content.to_string()),
+                        output: Some(content.to_string()),
+                        status: Some("completed".into()),
+                        ..Default::default()
+                    }],
+                    model: None,
+                });
+            }
+            continue;
+        }
+
+        // 2e. Antigravity SYSTEM_MESSAGE
+        if value.get("type").and_then(Value::as_str) == Some("SYSTEM_MESSAGE") {
+            let content = value.get("content").and_then(Value::as_str).unwrap_or("");
+            if !content.trim().is_empty() {
+                out.push(SessionMessage {
+                    role: "system".to_string(),
+                    content: content.to_string(),
+                    ts,
+                    id: None,
+                    message_type: Some("text".into()),
+                    blocks: vec![SessionMessageBlock {
+                        kind: "text".into(),
+                        text: Some(content.to_string()),
+                        ..Default::default()
+                    }],
                     model: None,
                 });
             }
@@ -1456,6 +1514,8 @@ fn load_jsonl_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
             "assistant"
         } else if role == "user" {
             "user"
+        } else if role == "system" {
+            "system"
         } else if role == "tool" {
             "tool"
         } else if blocks.iter().any(|b| b.kind == "command" || b.kind == "tool_call") {
@@ -1963,3 +2023,4 @@ mod tests {
         assert_eq!(msg1.content, "Working tree is clean.");
     }
 }
+

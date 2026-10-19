@@ -21,7 +21,7 @@ use crate::components::{
     icon_button_svg, input_container, parse_generic_error, toggle,
 };
 use crate::icons::{
-    ALERT_SVG, ARROW_LEFT_SVG, ARROW_RIGHT_LEFT_SVG, CHECK_SVG, CODE_SVG, COPY_SVG, DATABASE_SVG,
+    ALERT_SVG, ARROW_RIGHT_LEFT_SVG, CHECK_SVG, CODE_SVG, COPY_SVG, DATABASE_SVG,
     DOWNLOAD_SVG, FINGERPRINT_SVG, FOLDER_SVG, GEMINI_SVG, GLOBE_SVG, HISTORY_SVG, INFO_SVG, PLUS_SVG,
     REFRESH_SVG, REPEAT_SVG, TAG_SVG, TERMINAL_SVG, TOGGLE_LEFT_SVG, TOGGLE_RIGHT_SVG, TRASH_SVG,
     USER_SVG, WAND_SVG, X_SVG, svg_icon,
@@ -80,6 +80,16 @@ pub fn mask_email(email: &str) -> String {
 
 /// Render the main Antigravity page.
 pub fn render_antigravity_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
+    if let Some(ref open_meta) = ws.ui.antigravity_open_session.clone() {
+        let session_meta: aitoolplus_core::session::SessionMeta = open_meta.clone().into();
+        return crate::pages::session_detail::render_session_detail(
+            aitoolplus_core::tools::ToolId::GeminiCli,
+            &session_meta,
+            ws,
+            cx,
+        );
+    }
+
     let t = ws.theme.clone();
     let i = ws.i18n;
 
@@ -108,13 +118,7 @@ pub fn render_antigravity_page(ws: &mut Workspace, cx: &mut Context<Workspace>) 
 
     let content = match ws.ui.antigravity_tab {
         AntigravityPageTab::Accounts => render_accounts_tab(ws, cx),
-        AntigravityPageTab::Sessions => {
-            if let Some(ref open_meta) = ws.ui.antigravity_open_session.clone() {
-                render_antigravity_session_detail(open_meta, ws, cx)
-            } else {
-                render_antigravity_sessions_tab(ws, cx)
-            }
-        }
+        AntigravityPageTab::Sessions => render_antigravity_sessions_tab(ws, cx),
     };
 
     div()
@@ -648,248 +652,6 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
         .gap(px(12.0))
         .child(toolbar)
         .child(body)
-        .into_any_element()
-}
-
-fn render_antigravity_session_detail(
-    session: &AntigravitySessionMeta,
-    ws: &mut Workspace,
-    cx: &mut Context<Workspace>,
-) -> gpui::AnyElement {
-    let t = ws.theme.clone();
-    let i = ws.i18n;
-    let source_path_buf = std::path::PathBuf::from(&session.source_path);
-
-    let session_meta: aitoolplus_core::session::SessionMeta = session.clone().into();
-    let messages = aitoolplus_core::session::load_messages(&ws.paths, &session_meta).unwrap_or_default();
-
-    let formatted_time = session.last_active_at
-        .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
-        .map(|dt| {
-            let local: chrono::DateTime<chrono::Local> = chrono::DateTime::from(dt);
-            local.format("%Y-%m-%d %H:%M").to_string()
-        })
-        .unwrap_or_else(|| "—".into());
-
-    let top_bar = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(10.0))
-        .p(px(8.0))
-        .rounded(px(8.0))
-        .bg(t.card_bg)
-        .border_1()
-        .border_color(t.card_border)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .flex_1()
-                .min_w(px(0.0))
-                .child(button_with_icon_l(
-                    "ag-detail-back",
-                    ARROW_LEFT_SVG,
-                    i.t("antigravity.back"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    |ws, _, _, cx| {
-                        ws.ui.antigravity_open_session = None;
-                        cx.notify();
-                    }
-                ))
-                .child(
-                    if session.source == "cli" {
-                        crate::components::badge(&t, "CLI", crate::components::BadgeKind::Accent)
-                    } else {
-                        crate::components::badge(&t, "App", crate::components::BadgeKind::Neutral)
-                    }
-                )
-                .child(
-                    div()
-                        .text_size(px(14.0))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(t.text_primary)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .child(session.title.clone())
-                )
-                .child(crate::components::badge(&t, formatted_time, crate::components::BadgeKind::Neutral))
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .flex_shrink_0()
-                .child(button_with_icon_l(
-                    "ag-detail-reveal",
-                    FOLDER_SVG,
-                    i.t("antigravity.reveal_file"),
-                    ButtonVariant::Secondary,
-                    &t,
-                    cx,
-                    move |_, _, _, _| {
-                        super::open_path_in_default_manager(&source_path_buf);
-                    }
-                ))
-        );
-
-    let mut message_list = div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .gap(px(12.0))
-        .p(px(8.0));
-
-    if messages.is_empty() {
-        message_list = message_list.child(
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .p(px(40.0))
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(13.0))
-                        .text_color(t.text_secondary)
-                        .child(if session.source == "app" {
-                            i.t("antigravity.this_desktop_app_session")
-                        } else {
-                            i.t("antigravity.no_text_transcript_messages")
-                        })
-                )
-        );
-    } else {
-        for (idx, msg) in messages.iter().enumerate() {
-            let is_user = msg.role == "user";
-            let role_label: gpui::SharedString = if is_user { i.t("antigravity.user") } else { "Antigravity".into() };
-            let copy_text = msg.content.clone();
-
-            let mut msg_box = div()
-                .id(gpui::SharedString::from(format!("ag-msg-{}", idx)))
-                .flex()
-                .flex_col()
-                .w_full()
-                .gap(px(6.0))
-                .p(px(12.0))
-                .rounded(px(8.0))
-                .border_1();
-
-            if is_user {
-                msg_box = msg_box
-                    .bg(t.card_bg)
-                    .border_color(t.accent.opacity(0.3));
-            } else {
-                msg_box = msg_box
-                    .bg(t.sidebar_bg)
-                    .border_color(t.card_border);
-            }
-
-            // Header
-            let header = div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .w_full()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(if is_user { t.accent } else { t.text_primary })
-                                .child(role_label)
-                        )
-                )
-                .child(
-                    button_with_icon_l(
-                        gpui::SharedString::from(format!("ag-cp-msg-{}", idx)),
-                        COPY_SVG,
-                        i.t("antigravity.copy"),
-                        ButtonVariant::Ghost,
-                        &t,
-                        cx,
-                        move |ws, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_text.clone()));
-                            ws.ui.toast(ws.i18n.t("antigravity.copied_2").to_string(), false);
-                            cx.notify();
-                        }
-                    )
-                );
-
-            msg_box = msg_box.child(header);
-
-            // Blocks or content
-            for block in msg.blocks.iter() {
-                if block.kind == "thinking" {
-                    if let Some(ref text) = block.text {
-                        msg_box = msg_box.child(
-                            div()
-                                .p(px(8.0))
-                                .rounded(px(6.0))
-                                .bg(t.card_bg)
-                                .border_1()
-                                .border_color(t.card_border)
-                                .text_size(px(12.0))
-                                .text_color(t.text_muted)
-                                .child(format!("💭 思考过程:\n{}", text))
-                        );
-                    }
-                } else if block.kind == "tool_call" || block.kind == "command" {
-                    let tool_name = block.tool_name.as_deref().unwrap_or("tool");
-                    let args = block.text.as_deref().unwrap_or("");
-                    msg_box = msg_box.child(
-                        div()
-                            .p(px(6.0))
-                            .rounded(px(6.0))
-                            .bg(t.card_bg)
-                            .border_1()
-                            .border_color(t.card_border)
-                            .text_size(px(12.0))
-                            .text_color(t.text_secondary)
-                            .child(format!("🔧 调用工具 {}: {}", tool_name, args))
-                    );
-                } else if let Some(ref text) = block.text {
-                    msg_box = msg_box.child(
-                        div()
-                            .text_size(px(13.0))
-                            .text_color(t.text_primary)
-                            .child(text.clone())
-                    );
-                }
-            }
-
-            if msg.blocks.is_empty() && !msg.content.is_empty() {
-                msg_box = msg_box.child(
-                    div()
-                        .text_size(px(13.0))
-                        .text_color(t.text_primary)
-                        .child(msg.content.clone())
-                );
-            }
-
-            message_list = message_list.child(msg_box);
-        }
-    }
-
-    div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .h_full()
-        .min_h(px(0.0))
-        .gap(px(10.0))
-        .child(top_bar)
-        .child(message_list)
         .into_any_element()
 }
 
