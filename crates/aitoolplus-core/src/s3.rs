@@ -397,14 +397,14 @@ pub fn delete(config: &S3Config, filename: &str) -> Result<(), String> {
     }
 }
 
-/// Prune old remote backups beyond `keep` count.
-pub fn prune_remote_backups(config: &S3Config, keep: u32) -> Result<(), String> {
-    if keep == 0 {
-        return Ok(());
-    }
+/// Prune legacy timestamped remote backups (aitoolplus-auto-* or aitoolplus-backup-*),
+/// ensuring the cloud stores only the single unified sync file (aitoolplus-sync.zip).
+pub fn prune_remote_backups(config: &S3Config) -> Result<(), String> {
     let backups = list(config)?;
-    for backup in backups.into_iter().skip(keep as usize) {
-        delete(config, &backup.name)?;
+    for backup in backups {
+        if backup.name.starts_with("aitoolplus-auto-") || backup.name.starts_with("aitoolplus-backup-") {
+            let _ = delete(config, &backup.name);
+        }
     }
     Ok(())
 }
