@@ -312,6 +312,7 @@ pub struct WorkspaceState {
     pub antigravity_open_session: Option<aitoolplus_core::antigravity::AntigravitySessionMeta>,
     pub antigravity_session_scroll_handle: gpui::UniformListScrollHandle,
     pub session_messages_cache: Option<(ToolId, String, std::sync::Arc<Vec<aitoolplus_core::session::SessionMessage>>)>,
+    pub session_messages_loading: Option<(ToolId, String)>,
     pub session_actions_menu_open: bool,
     pub session_expanded_blocks: std::collections::HashSet<String>,
     pub session_expanded_thinkings: std::collections::HashSet<String>,
@@ -1088,6 +1089,7 @@ impl WorkspaceState {
             antigravity_open_session: None,
             antigravity_session_scroll_handle: gpui::UniformListScrollHandle::new(),
             session_messages_cache: None,
+            session_messages_loading: None,
             session_actions_menu_open: false,
             session_expanded_blocks: std::collections::HashSet::new(),
             session_expanded_thinkings: std::collections::HashSet::new(),
@@ -2100,12 +2102,17 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
             if let Err(err) = aitoolplus_core::antigravity::delete_antigravity_session(&ws.paths.home, &session) {
                 ws.ui.toast(err, true);
             } else {
+                aitoolplus_core::session::invalidate_cache();
                 if let Some(ref mut list) = ws.ui.antigravity_sessions {
                     list.retain(|s| s.session_id != session.session_id);
                 }
                 if ws.ui.antigravity_open_session.as_ref().map(|s| &s.session_id) == Some(&session.session_id) {
                     ws.ui.antigravity_open_session = None;
                 }
+                if ws.ui.open_session.as_ref().map(|(_, sid)| sid == &session.session_id).unwrap_or(false) {
+                    ws.ui.open_session = None;
+                }
+                ws.ui.agent_sessions = None;
                 let msg = i.t("pages.session_deleted").to_string();
                 ws.ui.toast(msg, false);
             }

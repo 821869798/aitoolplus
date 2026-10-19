@@ -1470,7 +1470,7 @@ impl gpui::Focusable for Workspace {
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.sidebar(cx);
-        let is_session_open = self.ui.open_session.is_some();
+        let is_session_open = self.ui.open_session.is_some() || self.ui.antigravity_open_session.is_some();
         let topbar = if is_session_open {
             None
         } else {

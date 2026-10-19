@@ -34,24 +34,126 @@ pub fn render_session_detail(
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    // Cache-backed message resolution: avoids re-reading/re-parsing JSONL on every render frame
-    let messages: Arc<Vec<SessionMessage>> = match &ws.ui.session_messages_cache {
-        Some((cached_tool, cached_sid, cached_msgs))
-            if *cached_tool == tool && cached_sid == &meta.session_id =>
-        {
-            cached_msgs.clone()
-        }
-        _ => {
-            let loaded = Arc::new(session::load_messages(&ws.paths, meta).unwrap_or_default());
-            ws.ui.session_messages_cache = Some((tool, meta.session_id.clone(), loaded.clone()));
-            loaded
-        }
-    };
-
     let display_title = session::sidecar_title(meta)
         .or_else(|| meta.title.clone())
         .or_else(|| meta.summary.clone())
         .unwrap_or_else(|| meta.session_id.clone());
+
+    let is_cached = matches!(
+        &ws.ui.session_messages_cache,
+        Some((cached_tool, cached_sid, _)) if *cached_tool == tool && cached_sid == &meta.session_id
+    );
+
+    if !is_cached {
+        let is_loading = matches!(
+            &ws.ui.session_messages_loading,
+            Some((loading_tool, loading_sid)) if *loading_tool == tool && loading_sid == &meta.session_id
+        );
+        if !is_loading {
+            ws.ui.session_messages_loading = Some((tool, meta.session_id.clone()));
+            let paths = ws.paths.clone();
+            let meta_clone = meta.clone();
+            let weak = cx.entity().downgrade();
+            let tool_c = tool;
+            let sid = meta.session_id.clone();
+            cx.spawn(async move |_this, cx| {
+                let loaded = cx
+                    .background_spawn(async move {
+                        Arc::new(session::load_messages(&paths, &meta_clone).unwrap_or_default())
+                    })
+                    .await;
+                let _ = weak.update(cx, |ws, cx| {
+                    if matches!(&ws.ui.session_messages_loading, Some((t, s)) if *t == tool_c && s == &sid) {
+                        ws.ui.session_messages_loading = None;
+                        ws.ui.session_messages_cache = Some((tool_c, sid, loaded));
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+
+        // Render loading state: top bar with back button + title, and loading spinner viewport
+        let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
+        let mut top_bar = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .w_full()
+            .p(px(8.0))
+            .rounded(px(8.0))
+            .bg(t.card_bg)
+            .border_1()
+            .border_color(t.card_border);
+
+        let mut row1 = div().flex().items_center().justify_between().gap(px(8.0)).w_full();
+        let mut left_info = div().flex().items_center().gap(px(6.0)).flex_1().min_w(px(0.0)).overflow_hidden();
+        left_info = left_info.child(button_with_icon_l(
+            "session-detail-loading-back-btn",
+            crate::icons::ARROW_LEFT_SVG,
+            i.t("session_detail.back"),
+            ButtonVariant::Secondary,
+            &t,
+            cx,
+            |ws, _, _, cx| {
+                ws.ui.open_session = None;
+                ws.ui.antigravity_open_session = None;
+                ws.ui.session_actions_menu_open = false;
+                ws.ui.session_messages_loading = None;
+                cx.notify();
+            },
+        ));
+        left_info = left_info.child(
+            div()
+                .text_size(px(14.0))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(t.text_primary)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(display_title),
+        );
+        row1 = row1.child(left_info);
+        top_bar = top_bar.child(row1);
+        section = section.child(top_bar);
+
+        let loading_viewport = div()
+            .relative()
+            .w_full()
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_hidden()
+            .rounded(px(8.0))
+            .bg(t.sidebar_bg)
+            .border_1()
+            .border_color(t.card_border)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .size_full()
+                    .child(
+                        crate::components::empty_state_svg(
+                            &t,
+                            crate::icons::REFRESH_SVG,
+                            i.t("session_detail.loading_messages"),
+                            i.t("session_detail.parsing_session_transcript"),
+                        ),
+                    ),
+            );
+        section = section.child(loading_viewport);
+        return section.into_any_element();
+    }
+
+    let messages: Arc<Vec<SessionMessage>> = ws
+        .ui
+        .session_messages_cache
+        .as_ref()
+        .map(|(_, _, msgs)| msgs.clone())
+        .unwrap_or_default();
 
     let mut section = div().flex().flex_col().w_full().h_full().min_h(px(0.0)).gap(px(10.0));
 
@@ -85,7 +187,9 @@ pub fn render_session_detail(
         cx,
         |ws, _, _, cx| {
             ws.ui.open_session = None;
+            ws.ui.antigravity_open_session = None;
             ws.ui.session_actions_menu_open = false;
+            ws.ui.session_messages_loading = None;
             cx.notify();
         },
     ));
@@ -101,7 +205,18 @@ pub fn render_session_detail(
             .child(display_title),
     );
 
-    left_info = left_info.child(badge(&t, i.raw(tool.name_zh(), tool.name_en()), BadgeKind::Accent));
+    if let Some(source) = meta.provider_id.strip_prefix("antigravity:") {
+        left_info = left_info.child(badge(&t, "Antigravity", BadgeKind::Accent));
+        if source == "cli" {
+            left_info = left_info.child(badge(&t, "CLI", BadgeKind::Accent));
+        } else {
+            left_info = left_info.child(badge(&t, "App", BadgeKind::Neutral));
+        }
+    } else if meta.provider_id == "antigravity" {
+        left_info = left_info.child(badge(&t, "Antigravity", BadgeKind::Accent));
+    } else {
+        left_info = left_info.child(badge(&t, i.raw(tool.name_zh(), tool.name_en()), BadgeKind::Accent));
+    }
     left_info = left_info.child(badge(&t, fmt_time(meta.last_active_at), BadgeKind::Neutral));
     if let Some(ref dir) = meta.project_dir {
         left_info = left_info.child(badge(&t, dir.clone(), BadgeKind::Neutral));
@@ -312,8 +427,7 @@ pub fn render_session_detail(
             state.clone()
         }
         _ => {
-            let state = ListState::new(visible_count, ListAlignment::Top, px(400.0))
-                .measure_all();
+            let state = ListState::new(visible_count, ListAlignment::Top, px(120.0));
             ws.ui.session_list_state = Some((tool, meta.session_id.clone(), filter_key, state.clone()));
             state
         }
@@ -357,6 +471,7 @@ pub fn render_session_detail(
         let t_for_items = t.clone();
         let i_for_items = i;
 
+        let is_ag = meta.provider_id.starts_with("antigravity");
         let list_el = list(list_state.clone(), move |index, _window, cx| {
             let msg_idx = indices_clone[index];
             let m = &msgs_clone[msg_idx];
@@ -366,6 +481,7 @@ pub fn render_session_detail(
                 msg_idx,
                 &session_id_str,
                 tool,
+                is_ag,
                 &ws_entity,
                 &list_state_for_items,
                 &t_for_items,
@@ -578,6 +694,7 @@ pub fn render_session_detail(
 
         // 5. Delete session
         let sid_del = sid.clone();
+        let meta_del = meta_c.clone();
         menu = menu.child(
             div()
                 .id("menu-delete-btn")
@@ -593,10 +710,30 @@ pub fn render_session_detail(
                 .hover(|h| h.bg(crate::rgba_const(0xef444415)))
                 .on_click(cx.listener(move |ws, _, _, cx| {
                     ws.ui.session_actions_menu_open = false;
+                    let action = if meta_del.provider_id.starts_with("antigravity") {
+                        let session = aitoolplus_core::antigravity::AntigravitySessionMeta {
+                            session_id: meta_del.session_id.clone(),
+                            source: meta_del
+                                .provider_id
+                                .strip_prefix("antigravity:")
+                                .unwrap_or("cli")
+                                .to_string(),
+                            title: meta_del.title.clone().unwrap_or_default(),
+                            preview: meta_del.summary.clone().unwrap_or_default(),
+                            project_dir: meta_del.project_dir.clone(),
+                            last_active_at: meta_del.last_active_at,
+                            step_count: 0,
+                            source_path: meta_del.source_path.clone(),
+                            resume_command: meta_del.resume_command.clone(),
+                        };
+                        super::ConfirmAction::DeleteAntigravitySession { session }
+                    } else {
+                        super::ConfirmAction::DeleteSession { tool, id: sid_del.clone() }
+                    };
                     ws.ui.confirm = Some(super::ConfirmState {
                         title: ws.i18n.t("session_detail.delete_session").to_string(),
                         message: ws.i18n.t("session_detail.delete_this_session_this").to_string(),
-                        action: super::ConfirmAction::DeleteSession { tool, id: sid_del.clone() },
+                        action,
                     });
                     cx.notify();
                 }))
@@ -643,6 +780,7 @@ fn render_session_message_card(
     raw_msg_index: usize,
     session_id: &str,
     tool: ToolId,
+    is_antigravity: bool,
     ws_entity: &gpui::Entity<Workspace>,
     list_state: &ListState,
     t: &crate::theme::Theme,
@@ -650,8 +788,10 @@ fn render_session_message_card(
     cx: &mut gpui::App,
 ) -> gpui::AnyElement {
     let is_user = m.role == "user";
-    let role_display = if is_user {
+    let role_display: gpui::SharedString = if is_user {
         i.t("session_detail.user")
+    } else if is_antigravity {
+        "Antigravity".into()
     } else {
         i.raw(tool.name_zh(), tool.name_en())
     };
