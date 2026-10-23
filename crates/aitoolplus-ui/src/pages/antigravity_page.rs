@@ -1385,12 +1385,12 @@ fn render_model_quota_column(
         .w_full()
         .flex()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(6.0))
         .when(show_5h, |s| {
             s.child(
                 div()
                     .flex_1()
-                    .min_w(px(180.0))
+                    .min_w(px(140.0))
                     .child(render_five_hour_quota_bar(
                         title,
                         icon_svg,
@@ -1404,7 +1404,7 @@ fn render_model_quota_column(
             s.child(
                 div()
                     .flex_1()
-                    .min_w(px(180.0))
+                    .min_w(px(140.0))
                     .child(render_weekly_quota_bar(
                         title,
                         icon_svg,
@@ -1418,8 +1418,62 @@ fn render_model_quota_column(
             s.child(
                 div()
                     .flex_1()
-                    .min_w(px(180.0))
+                    .min_w(px(140.0))
                     .child(render_quota_bar_placeholder(title, icon_svg, t)),
+            )
+        })
+        .into_any_element()
+}
+
+/// Render the "最后使用" (Last Used) column matching Antigravity-Manager's AccountTable / AccountRow:
+/// two stacked monospace lines (Date `YYYY/MM/DD` on top, Time `HH:MM` below) with a subtle header label.
+fn render_last_used_column(
+    last_used: i64,
+    t: &Theme,
+    i: &crate::i18n::I18n,
+) -> gpui::AnyElement {
+    let (date_str, time_str) = DateTime::from_timestamp(last_used, 0)
+        .map(|dt| {
+            let local = dt.with_timezone(&chrono::Local);
+            (
+                local.format("%Y/%m/%d").to_string(),
+                local.format("%H:%M").to_string(),
+            )
+        })
+        .unwrap_or_else(|| ("—".to_string(), String::new()));
+
+    div()
+        .flex_shrink_0()
+        .w(px(92.0))
+        .pl(px(10.0))
+        .pr(px(4.0))
+        .border_l_1()
+        .border_color(t.card_border.opacity(0.6))
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(px(1.5))
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(t.text_muted)
+                .child(i.raw("最后使用", "Last Used")),
+        )
+        .child(
+            div()
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .font_family("Consolas, monospace")
+                .text_color(t.text_secondary)
+                .child(date_str),
+        )
+        .when(!time_str.is_empty(), |s| {
+            s.child(
+                div()
+                    .text_size(px(10.0))
+                    .font_family("Consolas, monospace")
+                    .text_color(t.text_muted)
+                    .child(time_str),
             )
         })
         .into_any_element()
@@ -1788,11 +1842,7 @@ fn render_account_card(
     let is_active = is_classic_active || is_ide_active || is_agy_active;
     let is_disabled = account.disabled;
 
-    let last_used_str = DateTime::from_timestamp(account.last_used, 0)
-        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_default();
-
-    // 1. Header row: Email + Tier Badge + Multi-client Active Badges (APP / IDE / CLI) + Project ID + Last used
+    // 1. Header row: Email + Tier Badge + Multi-client Active Badges (APP / IDE / CLI) + Project ID
     let header_row = div()
         .flex()
         .items_center()
@@ -1925,13 +1975,6 @@ fn render_account_card(
                             .child(format!("• {}", pid)),
                     )
                 }),
-        )
-        .child(
-            div()
-                .text_size(px(10.5))
-                .font_family("Consolas, monospace")
-                .text_color(t.text_muted)
-                .child(last_used_str),
         );
 
     // 2. Below header row: Quota meters (left) + Actions (right)
@@ -2150,6 +2193,7 @@ fn render_account_card(
                 )),
         );
 
+    let last_used_col = render_last_used_column(account.last_used, &t, &i);
     let quota = account.quota.as_ref();
     let lower_row = if let Some(q) = quota {
         if q.is_forbidden {
@@ -2186,6 +2230,7 @@ fn render_account_card(
                             },
                         )),
                 )
+                .child(last_used_col)
                 .child(actions_column)
         } else {
             let is_free_tier = account.get_tier().eq_ignore_ascii_case("FREE");
@@ -2225,6 +2270,7 @@ fn render_account_card(
                 .justify_between()
                 .gap(px(10.0))
                 .child(quotas_container)
+                .child(last_used_col)
                 .child(actions_column)
         }
     } else {
@@ -2246,6 +2292,7 @@ fn render_account_card(
             .justify_between()
             .gap(px(10.0))
             .child(uninit_view)
+            .child(last_used_col)
             .child(actions_column)
     };
 
