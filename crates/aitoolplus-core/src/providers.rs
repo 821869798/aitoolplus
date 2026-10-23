@@ -6,6 +6,10 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::adapters::{ApplyCtx, adapter_for};
+use crate::config::MergeStrategy;
+use crate::paths::Paths;
+use crate::store::Store;
 use crate::tools::ToolId;
 
 pub const CATEGORIES: [&str; 5] = ["official", "custom", "proxy", "subscription", "other"];
@@ -825,6 +829,315 @@ pub fn default_settings_for(tool: ToolId) -> Value {
     }
 }
 
+/// Sync all tools' configured providers from store to their live runtime files.
+/// Parity with cc-switch `sync_current_to_live`.
+pub fn sync_all_to_live(paths: &Paths, store: &Store, gateway_port: Option<u16>) {
+    let port = gateway_port.unwrap_or(15721);
+    for tool in ToolId::ALL {
+        let section = store.tool(tool);
+        if tool == ToolId::Pi {
+            let models_path = paths.tool_root(ToolId::Pi).join("models.json");
+            let active_keys: std::collections::HashSet<String> = section
+                .providers
+                .iter()
+                .filter(|p| p.is_applied)
+                .map(|p| p.id.strip_prefix("pi:").unwrap_or(&p.id).to_string())
+                .collect();
+
+            if models_path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&models_path) {
+                    if let Ok(mut json) = serde_json::from_str::<Value>(&content) {
+                        if let Some(providers) = json.get_mut("providers").and_then(|p| p.as_object_mut()) {
+                            let to_remove: Vec<String> = providers
+                                .keys()
+                                .filter(|k| !active_keys.contains(*k))
+                                .cloned()
+                                .collect();
+                            for k in to_remove {
+                                let _ = crate::pi_runtime::remove_provider(paths, &k);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for p in &section.providers {
+                if p.is_applied {
+                    let _ = crate::pi_runtime::apply_provider(paths, p);
+                }
+            }
+        } else if tool == ToolId::OhMyPi {
+            let omp_paths = crate::oh_my_pi::OmpRuntimePaths::from_paths(paths);
+            let active_keys: std::collections::HashSet<String> = section
+                .providers
+                .iter()
+                .filter(|p| p.is_applied)
+                .map(|p| p.id.strip_prefix("omp:").unwrap_or(&p.id).to_string())
+                .collect();
+
+            if omp_paths.models.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&omp_paths.models) {
+                    if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
+                        if let Some(map) = yaml.as_mapping() {
+                            let providers_map = map
+                                .get(&serde_yaml::Value::String("providers".into()))
+                                .and_then(|v| v.as_mapping())
+                                .unwrap_or(map);
+                            let to_remove: Vec<String> = providers_map
+                                .keys()
+                                .filter_map(|k| k.as_str())
+                                .filter(|k| *k != "providers" && !active_keys.contains(*k))
+                                .map(|s| s.to_string())
+                                .collect();
+                            for k in to_remove {
+                                let _ = crate::oh_my_pi::remove_provider(&omp_paths, &k);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for p in &section.providers {
+                if p.is_applied {
+                    let _ = crate::oh_my_pi::apply_provider(&omp_paths, p);
+                }
+            }
+        } else if tool == ToolId::OpenCode {
+            let active_keys: std::collections::HashSet<String> = section
+                .providers
+                .iter()
+                .filter(|p| p.is_applied)
+                .map(|p| p.id.strip_prefix("opencode:").unwrap_or(&p.id).to_string())
+                .collect();
+            let config_path = crate::adapters::opencode::resolve_config_file(paths);
+            if config_path.is_file() {
+                if let Ok(raw) = std::fs::read_to_string(&config_path) {
+                    if let Ok(json) = serde_json::from_str::<Value>(&raw) {
+                        let mut to_remove = Vec::new();
+                        if let Some(p) = json.get("provider").and_then(Value::as_object) {
+                            for k in p.keys() {
+                                if !active_keys.contains(k) {
+                                    to_remove.push(k.clone());
+                                }
+                            }
+                        }
+                        if let Some(p) = json.get("providers").and_then(Value::as_object) {
+                            for k in p.keys() {
+                                if !active_keys.contains(k) {
+                                    to_remove.push(k.clone());
+                                }
+                            }
+                        }
+                        for k in to_remove {
+                            let _ = crate::adapters::opencode::remove_provider(paths, &k);
+                        }
+                    }
+                }
+            }
+            for p in &section.providers {
+                if p.is_applied {
+                    let adapter = adapter_for(tool);
+                    let ctx = ApplyCtx {
+                        paths,
+                        common_config: &section.common_config,
+                        provider: p,
+                        strategy: MergeStrategy::default(),
+                        provider_optional: false,
+                    };
+                    let _ = adapter.apply(&ctx);
+                }
+            }
+        } else if tool == ToolId::OpenClaw {
+            let active_keys: std::collections::HashSet<String> = section
+                .providers
+                .iter()
+                .filter(|p| p.is_applied)
+                .map(|p| p.id.strip_prefix("openclaw:").unwrap_or(&p.id).to_string())
+                .collect();
+            let config_path = paths.primary_config(ToolId::OpenClaw);
+            if config_path.is_file() {
+                if let Ok(raw) = std::fs::read_to_string(&config_path) {
+                    if let Ok(json) = serde_json::from_str::<Value>(&raw) {
+                        if let Some(p) = json.get("models").and_then(|m| m.get("providers")).and_then(Value::as_object) {
+                            let to_remove: Vec<String> = p.keys().filter(|k| !active_keys.contains(*k)).cloned().collect();
+                            for k in to_remove {
+                                let _ = crate::adapters::openclaw::remove_provider(paths, &k);
+                            }
+                        }
+                    }
+                }
+            }
+            for p in &section.providers {
+                if p.is_applied {
+                    let adapter = adapter_for(tool);
+                    let ctx = ApplyCtx {
+                        paths,
+                        common_config: &section.common_config,
+                        provider: p,
+                        strategy: MergeStrategy::default(),
+                        provider_optional: false,
+                    };
+                    let _ = adapter.apply(&ctx);
+                }
+            }
+        } else if tool == ToolId::Hermes {
+            let h = crate::hermes::HermesRuntimePaths::from_paths(paths);
+            let active_keys: std::collections::HashSet<String> = section
+                .providers
+                .iter()
+                .filter(|p| p.is_applied)
+                .map(|p| p.id.strip_prefix("hermes:").unwrap_or(&p.id).to_string())
+                .collect();
+            if h.config.is_file() {
+                if let Ok(raw) = std::fs::read_to_string(&h.config) {
+                    if let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+                        if let Some(custom) = doc.get("custom_providers").and_then(|v| v.as_mapping()) {
+                            let to_remove: Vec<String> = custom
+                                .keys()
+                                .filter_map(|k| k.as_str())
+                                .filter(|k| !active_keys.contains(*k))
+                                .map(|s| s.to_string())
+                                .collect();
+                            for k in to_remove {
+                                let _ = crate::hermes::remove_provider(&h, &k);
+                            }
+                        }
+                    }
+                }
+            }
+            for p in &section.providers {
+                if p.is_applied {
+                    let adapter = adapter_for(tool);
+                    let ctx = ApplyCtx {
+                        paths,
+                        common_config: &section.common_config,
+                        provider: p,
+                        strategy: MergeStrategy::default(),
+                        provider_optional: false,
+                    };
+                    let _ = adapter.apply(&ctx);
+                }
+            }
+        } else if tool == ToolId::Dsh {
+            let d = crate::dsh::DshRuntimePaths::from_paths(paths);
+            let active_keys: std::collections::HashSet<String> = section
+                .providers
+                .iter()
+                .filter(|p| p.is_applied)
+                .map(|p| p.id.strip_prefix("dsh:").unwrap_or(&p.id).to_string())
+                .collect();
+            if d.settings.is_file() {
+                if let Ok(raw) = std::fs::read_to_string(&d.settings) {
+                    if let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&raw) {
+                        if let Some(providers) = doc
+                            .get("llm-pi-ai")
+                            .and_then(|v| v.get("providers"))
+                            .and_then(|v| v.as_mapping())
+                        {
+                            let to_remove: Vec<String> = providers
+                                .keys()
+                                .filter_map(|k| k.as_str())
+                                .filter(|k| !active_keys.contains(*k))
+                                .map(|s| s.to_string())
+                                .collect();
+                            for k in to_remove {
+                                let _ = crate::dsh::remove_provider(&d, &k);
+                            }
+                        }
+                    }
+                }
+            }
+            for p in &section.providers {
+                if p.is_applied {
+                    let adapter = adapter_for(tool);
+                    let ctx = ApplyCtx {
+                        paths,
+                        common_config: &section.common_config,
+                        provider: p,
+                        strategy: MergeStrategy::default(),
+                        provider_optional: false,
+                    };
+                    let _ = adapter.apply(&ctx);
+                }
+            }
+        } else if tool == ToolId::ClaudeDesktop {
+            let cd_paths = crate::claude_desktop::ClaudeDesktopPaths::from_paths(paths);
+            let active_keys: std::collections::HashSet<String> = section
+                .providers
+                .iter()
+                .map(|p| p.id.strip_prefix("cd:").unwrap_or(&p.id).to_string())
+                .collect();
+            if cd_paths.config_library.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&cd_paths.config_library) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                if stem != "_meta" && !active_keys.contains(stem) {
+                                    let _ = crate::claude_desktop::remove_provider(&cd_paths, stem);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(applied) = section.providers.iter().find(|p| p.is_applied) {
+                let _ = crate::claude_desktop::apply_profile(&cd_paths, applied);
+            } else {
+                let _ = crate::claude_desktop::restore_official(&cd_paths);
+            }
+        } else {
+            if let Some(applied) = section.providers.iter().find(|p| p.is_applied) {
+                let cli_key = match tool {
+                    ToolId::ClaudeCode => Some(crate::gateway::GatewayCliKey::Claude),
+                    ToolId::Codex => Some(crate::gateway::GatewayCliKey::Codex),
+                    _ => None,
+                };
+                let takeover_status = cli_key.map(|k| crate::gateway::get_cli_takeover_status(paths, k));
+                let is_taken_over = takeover_status.as_ref().map(|s| s.enabled).unwrap_or(false);
+                if is_taken_over {
+                    let _ = crate::gateway::update_live_backup_from_provider(
+                        paths,
+                        cli_key.unwrap(),
+                        applied,
+                        &section.common_config,
+                    );
+                    if tool == ToolId::ClaudeCode {
+                        let settings_path = paths.tool_root(ToolId::ClaudeCode).join("settings.json");
+                        let endpoint = crate::gateway::cli_proxy::cli_gateway_endpoint(crate::gateway::GatewayCliKey::Claude, port);
+                        let _ = crate::gateway::cli_proxy::claude::patch_claude_settings(
+                            &settings_path,
+                            &endpoint,
+                            Some(applied),
+                        );
+                    } else if tool == ToolId::Codex {
+                        let config_path = paths.tool_root(ToolId::Codex).join("config.toml");
+                        let auth_path = paths.tool_root(ToolId::Codex).join("auth.json");
+                        let endpoint = crate::gateway::cli_proxy::cli_gateway_endpoint(crate::gateway::GatewayCliKey::Codex, port);
+                        let is_aggregate = takeover_status.as_ref().map(|s| s.mode == crate::gateway::GatewayProxyMode::Aggregate).unwrap_or(false);
+                        let _ = crate::gateway::cli_proxy::codex::patch_codex_config(
+                            &config_path,
+                            &auth_path,
+                            &endpoint,
+                            is_aggregate,
+                        );
+                    }
+                } else {
+                    let adapter = adapter_for(tool);
+                    let ctx = ApplyCtx {
+                        paths,
+                        common_config: &section.common_config,
+                        provider: applied,
+                        strategy: MergeStrategy::default(),
+                        provider_optional: false,
+                    };
+                    let _ = adapter.apply(&ctx);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,5 +1402,90 @@ mod tests {
             p_openclaw.resolve_credentials(ToolId::OpenClaw),
             ("https://openclaw.example.com".to_string(), "sk-openclaw".to_string())
         );
+    }
+
+    #[test]
+    fn test_sync_all_to_live_prunes_and_applies() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path().join("home"), dir.path().join("appdata"));
+
+        // Setup pre-existing Pi models.json with "ghost" provider that shouldn't be there
+        let pi_root = paths.tool_root(ToolId::Pi);
+        std::fs::create_dir_all(&pi_root).unwrap();
+        std::fs::write(
+            pi_root.join("models.json"),
+            r#"{"providers":{"ghost":{"baseUrl":"https://ghost.example/v1","apiKey":"sk-ghost","models":[{"id":"g1"}]},"keep":{"baseUrl":"https://keep.example/v1","apiKey":"sk-keep","models":[{"id":"k1"}]}}}"#,
+        ).unwrap();
+
+        let mut store = Store::default();
+
+        // In store, only "keep" is applied, "ghost" is deleted/missing, and "newpi" is applied
+        let mut p_keep = ProviderRecord::new("Keep", "custom");
+        p_keep.id = "pi:keep".into();
+        p_keep.is_applied = true;
+        p_keep.settings_config = r#"{"baseUrl":"https://keep.example/v1","apiKey":"sk-keep","models":[{"id":"k1"}]}"#.into();
+        store.tool_mut(ToolId::Pi).providers.push(p_keep);
+
+        let mut p_new = ProviderRecord::new("NewPi", "custom");
+        p_new.id = "pi:newpi".into();
+        p_new.is_applied = true;
+        p_new.settings_config = r#"{"baseUrl":"https://newpi.example/v1","apiKey":"sk-new","models":[{"id":"n1"}]}"#.into();
+        store.tool_mut(ToolId::Pi).providers.push(p_new);
+
+        // Claude provider applied
+        let mut p_claude = ProviderRecord::new("MyClaude", "custom");
+        p_claude.id = "claude-1".into();
+        p_claude.is_applied = true;
+        p_claude.settings_config = r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.claude.test/v1","ANTHROPIC_API_KEY":"sk-ant-test"}}"#.into();
+        store.tool_mut(ToolId::ClaudeCode).providers.push(p_claude);
+
+        // OhMyPi setup with ghost
+        let omp_paths = crate::oh_my_pi::OmpRuntimePaths::from_paths(&paths);
+        std::fs::create_dir_all(&omp_paths.root).unwrap();
+        std::fs::write(&omp_paths.models, "providers:\n  ghost:\n    baseUrl: https://g.com\n  keep_omp:\n    baseUrl: https://k.com\n").unwrap();
+        let mut p_omp = ProviderRecord::new("KeepOmp", "custom");
+        p_omp.id = "omp:keep_omp".into();
+        p_omp.is_applied = true;
+        p_omp.settings_config = r#"{"name":"KeepOmp","baseUrl":"https://k.com"}"#.into();
+        store.tool_mut(ToolId::OhMyPi).providers.push(p_omp);
+
+        // Claude Desktop setup with ghost profile
+        let cd_paths = crate::claude_desktop::ClaudeDesktopPaths::from_paths(&paths);
+        std::fs::create_dir_all(&cd_paths.config_library).unwrap();
+        std::fs::write(cd_paths.config_library.join("ghost_cd.json"), "{}").unwrap();
+        std::fs::write(&cd_paths.meta, r#"{"appliedId":"ghost_cd"}"#).unwrap();
+        std::fs::write(&cd_paths.live_config, "{}").unwrap();
+        let mut p_cd = ProviderRecord::new("KeepCd", "custom");
+        p_cd.id = "cd:keep_cd".into();
+        p_cd.is_applied = true;
+        p_cd.settings_config = r#"{"profileName":"KeepCd","inferenceGatewayBaseUrl":"https://cd.test"}"#.into();
+        store.tool_mut(ToolId::ClaudeDesktop).providers.push(p_cd);
+
+        sync_all_to_live(&paths, &store, None);
+
+        // Check Pi models.json
+        let pi_content = std::fs::read_to_string(pi_root.join("models.json")).unwrap();
+        let pi_json: Value = serde_json::from_str(&pi_content).unwrap();
+        let providers = pi_json["providers"].as_object().unwrap();
+        assert!(!providers.contains_key("ghost"), "ghost provider must be pruned");
+        assert!(providers.contains_key("keep"), "keep provider must remain");
+        assert!(providers.contains_key("newpi"), "newpi provider must be added");
+
+        // Check Claude config
+        let claude_cfg = paths.tool_root(ToolId::ClaudeCode).join("settings.json");
+        assert!(claude_cfg.exists(), "Claude config must be written");
+        let claude_content = std::fs::read_to_string(claude_cfg).unwrap();
+        assert!(claude_content.contains("https://api.claude.test/v1"));
+
+        // Check OhMyPi models.yml
+        let omp_content = std::fs::read_to_string(&omp_paths.models).unwrap();
+        assert!(!omp_content.contains("ghost:"), "OMP ghost must be pruned");
+        assert!(omp_content.contains("keep_omp:"), "OMP keep must remain");
+
+        // Check Claude Desktop configLibrary
+        assert!(!cd_paths.config_library.join("ghost_cd.json").exists(), "ghost_cd must be deleted");
+        assert!(cd_paths.config_library.join("keep_cd.json").exists(), "keep_cd must be created");
+        let cd_meta = std::fs::read_to_string(&cd_paths.meta).unwrap();
+        assert!(cd_meta.contains("keep_cd"), "CD meta must point to keep_cd");
     }
 }

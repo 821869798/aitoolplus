@@ -78,6 +78,63 @@ impl ToolAdapter for OpenClawAdapter {
     }
 }
 
+/// Remove an OpenClaw provider from openclaw.json.
+pub fn remove_provider(paths: &crate::paths::Paths, provider_id: &str) -> Result<Vec<std::path::PathBuf>, String> {
+    let path = paths.primary_config(ToolId::OpenClaw);
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let key = provider_id.strip_prefix("openclaw:").unwrap_or(provider_id);
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut config: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let mut changed = false;
+
+    if let Some(providers) = config
+        .get_mut("models")
+        .and_then(|m| m.get_mut("providers"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if providers.remove(key).is_some() {
+            changed = true;
+        }
+    }
+    if let Some(m) = config.get("models").and_then(|m| m.get("model")).and_then(serde_json::Value::as_str) {
+        if m.starts_with(&format!("{key}/")) || m == key {
+            if let Some(models) = config.get_mut("models").and_then(serde_json::Value::as_object_mut) {
+                models.remove("model");
+                changed = true;
+            }
+        }
+    }
+    if let Some(primary) = config
+        .get("agents")
+        .and_then(|a| a.get("defaults"))
+        .and_then(|d| d.get("model"))
+        .and_then(|m| m.get("primary"))
+        .and_then(serde_json::Value::as_str)
+    {
+        if primary.starts_with(&format!("{key}/")) || primary == key {
+            if let Some(m) = config
+                .get_mut("agents")
+                .and_then(|a| a.get_mut("defaults"))
+                .and_then(|d| d.get_mut("model"))
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                m.remove("primary");
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        crate::adapters::write_atomic(&path, &serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        Ok(vec![path])
+    } else {
+        Ok(vec![])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +224,40 @@ mod tests {
         assert_eq!(v["models"]["providers"]["custom-gw"]["baseUrl"], "https://api.gw.com/v1");
         assert_eq!(v["models"]["providers"]["custom-gw"]["apiKey"], "sk-123");
         assert_eq!(v["agents"]["defaults"]["model"]["primary"], "custom-gw/claude-3-5-sonnet");
+    }
+
+    #[test]
+    fn test_remove_provider_cleans_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path().join("home"), dir.path().join("appdata"));
+        let cfg = paths.primary_config(ToolId::OpenClaw);
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            r#"{
+                "models": {
+                    "providers": {
+                        "to_remove": {"baseUrl": "https://r.com"},
+                        "keep": {"baseUrl": "https://k.com"}
+                    }
+                },
+                "agents": {
+                    "defaults": {
+                        "model": {
+                            "primary": "to_remove/m1"
+                        }
+                    }
+                }
+            }"#,
+        ).unwrap();
+
+        let removed = remove_provider(&paths, "openclaw:to_remove").unwrap();
+        assert!(!removed.is_empty());
+
+        let content = std::fs::read_to_string(&cfg).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(json["models"]["providers"].get("to_remove").is_none());
+        assert!(json["models"]["providers"].get("keep").is_some());
+        assert!(json["agents"]["defaults"]["model"].get("primary").is_none());
     }
 }

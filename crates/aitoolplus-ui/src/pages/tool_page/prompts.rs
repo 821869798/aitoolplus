@@ -1089,5 +1089,77 @@ mod tests {
         assert_eq!(matched_vendor.len(), 1);
         assert_eq!(matched_vendor[0].id, "deepseek-ai/DeepSeek-V3");
     }
-}
 
+    #[test]
+    fn test_provider_model_selection_target_dispatch() {
+        fn dispatch(target_id: &str) -> &'static str {
+            if target_id == "claude_model"
+                || target_id == "default_model"
+                || target_id == "codex_default_model"
+                || target_id == "primary"
+            {
+                "primary_model"
+            } else if target_id == "sonnet" {
+                "sonnet"
+            } else if target_id == "opus" {
+                "opus"
+            } else if target_id == "haiku" {
+                "haiku"
+            } else if target_id == "fable" {
+                "fable"
+            } else if target_id == "subagent" {
+                "subagent"
+            } else if let Some(idx_str) = target_id.strip_prefix("pi_") {
+                if idx_str.parse::<usize>().is_ok() {
+                    "pi_model"
+                } else {
+                    "unknown"
+                }
+            } else if let Some(idx_str) = target_id
+                .strip_prefix("codex_row_")
+                .or_else(|| target_id.strip_prefix("codex_"))
+            {
+                if idx_str.parse::<usize>().is_ok() {
+                    "codex_catalog_model"
+                } else {
+                    "unknown"
+                }
+            } else if let Some(idx_str) = target_id.strip_prefix("rewrite_req_") {
+                if idx_str.parse::<usize>().is_ok() {
+                    "rewrite_req"
+                } else {
+                    "unknown"
+                }
+            } else if let Some(idx_str) = target_id.strip_prefix("rewrite_target_") {
+                if idx_str.parse::<usize>().is_ok() {
+                    "rewrite_target"
+                } else {
+                    "unknown"
+                }
+            } else {
+                "unknown"
+            }
+        }
+
+        assert_eq!(dispatch("codex_default_model"), "primary_model");
+        assert_eq!(dispatch("primary"), "primary_model");
+        assert_eq!(dispatch("default_model"), "primary_model");
+        assert_eq!(dispatch("claude_model"), "primary_model");
+
+        assert_eq!(dispatch("codex_row_0"), "codex_catalog_model");
+        assert_eq!(dispatch("codex_row_5"), "codex_catalog_model");
+        assert_eq!(dispatch("codex_3"), "codex_catalog_model");
+
+        assert_eq!(dispatch("pi_0"), "pi_model");
+        assert_eq!(dispatch("pi_2"), "pi_model");
+
+        assert_eq!(dispatch("sonnet"), "sonnet");
+        assert_eq!(dispatch("opus"), "opus");
+        assert_eq!(dispatch("haiku"), "haiku");
+        assert_eq!(dispatch("fable"), "fable");
+        assert_eq!(dispatch("subagent"), "subagent");
+
+        assert_eq!(dispatch("rewrite_req_0"), "rewrite_req");
+        assert_eq!(dispatch("rewrite_target_1"), "rewrite_target");
+    }
+}

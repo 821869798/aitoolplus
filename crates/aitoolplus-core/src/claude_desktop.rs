@@ -231,6 +231,24 @@ pub fn restore_official(paths: &ClaudeDesktopPaths) -> Result<Vec<PathBuf>, Stri
     Ok(vec![paths.meta.clone(), paths.live_config.clone()])
 }
 
+/// Remove a profile from configLibrary, and restore official if it was applied.
+pub fn remove_provider(paths: &ClaudeDesktopPaths, id: &str) -> Result<Vec<PathBuf>, String> {
+    let profile_id = id.strip_prefix("cd:").unwrap_or(id);
+    let mut files = vec![];
+    let file = paths.config_library.join(format!("{profile_id}.json"));
+    if file.exists() {
+        std::fs::remove_file(&file).map_err(|e| e.to_string())?;
+        files.push(file);
+    }
+    if let Ok(state) = read_state(paths) {
+        if state.get("appliedId").and_then(Value::as_str) == Some(profile_id) {
+            let restored = restore_official(paths)?;
+            files.extend(restored);
+        }
+    }
+    Ok(files)
+}
+
 /// Read the effective live state for the Runtime tab.
 pub fn read_state(paths: &ClaudeDesktopPaths) -> Result<Value, String> {
     let meta = read_json_object(&paths.meta)?;
@@ -323,5 +341,9 @@ mod tests {
         assert!(meta.get("appliedId").is_none());
         // profile file itself survives restore
         assert!(paths.config_library.join("my-gateway.json").exists());
+
+        // remove_provider deletes the file and clears applied
+        remove_provider(&paths, "cd:my-gateway").unwrap();
+        assert!(!paths.config_library.join("my-gateway.json").exists());
     }
 }

@@ -106,10 +106,10 @@ pub fn session_root(paths: &Paths, tool: ToolId) -> Option<PathBuf> {
             .join("opencode")
             .join("session"),
         ToolId::OpenClaw => home.join(".openclaw").join("sessions"),
-        ToolId::Pi => home.join(".pi").join("agent").join("sessions"),
-        ToolId::OhMyPi => home.join(".config").join("oh-my-pi").join("sessions"),
-        ToolId::Hermes => home.join(".hermes").join("sessions"),
-        ToolId::Dsh => home.join(".dsh").join("sessions"),
+        ToolId::Pi => paths.tool_root(ToolId::Pi).join("sessions"),
+        ToolId::OhMyPi => paths.tool_root(ToolId::OhMyPi).join("sessions"),
+        ToolId::Hermes => paths.tool_root(ToolId::Hermes).join("sessions"),
+        ToolId::Dsh => paths.tool_root(ToolId::Dsh).join("sessions"),
         ToolId::ClaudeDesktop | ToolId::Agents => return None,
     })
 }

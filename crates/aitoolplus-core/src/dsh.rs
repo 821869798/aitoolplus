@@ -222,6 +222,65 @@ pub fn apply_provider(
     Ok(files)
 }
 
+/// Remove a provider from DSH settings.yaml.
+pub fn remove_provider(
+    paths: &DshRuntimePaths,
+    provider_id: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let route = provider_id.strip_prefix("dsh:").unwrap_or(provider_id);
+    let raw = read_settings(paths)?;
+    if raw.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(&raw).map_err(|e| e.to_string())?;
+    let mut changed = false;
+
+    if let Some(map) = doc.as_mapping_mut() {
+        if let Some(llm) = map
+            .get_mut(&serde_yaml::Value::String("llm-pi-ai".into()))
+            .and_then(|v| v.as_mapping_mut())
+        {
+            if let Some(providers) = llm
+                .get_mut(&serde_yaml::Value::String("providers".into()))
+                .and_then(|v| v.as_mapping_mut())
+            {
+                if providers.remove(&serde_yaml::Value::String(route.into())).is_some() {
+                    changed = true;
+                }
+                if providers.is_empty() {
+                    llm.remove(&serde_yaml::Value::String("providers".into()));
+                }
+            }
+            if llm.is_empty() {
+                map.remove(&serde_yaml::Value::String("llm-pi-ai".into()));
+            }
+        }
+        if let Some(default) = map
+            .get_mut(&serde_yaml::Value::String("agent-default-model".into()))
+            .and_then(|v| v.as_mapping_mut())
+        {
+            if default
+                .get(&serde_yaml::Value::String("provider".into()))
+                .and_then(|v| v.as_str())
+                == Some(route)
+            {
+                map.remove(&serde_yaml::Value::String("agent-default-model".into()));
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        write_atomic_text(
+            &paths.settings,
+            &serde_yaml::to_string(&doc).map_err(|e| e.to_string())?,
+        )?;
+        Ok(vec![paths.settings.clone()])
+    } else {
+        Ok(vec![])
+    }
+}
+
 /// Merge top-level common/other settings into settings.yaml. Provider and
 /// credential namespaces are preserved unless explicitly overlaid.
 pub fn merge_other_settings(
@@ -494,5 +553,22 @@ mod tests {
         let (_dir, paths) = setup();
         let mut providers = vec![];
         assert_eq!(import_runtime(&paths, &mut providers).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_remove_provider_cleans_llm_pi_ai_and_default_model() {
+        let (_dir, paths) = setup();
+        std::fs::write(
+            &paths.settings,
+            "llm-pi-ai:\n  providers:\n    to_remove:\n      baseUrl: https://r.com\nagent-default-model:\n  provider: to_remove\n  model: m1\n",
+        ).unwrap();
+
+        let removed = remove_provider(&paths, "dsh:to_remove").unwrap();
+        assert_eq!(removed.len(), 1);
+
+        let content = std::fs::read_to_string(&paths.settings).unwrap();
+        assert!(!content.contains("to_remove"));
+        assert!(!content.contains("llm-pi-ai"));
+        assert!(!content.contains("agent-default-model"));
     }
 }

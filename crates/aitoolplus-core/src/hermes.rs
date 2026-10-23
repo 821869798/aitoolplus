@@ -45,6 +45,17 @@ pub fn hermes_root(paths: &Paths) -> PathBuf {
     {
         return PathBuf::from(env);
     }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            if !local.trim().is_empty() {
+                let local_dir = PathBuf::from(local).join("hermes");
+                if local_dir.exists() || !paths.home.join(".hermes").exists() {
+                    return local_dir;
+                }
+            }
+        }
+    }
     paths.home.join(".hermes")
 }
 
@@ -173,6 +184,50 @@ pub fn apply_provider(
 
     write_config_atomic(paths, &doc)?;
     Ok(vec![paths.config.clone()])
+}
+
+/// Remove a provider from Hermes config.yaml custom_providers.
+pub fn remove_provider(
+    paths: &HermesRuntimePaths,
+    provider_id: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let key = provider_id
+        .strip_prefix("hermes:")
+        .unwrap_or(provider_id);
+
+    let mut doc = read_config(paths)?;
+    let mut changed = false;
+
+    if let Some(map) = doc.as_mapping_mut() {
+        if let Some(custom) = map
+            .get_mut(&serde_yaml::Value::String("custom_providers".into()))
+            .and_then(|v| v.as_mapping_mut())
+        {
+            if custom.remove(&serde_yaml::Value::String(key.into())).is_some() {
+                changed = true;
+            }
+        }
+        if let Some(model) = map
+            .get_mut(&serde_yaml::Value::String("model".into()))
+            .and_then(|v| v.as_mapping_mut())
+        {
+            if model
+                .get(&serde_yaml::Value::String("provider".into()))
+                .and_then(|v| v.as_str())
+                == Some(key)
+            {
+                map.remove(&serde_yaml::Value::String("model".into()));
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        write_config_atomic(paths, &doc)?;
+        Ok(vec![paths.config.clone()])
+    } else {
+        Ok(vec![])
+    }
 }
 
 /// Merge top-level common/other settings into config.yaml, preserving the
@@ -326,5 +381,22 @@ mod tests {
         let (_dir, paths) = setup();
         let mut providers = vec![];
         assert_eq!(import_runtime(&paths, &mut providers).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_remove_provider_cleans_custom_providers_and_model() {
+        let (_dir, paths) = setup();
+        std::fs::write(
+            &paths.config,
+            "custom_providers:\n  to_remove:\n    name: Remove\n  keep:\n    name: Keep\nmodel:\n  provider: to_remove\n  model: m1\n",
+        ).unwrap();
+
+        let removed = remove_provider(&paths, "hermes:to_remove").unwrap();
+        assert_eq!(removed.len(), 1);
+
+        let content = std::fs::read_to_string(&paths.config).unwrap();
+        assert!(!content.contains("to_remove:"));
+        assert!(content.contains("keep:"));
+        assert!(!content.contains("provider: to_remove"));
     }
 }
