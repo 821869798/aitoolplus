@@ -693,7 +693,20 @@ pub fn extract_account_quotas(
         None => return (ModelFamilyQuota::default(), ModelFamilyQuota::default(), None),
     };
 
-    let is_free_tier = account.get_tier().eq_ignore_ascii_case("FREE");
+    let has_explicit_5h_bucket = quota.window_5h.is_some()
+        || quota.quota_groups.iter().any(|g| {
+            let win = g.window.to_lowercase();
+            let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+            win.contains("5h") || bid.contains("5h") || win.contains("hour") || bid.contains("hour")
+        });
+    let explicit_tier_str = quota
+        .subscription_tier
+        .as_deref()
+        .or(account.tier.as_deref())
+        .unwrap_or("")
+        .to_lowercase();
+    let is_free_tier = explicit_tier_str.contains("free")
+        || (explicit_tier_str.is_empty() && !has_explicit_5h_bucket);
     let now = Utc::now();
 
     let find_model_reset_time = |keyword: &str| -> String {
