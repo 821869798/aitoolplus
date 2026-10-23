@@ -20,24 +20,49 @@ pub const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 pub const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
 pub const NATIVE_USER_AGENT: &str = "vscode/1.96.2 (Antigravity/4.3.0)";
+pub const OFFICIAL_HUB_VERSION: &str = "2.23.1";
+pub const OFFICIAL_HUB_CL: &str = "998881661";
 
-// Quota API endpoints (fallback order: Sandbox → Daily → Prod, matching Antigravity-Manager)
+/// Returns the official Antigravity Hub User-Agent matching Antigravity-Manager v4.9.8:
+/// `antigravity/hub/2.23.1 (aidev_client; os_type={os}; arch={arch}; cl=998881661)`
+pub fn official_hub_user_agent() -> &'static str {
+    static HUB_UA: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let os_type = match std::env::consts::OS {
+            "windows" => "windows",
+            "macos" => "darwin",
+            "linux" => "linux",
+            other => other,
+        };
+        let arch = match std::env::consts::ARCH {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            other => other,
+        };
+        format!(
+            "antigravity/hub/{} (aidev_client; os_type={}; arch={}; cl={})",
+            OFFICIAL_HUB_VERSION, os_type, arch, OFFICIAL_HUB_CL
+        )
+    });
+    HUB_UA.as_str()
+}
+
+// Quota API endpoints (fallback order: Daily → Sandbox → Prod, matching Antigravity-Manager v4.9.8)
 pub const QUOTA_MODELS_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
 ];
 
-// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Sandbox → Daily → Prod)
+// Quota Summary API endpoints (weekly + 5h + Argon grouped quota, fallback order: Daily → Sandbox → Prod)
 pub const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
 ];
 
 pub const LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
-    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
     "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 ];
 
@@ -192,22 +217,72 @@ impl AntigravityAccount {
     }
 
     /// Resolve account subscription tier ("ULTRA", "PRO", "ENTERPRISE", or "FREE").
+    /// Strictly uses authoritative `tier` / `quota.subscription_tier` normalized via `normalize_subscription_tier`.
+    /// Never infers tier from `quota.models` (fetchAvailableModels returns all 33 models for FREE accounts too).
     pub fn get_tier(&self) -> &str {
         if let Some(t) = &self.tier {
             let s = t.trim();
             if !s.is_empty() {
-                return s;
+                return match normalize_subscription_tier(s).as_str() {
+                    "ULTRA" => "ULTRA",
+                    "PRO" => "PRO",
+                    "ENTERPRISE" => "ENTERPRISE",
+                    _ => "FREE",
+                };
             }
         }
         if let Some(q) = &self.quota {
             if let Some(t) = &q.subscription_tier {
                 let s = t.trim();
                 if !s.is_empty() {
-                    return s;
+                    return match normalize_subscription_tier(s).as_str() {
+                        "ULTRA" => "ULTRA",
+                        "PRO" => "PRO",
+                        "ENTERPRISE" => "ENTERPRISE",
+                        _ => "FREE",
+                    };
                 }
             }
         }
         "FREE"
+    }
+
+    /// Normalize and synchronize `self.tier` and `self.quota.subscription_tier` in-place.
+    pub fn ensure_subscription_tier(&mut self) {
+        let resolved = self.get_tier().to_string();
+        self.tier = Some(resolved.clone());
+        if let Some(q) = &mut self.quota {
+            q.subscription_tier = Some(resolved);
+        }
+    }
+}
+
+/// Active account status across the three Antigravity clients:
+/// - `classic`: Antigravity native desktop app (APP / 经典款)
+/// - `ide`: Antigravity IDE (VS Code fork)
+/// - `agy`: Antigravity CLI (`agy`)
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveClientsStatus {
+    pub classic_account_id: Option<String>,
+    pub ide_account_id: Option<String>,
+    pub agy_account_id: Option<String>,
+}
+
+impl ActiveClientsStatus {
+    pub fn is_classic(&self, account_id: &str) -> bool {
+        self.classic_account_id.as_deref() == Some(account_id)
+    }
+
+    pub fn is_ide(&self, account_id: &str) -> bool {
+        self.ide_account_id.as_deref() == Some(account_id)
+    }
+
+    pub fn is_agy(&self, account_id: &str) -> bool {
+        self.agy_account_id.as_deref() == Some(account_id)
+    }
+
+    pub fn is_any_active(&self, account_id: &str) -> bool {
+        self.is_classic(account_id) || self.is_ide(account_id) || self.is_agy(account_id)
     }
 }
 
@@ -217,6 +292,14 @@ pub struct AntigravityStore {
     pub accounts: Vec<AntigravityAccount>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_target_ide: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_classic_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_ide_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_agy_account_id: Option<String>,
 }
 
 impl AntigravityStore {
@@ -237,6 +320,15 @@ impl AntigravityStore {
         self.accounts.retain(|a| a.id != id);
         if self.active_account_id.as_deref() == Some(id) {
             self.active_account_id = self.accounts.first().map(|a| a.id.clone());
+        }
+        if self.current_classic_account_id.as_deref() == Some(id) {
+            self.current_classic_account_id = None;
+        }
+        if self.current_ide_account_id.as_deref() == Some(id) {
+            self.current_ide_account_id = None;
+        }
+        if self.current_agy_account_id.as_deref() == Some(id) {
+            self.current_agy_account_id = None;
         }
         self.accounts.len() < initial_len
     }
@@ -331,8 +423,23 @@ struct LoadProjectResponse {
 
 #[derive(Debug, Deserialize)]
 struct TierJson {
+    #[serde(rename = "isDefault")]
+    is_default: Option<bool>,
     id: Option<String>,
+    #[serde(rename = "quotaTier")]
+    quota_tier: Option<String>,
     name: Option<String>,
+    slug: Option<String>,
+}
+
+impl TierJson {
+    fn extract_raw(&self) -> Option<String> {
+        self.id
+            .clone()
+            .or_else(|| self.name.clone())
+            .or_else(|| self.quota_tier.clone())
+            .or_else(|| self.slug.clone())
+    }
 }
 
 /// Refresh an access token using a refresh token.
@@ -399,6 +506,12 @@ pub fn fetch_user_info(access_token: &str) -> Result<GoogleUserInfo, String> {
 }
 
 /// Normalize raw tier string into "FREE", "PRO", "ULTRA", "ENTERPRISE".
+/// Matches Antigravity-Manager v4.9.8 `normalize_subscription_tier`:
+/// - `ultra` / `helium` -> `"ULTRA"` (`g1-ultra-tier`, `GOOGLE_ONE_HELIUM`, `GDP_HELIUM`, `Google AI Ultra`)
+/// - `free` / `starter` -> `"FREE"` (`free-tier`, `"Antigravity Starter Quota"`)
+/// - `pro` / `premium` / `advanced` -> `"PRO"` (`g1-pro-tier`, `"Google AI Pro"`)
+/// - `enterprise` / `corp` -> `"ENTERPRISE"`
+/// - anything else (including `standard-tier`) -> `"FREE"`
 pub fn normalize_subscription_tier(tier: &str) -> String {
     let lower = tier.trim().to_lowercase();
     if lower.contains("ultra") || lower.contains("helium") {
@@ -414,7 +527,29 @@ pub fn normalize_subscription_tier(tier: &str) -> String {
     }
 }
 
+/// Extract normalized subscription tier from a parsed `LoadProjectResponse`.
+fn extract_tier_from_load_project(data: &LoadProjectResponse) -> String {
+    let raw_tier = data
+        .paid_tier
+        .as_ref()
+        .and_then(TierJson::extract_raw)
+        .or_else(|| data.current_tier.as_ref().and_then(TierJson::extract_raw))
+        .or_else(|| {
+            data.allowed_tiers.as_ref().and_then(|allowed| {
+                allowed
+                    .iter()
+                    .find(|t| t.id.as_deref() == Some("free-tier") || t.is_default == Some(true))
+                    .and_then(TierJson::extract_raw)
+            })
+        })
+        .unwrap_or_else(|| "free-tier".to_string());
+
+    normalize_subscription_tier(&raw_tier)
+}
+
 /// Fetch project ID and subscription tier from loadCodeAssist API.
+/// Returns `(project_id, tier)` where `tier` is `Some` when any `loadCodeAssist` endpoint responds,
+/// or `(None, None)` if all endpoints failed at the network/transport level.
 pub fn fetch_project_and_tier(access_token: &str) -> (Option<String>, Option<String>) {
     let body = serde_json::json!({
         "metadata": {
@@ -426,39 +561,20 @@ pub fn fetch_project_and_tier(access_token: &str) -> (Option<String>, Option<Str
         let resp = AGENT.post(endpoint)
             .set("Authorization", &format!("Bearer {}", access_token))
             .set("Content-Type", "application/json")
-            .set("User-Agent", NATIVE_USER_AGENT)
+            .set("User-Agent", official_hub_user_agent())
             .timeout(Duration::from_secs(10))
             .send_json(&body);
 
         if let Ok(res) = resp {
             if let Ok(data) = res.into_json::<LoadProjectResponse>() {
-                let project_id = data.project_id;
-                let raw_tier = data
-                    .paid_tier
-                    .as_ref()
-                    .and_then(|t| t.id.clone().or_else(|| t.name.clone()))
-                    .or_else(|| {
-                        data.current_tier
-                            .as_ref()
-                            .and_then(|t| t.id.clone().or_else(|| t.name.clone()))
-                    })
-                    .or_else(|| {
-                        data.allowed_tiers.as_ref().and_then(|allowed| {
-                            allowed
-                                .iter()
-                                .find(|t| t.id.as_deref() == Some("free-tier"))
-                                .and_then(|t| t.id.clone().or_else(|| t.name.clone()))
-                        })
-                    })
-                    .unwrap_or_else(|| "free-tier".to_string());
-
-                let tier = Some(normalize_subscription_tier(&raw_tier));
+                let project_id = data.project_id.clone();
+                let tier = Some(extract_tier_from_load_project(&data));
                 return (project_id, tier);
             }
         }
     }
 
-    (None, Some("FREE".to_string()))
+    (None, None)
 }
 
 /// Fetch detailed model quota and summary groups.
@@ -491,7 +607,7 @@ pub fn fetch_quota(
             let resp = AGENT.post(endpoint)
                 .set("Authorization", &format!("Bearer {}", access_token))
                 .set("Content-Type", "application/json")
-                .set("User-Agent", NATIVE_USER_AGENT)
+                .set("User-Agent", official_hub_user_agent())
                 .timeout(Duration::from_secs(10))
                 .send_json(body);
 
@@ -501,20 +617,30 @@ pub fn fetch_quota(
                         let mut models = Vec::new();
                         for (name, info) in data.models {
                             if let Some(q_info) = info.quota_info {
-                                let fraction = q_info.remaining_fraction.unwrap_or(1.0);
-                                let percentage = (fraction * 100.0).round() as i32;
-                                let reset_time = q_info.reset_time.unwrap_or_default();
-                                models.push(ModelQuotaInfo {
-                                    name,
-                                    display_name: info.display_name,
-                                    percentage,
-                                    reset_time,
-                                    supports_thinking: info.supports_thinking.unwrap_or(false),
-                                    recommended: info.recommended.unwrap_or(false),
-                                });
+                                let name_lower = name.to_lowercase();
+                                // Keep user-facing models (exclude internal chat_*/tab_* models), matching Antigravity-Manager
+                                if name_lower.starts_with("gemini")
+                                    || name_lower.starts_with("claude")
+                                    || name_lower.starts_with("gpt")
+                                    || name_lower.starts_with("image")
+                                    || name_lower.starts_with("imagen")
+                                    || name_lower.contains("argon")
+                                {
+                                    let fraction = q_info.remaining_fraction.unwrap_or(1.0);
+                                    let percentage = (fraction * 100.0).round() as i32;
+                                    let reset_time = q_info.reset_time.unwrap_or_default();
+                                    models.push(ModelQuotaInfo {
+                                        name,
+                                        display_name: info.display_name,
+                                        percentage,
+                                        reset_time,
+                                        supports_thinking: info.supports_thinking.unwrap_or(false),
+                                        recommended: info.recommended.unwrap_or(false),
+                                    });
+                                }
                             }
                         }
-                        // Sort models: priority to Gemini 3.x / 2.5 Pro, Flash, Claude
+                        // Sort models: priority to Gemini 3.x / 2.5 Pro, Flash, Claude, Argon
                         models.sort_by(|a, b| {
                             let score = |m: &ModelQuotaInfo| -> i32 {
                                 let n = m.name.to_lowercase();
@@ -522,8 +648,10 @@ pub fn fetch_quota(
                                     100
                                 } else if n.contains("gemini-3.8-flash") || n.contains("gemini-3-flash") || n.contains("gemini-2.5-flash") {
                                     90
-                                } else if n.contains("claude-3-5-sonnet") || n.contains("claude-3-7-sonnet") || n.contains("claude-sonnet") {
+                                } else if n.contains("claude-3-5-sonnet") || n.contains("claude-3-7-sonnet") || n.contains("claude-sonnet") || n.contains("claude-opus") {
                                     80
+                                } else if n.contains("argon") {
+                                    70
                                 } else if n.contains("gemini") {
                                     50
                                 } else if n.contains("claude") {
@@ -567,7 +695,7 @@ pub fn fetch_quota(
         }
     }
 
-    // 2. Fetch quota summary (5h and weekly buckets)
+    // 2. Fetch quota summary (5h, weekly, and Gemini 4 Argon buckets)
     let summary_bodies = if let Some(pid) = project_id.filter(|p| !p.trim().is_empty()) {
         vec![
             serde_json::json!({ "project": pid }),
@@ -583,7 +711,7 @@ pub fn fetch_quota(
             let resp = AGENT.post(endpoint)
                 .set("Authorization", &format!("Bearer {}", access_token))
                 .set("Content-Type", "application/json")
-                .set("User-Agent", NATIVE_USER_AGENT)
+                .set("User-Agent", official_hub_user_agent())
                 .timeout(Duration::from_secs(10))
                 .send_json(body);
 
@@ -591,10 +719,16 @@ pub fn fetch_quota(
                 if let Ok(data) = res.into_json::<QuotaSummaryResponse>() {
                     for group in &data.groups {
                         let group_name = group.display_name.clone().unwrap_or_else(|| "General".to_string());
-                        let is_gemini_group = group_name.to_lowercase().contains("gemini")
-                            || (!group_name.to_lowercase().contains("claude")
-                                && !group_name.to_lowercase().contains("gpt")
-                                && !group_name.to_lowercase().contains("3p"));
+                        let g_lower = group_name.to_lowercase();
+                        let is_argon_group = g_lower.contains("argon");
+                        let is_claude_group = !is_argon_group
+                            && (g_lower.contains("claude") || g_lower.contains("gpt") || g_lower.contains("3p"));
+                        let is_gemini_group = !is_argon_group
+                            && !is_claude_group
+                            && (g_lower.contains("gemini")
+                                || (!g_lower.contains("claude")
+                                    && !g_lower.contains("gpt")
+                                    && !g_lower.contains("3p")));
 
                         for bucket in &group.buckets {
                             let window = bucket.window.clone().unwrap_or_default();
@@ -629,16 +763,27 @@ pub fn fetch_quota(
                     // [FIX #3426 / Antigravity-Manager Parity] Fuse real bucket quotas into models so UI doesn't show fake 100%
                     for model in quota.models.iter_mut() {
                         let name_lower = model.name.to_lowercase();
-                        let is_claude_or_gpt = name_lower.starts_with("claude") || name_lower.starts_with("gpt");
-                        let is_gemini = name_lower.starts_with("gemini");
+                        let is_argon = name_lower.contains("argon");
+                        let is_claude_or_gpt = !is_argon
+                            && (name_lower.starts_with("claude") || name_lower.starts_with("gpt"));
+                        let is_gemini = !is_argon && name_lower.starts_with("gemini");
 
                         for group in &data.groups {
                             let gname = group.display_name.as_deref().unwrap_or("").to_lowercase();
-                            let matches_group = if is_claude_or_gpt {
-                                gname.contains("claude") || gname.contains("gpt") || gname.contains("3p")
+                            let is_argon_group = gname.contains("argon");
+                            let is_claude_group = !is_argon_group
+                                && (gname.contains("claude") || gname.contains("gpt") || gname.contains("3p"));
+                            let is_gemini_group = !is_argon_group
+                                && !is_claude_group
+                                && (gname.contains("gemini")
+                                    || (!gname.contains("claude") && !gname.contains("gpt") && !gname.contains("3p")));
+
+                            let matches_group = if is_argon {
+                                is_argon_group
+                            } else if is_claude_or_gpt {
+                                is_claude_group
                             } else if is_gemini {
-                                gname.contains("gemini")
-                                    || (!gname.contains("claude") && !gname.contains("gpt") && !gname.contains("3p"))
+                                is_gemini_group
                             } else {
                                 false
                             };
@@ -696,13 +841,14 @@ pub fn fetch_quota(
         }
     }
 
-    // Fallback: If models or quota_groups could not be fetched (e.g. rate limit 429),
-    // retain existing cached quota data instead of wiping them out
+    // Fallback: If models or quota_groups could not be fetched (e.g. network error or rate limit 429),
+    // retain existing cached quota data instead of wiping them out. When retrieveUserQuotaSummary
+    // succeeds (`summary_fetched == true`), use the fresh groups authoritatively without merging stale groups.
     if let Some(existing) = existing_quota {
-        if quota.models.is_empty() && !existing.models.is_empty() {
+        if !models_fetched && quota.models.is_empty() && !existing.models.is_empty() {
             quota.models = existing.models.clone();
         }
-        if quota.quota_groups.is_empty() && !existing.quota_groups.is_empty() {
+        if !summary_fetched && quota.quota_groups.is_empty() && !existing.quota_groups.is_empty() {
             quota.quota_groups = existing.quota_groups.clone();
             if quota.window_5h.is_none() {
                 quota.window_5h = existing.window_5h;
@@ -986,6 +1132,89 @@ fn extract_refresh_token_from_payload(payload_str: &str) -> Result<String, Strin
         .ok_or_else(|| "Refresh token not found in keyring payload".to_string())
 }
 
+/// Write Antigravity CLI (agy) file credentials:
+/// `~/.gemini/antigravity-cli/antigravity-oauth-token` and `.bak`.
+pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
+    let cli_dir = home_dir.join(".gemini").join("antigravity-cli");
+    if !cli_dir.exists() {
+        std::fs::create_dir_all(&cli_dir)
+            .map_err(|e| format!("Failed to create antigravity-cli directory: {}", e))?;
+    }
+
+    let expiry_iso = chrono::DateTime::<Utc>::from_timestamp(account.expiry_timestamp, 0)
+        .unwrap_or_else(Utc::now)
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+
+    #[derive(Serialize)]
+    struct AgyCliTokenData {
+        access_token: String,
+        refresh_token: String,
+        token_type: String,
+        expiry: String,
+    }
+
+    #[derive(Serialize)]
+    struct AgyCliPayload {
+        client_id: String,
+        client_secret: String,
+        token: AgyCliTokenData,
+        scopes: Vec<String>,
+    }
+
+    let payload = AgyCliPayload {
+        client_id: CLIENT_ID.to_string(),
+        client_secret: CLIENT_SECRET.to_string(),
+        token: AgyCliTokenData {
+            access_token: account.access_token.clone(),
+            refresh_token: account.refresh_token.clone(),
+            token_type: "Bearer".to_string(),
+            expiry: expiry_iso,
+        },
+        scopes: vec![
+            "https://www.googleapis.com/auth/cloud-platform".to_string(),
+            "https://www.googleapis.com/auth/userinfo.email".to_string(),
+            "https://www.googleapis.com/auth/userinfo.profile".to_string(),
+            "https://www.googleapis.com/auth/cclog".to_string(),
+            "https://www.googleapis.com/auth/experimentsandconfigs".to_string(),
+            "openid".to_string(),
+        ],
+    };
+
+    let json_str = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("Failed to serialize agy cli token: {}", e))?;
+
+    for filename in &["antigravity-oauth-token", "antigravity-oauth-token.bak"] {
+        let path = cli_dir.join(filename);
+        std::fs::write(&path, &json_str)
+            .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
+    }
+
+    info!(
+        "Synced credentials to ~/.gemini/antigravity-cli/antigravity-oauth-token for: {}",
+        account.email
+    );
+    Ok(())
+}
+
+/// Read refresh token from `~/.gemini/antigravity-cli/antigravity-oauth-token` (or `.bak`).
+pub fn read_antigravity_cli_credentials(home_dir: &Path) -> Option<String> {
+    let cli_dir = home_dir.join(".gemini").join("antigravity-cli");
+    for filename in &["antigravity-oauth-token", "antigravity-oauth-token.bak"] {
+        let path = cli_dir.join(filename);
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(rt) = extract_refresh_token_from_payload(&content) {
+                if !rt.trim().is_empty() {
+                    return Some(rt);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Write file credentials: `~/.gemini/oauth_creds.json` and `~/.gemini/google_accounts.json`.
 pub fn write_file_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
     let gemini_dir = home_dir.join(".gemini");
@@ -1079,8 +1308,9 @@ pub fn load_store(app_data: &Path) -> AntigravityStore {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => AntigravityStore::default(),
     };
-    // Auto-heal false 403s caused by previous sandbox domain endpoint bug
+    // Auto-heal false 403s caused by previous sandbox domain endpoint bug and normalize subscription tiers
     for acc in &mut store.accounts {
+        acc.ensure_subscription_tier();
         if let Some(quota) = &mut acc.quota {
             if quota.is_forbidden {
                 if let Some(reason) = &quota.forbidden_reason {
@@ -1130,7 +1360,10 @@ pub fn build_account_from_refresh_token(
 
     let user_info = fetch_user_info(&access_token)?;
     let (project_id, tier) = fetch_project_and_tier(&access_token);
-    let quota = fetch_quota(&access_token, project_id.as_deref(), None).ok();
+    let mut quota = fetch_quota(&access_token, project_id.as_deref(), None).ok();
+    if let (Some(q), Some(t)) = (&mut quota, &tier) {
+        q.subscription_tier = Some(t.clone());
+    }
 
     let id = existing_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut account = AntigravityAccount::new(id, user_info.email, access_token, refresh_token.to_string(), expiry_timestamp);
@@ -1140,6 +1373,7 @@ pub fn build_account_from_refresh_token(
     account.tier = tier;
     account.quota = quota;
     account.custom_label = label;
+    account.ensure_subscription_tier();
 
     Ok(account)
 }
@@ -1149,6 +1383,293 @@ pub struct ImportedOAuthState {
     pub refresh_token: String,
     pub is_gcp_tos: bool,
     pub project_id: Option<String>,
+}
+
+/// Protobuf Varint writer
+pub fn encode_varint(mut value: u64) -> Vec<u8> {
+    let mut buf = Vec::new();
+    while value >= 0x80 {
+        buf.push(((value & 0x7F) | 0x80) as u8);
+        value >>= 7;
+    }
+    buf.push(value as u8);
+    buf
+}
+
+/// Encode a length-delimited Protobuf field (wire_type = 2)
+pub fn encode_len_delim_field(field_num: u32, data: &[u8]) -> Vec<u8> {
+    let tag = (field_num << 3) | 2;
+    let mut f = encode_varint(tag as u64);
+    f.extend(encode_varint(data.len() as u64));
+    f.extend_from_slice(data);
+    f
+}
+
+/// Encode a UTF-8 string Protobuf field (wire_type = 2)
+pub fn encode_string_field(field_num: u32, value: &str) -> Vec<u8> {
+    encode_len_delim_field(field_num, value.as_bytes())
+}
+
+/// Encode a Varint Protobuf field (wire_type = 0)
+pub fn encode_varint_field(field_num: u32, value: u64) -> Vec<u8> {
+    let tag = field_num << 3;
+    let mut f = encode_varint(tag as u64);
+    f.extend(encode_varint(value));
+    f
+}
+
+/// Create OAuthTokenInfo binary payload (matching Antigravity-Manager `create_oauth_info`)
+pub fn create_oauth_info(
+    access_token: &str,
+    refresh_token: &str,
+    expiry: i64,
+    is_gcp_tos: bool,
+) -> Vec<u8> {
+    let mut info = Vec::new();
+    info.extend(encode_string_field(1, access_token));
+    info.extend(encode_string_field(2, "Bearer"));
+    info.extend(encode_string_field(3, refresh_token));
+
+    let timestamp_data = encode_varint_field(1, expiry as u64);
+    info.extend(encode_len_delim_field(4, &timestamp_data));
+
+    if is_gcp_tos {
+        info.extend(encode_varint_field(6, 1));
+    }
+    info
+}
+
+fn create_unified_topic_row_entry(sentinel_key: &str, payload: &[u8]) -> Vec<u8> {
+    use base64::{engine::general_purpose, Engine as _};
+    let encoded_payload = general_purpose::STANDARD.encode(payload);
+    let row = encode_string_field(1, &encoded_payload);
+
+    let mut entry = Vec::new();
+    entry.extend(encode_string_field(1, sentinel_key));
+    entry.extend(encode_len_delim_field(2, &row));
+    entry
+}
+
+/// Update or create a Unified State Topic entry (`Topic.data` map entry)
+pub fn create_unified_topic_entry(
+    existing_outer_b64: Option<&str>,
+    sentinel_key: &str,
+    payload: &[u8],
+) -> String {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let mut topic_bytes = Vec::new();
+    if let Some(existing_b64) = existing_outer_b64 {
+        if let Ok(existing_blob) = general_purpose::STANDARD.decode(existing_b64.trim()) {
+            let mut offset = 0;
+            while offset < existing_blob.len() {
+                let Ok((tag, new_offset)) = read_varint(&existing_blob, offset) else {
+                    break;
+                };
+                let wire_type = (tag & 7) as u8;
+                let field_num = (tag >> 3) as u32;
+                let Ok(next_offset) = skip_field(&existing_blob, new_offset, wire_type) else {
+                    break;
+                };
+
+                let mut should_keep = true;
+                if field_num == 1 && wire_type == 2 {
+                    if let Ok((length, content_offset)) = read_varint(&existing_blob, new_offset) {
+                        let length = length as usize;
+                        if content_offset + length <= existing_blob.len() {
+                            let entry_blob = &existing_blob[content_offset..content_offset + length];
+                            if let Ok(Some(key_bytes)) = find_field(entry_blob, 1) {
+                                if key_bytes.as_slice() == sentinel_key.as_bytes() {
+                                    should_keep = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if should_keep {
+                    topic_bytes.extend_from_slice(&existing_blob[offset..next_offset]);
+                }
+                offset = next_offset;
+            }
+        }
+    }
+
+    let entry = create_unified_topic_row_entry(sentinel_key, payload);
+    topic_bytes.extend(encode_len_delim_field(1, &entry));
+    general_purpose::STANDARD.encode(&topic_bytes)
+}
+
+/// Remove a sentinel key from a Unified State Topic entry (`Topic.data` map entry)
+pub fn remove_unified_topic_entry(
+    existing_outer_b64: Option<&str>,
+    sentinel_key: &str,
+) -> Option<String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let existing_b64 = existing_outer_b64?;
+    let existing_blob = general_purpose::STANDARD.decode(existing_b64.trim()).ok()?;
+    let mut topic_bytes = Vec::new();
+    let mut offset = 0;
+
+    while offset < existing_blob.len() {
+        let (tag, new_offset) = read_varint(&existing_blob, offset).ok()?;
+        let wire_type = (tag & 7) as u8;
+        let field_num = (tag >> 3) as u32;
+        let next_offset = skip_field(&existing_blob, new_offset, wire_type).ok()?;
+
+        let mut should_keep = true;
+        if field_num == 1 && wire_type == 2 {
+            let (length, content_offset) = read_varint(&existing_blob, new_offset).ok()?;
+            let length = length as usize;
+            if content_offset + length <= existing_blob.len() {
+                let entry_blob = &existing_blob[content_offset..content_offset + length];
+                if let Ok(Some(key_bytes)) = find_field(entry_blob, 1) {
+                    if key_bytes.as_slice() == sentinel_key.as_bytes() {
+                        should_keep = false;
+                    }
+                }
+            }
+        }
+
+        if should_keep {
+            topic_bytes.extend_from_slice(&existing_blob[offset..next_offset]);
+        }
+        offset = next_offset;
+    }
+
+    if topic_bytes.is_empty() {
+        None
+    } else {
+        Some(general_purpose::STANDARD.encode(&topic_bytes))
+    }
+}
+
+/// Inject OAuth token and user status into a `state.vscdb` SQLite database (matching Antigravity-Manager `db::inject_token`)
+pub fn inject_token_to_db(db_path: &Path, account: &AntigravityAccount) -> Result<(), String> {
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|e| format!("Failed to open database {:?}: {}", db_path, e))?;
+
+    let existing_oauth_entry: Option<String> = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ["antigravityUnifiedStateSync.oauthToken"],
+            |row| row.get(0),
+        )
+        .ok();
+    let oauth_info = create_oauth_info(
+        &account.access_token,
+        &account.refresh_token,
+        account.expiry_timestamp,
+        true,
+    );
+    let new_oauth_entry = create_unified_topic_entry(
+        existing_oauth_entry.as_deref(),
+        "oauthTokenInfoSentinelKey",
+        &oauth_info,
+    );
+    conn.execute(
+        "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+        ["antigravityUnifiedStateSync.oauthToken", &new_oauth_entry],
+    )
+    .map_err(|e| format!("Failed to write oauthToken to DB: {}", e))?;
+
+    let existing_user_status: Option<String> = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ["antigravityUnifiedStateSync.userStatus"],
+            |row| row.get(0),
+        )
+        .ok();
+    let user_email_proto = encode_string_field(7, &account.email);
+    let new_user_status = create_unified_topic_entry(
+        existing_user_status.as_deref(),
+        "userStatusSentinelKey",
+        &user_email_proto,
+    );
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+        ["antigravityUnifiedStateSync.userStatus", &new_user_status],
+    );
+
+    let existing_enterprise_prefs: Option<String> = conn
+        .query_row(
+            "SELECT value FROM ItemTable WHERE key = ?",
+            ["antigravityUnifiedStateSync.enterprisePreferences"],
+            |row| row.get(0),
+        )
+        .ok();
+    let normalized_project_id = account
+        .project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+
+    match normalized_project_id {
+        Some(pid) => {
+            let project_proto = encode_string_field(3, pid);
+            let new_enterprise_prefs = create_unified_topic_entry(
+                existing_enterprise_prefs.as_deref(),
+                "enterpriseGcpProjectId",
+                &project_proto,
+            );
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+                [
+                    "antigravityUnifiedStateSync.enterprisePreferences",
+                    &new_enterprise_prefs,
+                ],
+            );
+        }
+        None => {
+            if let Some(updated) = remove_unified_topic_entry(
+                existing_enterprise_prefs.as_deref(),
+                "enterpriseGcpProjectId",
+            ) {
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+                    [
+                        "antigravityUnifiedStateSync.enterprisePreferences",
+                        &updated,
+                    ],
+                );
+            } else {
+                let _ = conn.execute(
+                    "DELETE FROM ItemTable WHERE key = ?",
+                    ["antigravityUnifiedStateSync.enterprisePreferences"],
+                );
+            }
+        }
+    }
+
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO ItemTable (key, value) VALUES (?, ?)",
+        ["antigravityOnboarding", "true"],
+    );
+    let _ = conn.execute(
+        "DELETE FROM ItemTable WHERE key = ?",
+        ["jetskiStateSync.agentManagerInitState"],
+    );
+
+    info!(
+        "Injected OAuth token into state.vscdb {:?} for {}",
+        db_path, account.email
+    );
+    Ok(())
+}
+
+/// Write serviceMachineId into `state.vscdb` ItemTable
+pub fn write_service_machine_id_to_db(db_path: &Path, service_machine_id: &str) -> Result<(), String> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|e| format!("Failed to open DB {:?}: {}", db_path, e))?;
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('storage.serviceMachineId', ?1)",
+        rusqlite::params![service_machine_id],
+    );
+    Ok(())
 }
 
 /// Protobuf Varint reader
@@ -1409,15 +1930,14 @@ pub fn extract_oauth_state_from_file(db_path: &Path) -> Result<ImportedOAuthStat
     Err("Login credentials not found in database".to_string())
 }
 
-/// Get all candidate state database paths for Antigravity IDE and Antigravity
+/// Get all candidate state database paths for Antigravity IDE (`Some("ide")`),
+/// Antigravity Classic (`Some("classic")`), or both (`None`).
 pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    let folder_names: &[&str] = if target_ide == Some("ide") {
-        &["Antigravity IDE", "Antigravity"]
-    } else if target_ide == Some("code") {
-        &["Antigravity", "Antigravity IDE"]
-    } else {
-        &["Antigravity IDE", "Antigravity"]
+    let folder_names: &[&str] = match target_ide {
+        Some("ide") => &["Antigravity IDE", "antigravity-ide", "antigravity_ide"],
+        Some("classic") | Some("code") => &["Antigravity"],
+        _ => &["Antigravity IDE", "antigravity-ide", "antigravity_ide", "Antigravity"],
     };
 
     #[cfg(target_os = "windows")]
@@ -1467,7 +1987,7 @@ pub fn extract_refresh_token_from_file(db_path: &Path) -> Result<String, String>
     extract_oauth_state_from_file(db_path).map(|s| s.refresh_token)
 }
 
-/// Get active refresh token from local system (Keyring or candidate DBs)
+/// Get active refresh token from candidate DBs for the given target (`Some("ide")`, `Some("classic")`, or `None`)
 pub fn get_refresh_token_from_db(target_ide: Option<&str>) -> Result<String, String> {
     for db_path in get_all_candidate_db_paths(target_ide) {
         if db_path.exists() {
@@ -1683,10 +2203,12 @@ pub fn import_all_local_accounts(home_dir: &Path) -> Result<Vec<AntigravityAccou
             if let Ok(oauth_state) = extract_oauth_state_from_file(&db_path) {
                 let rt = oauth_state.refresh_token;
                 if !rt.is_empty() && seen_tokens.insert(rt.clone()) {
-                    let label = if db_path.to_string_lossy().contains("Antigravity IDE") {
+                    let label = if db_path.to_string_lossy().contains("IDE")
+                        || db_path.to_string_lossy().contains("-ide")
+                    {
                         "Antigravity IDE"
                     } else {
-                        "Antigravity DB"
+                        "Antigravity APP"
                     };
                     if let Ok(mut acc) = build_account_from_refresh_token(&rt, None, Some(label.to_string())) {
                         if oauth_state.project_id.is_some() && acc.project_id.is_none() {
@@ -1699,7 +2221,16 @@ pub fn import_all_local_accounts(home_dir: &Path) -> Result<Vec<AntigravityAccou
         }
     }
 
-    // 2. Keyring
+    // 2. Antigravity CLI (~/.gemini/antigravity-cli/antigravity-oauth-token)
+    if let Some(rt) = read_antigravity_cli_credentials(home_dir) {
+        if !rt.is_empty() && seen_tokens.insert(rt.clone()) {
+            if let Ok(acc) = build_account_from_refresh_token(&rt, None, Some("Antigravity CLI".to_string())) {
+                imported.push(acc);
+            }
+        }
+    }
+
+    // 3. Keyring
     if let Ok(rt) = read_from_system_keyring() {
         if !rt.is_empty() && seen_tokens.insert(rt.clone()) {
             if let Ok(acc) = build_account_from_refresh_token(&rt, None, Some("系统凭据导入".to_string())) {
@@ -1708,7 +2239,7 @@ pub fn import_all_local_accounts(home_dir: &Path) -> Result<Vec<AntigravityAccou
         }
     }
 
-    // 3. ~/.gemini/oauth_creds.json
+    // 4. ~/.gemini/oauth_creds.json
     if let Ok(rt) = read_file_credentials(home_dir) {
         if !rt.is_empty() && seen_tokens.insert(rt.clone()) {
             if let Ok(acc) = build_account_from_refresh_token(&rt, None, Some("文件凭据导入".to_string())) {
@@ -1717,7 +2248,7 @@ pub fn import_all_local_accounts(home_dir: &Path) -> Result<Vec<AntigravityAccou
         }
     }
 
-    // 4. Antigravity Manager directory (~/.antigravity_tools)
+    // 5. Antigravity Manager directory (~/.antigravity_tools)
     if let Ok(mgr_accs) = import_from_antigravity_manager(home_dir) {
         for acc in mgr_accs {
             if seen_tokens.insert(acc.refresh_token.clone()) {
@@ -1726,7 +2257,7 @@ pub fn import_all_local_accounts(home_dir: &Path) -> Result<Vec<AntigravityAccou
         }
     }
 
-    // 5. V1 backup (~/.antigravity-agent)
+    // 6. V1 backup (~/.antigravity-agent)
     if let Ok(v1_accs) = import_from_v1_backup(home_dir) {
         for acc in v1_accs {
             if seen_tokens.insert(acc.refresh_token.clone()) {
@@ -1742,13 +2273,11 @@ pub fn import_all_local_accounts(home_dir: &Path) -> Result<Vec<AntigravityAccou
     Ok(imported)
 }
 
-/// Import active account from local machine (Antigravity IDE state.vscdb, Windows Credential Manager, or ~/.gemini/oauth_creds.json).
+/// Import active account from local machine (Antigravity IDE state.vscdb, CLI token, Windows Credential Manager, or ~/.gemini/oauth_creds.json).
 pub fn import_from_local_system(home_dir: &Path) -> Result<AntigravityAccount, String> {
-    // 1. Try local candidate databases (Antigravity IDE & Antigravity state.vscdb)
     let refresh_token = get_refresh_token_from_db(None)
-        // 2. Try keyring
+        .or_else(|_| read_antigravity_cli_credentials(home_dir).ok_or_else(|| "no cli token".to_string()))
         .or_else(|_| read_from_system_keyring())
-        // 3. Try ~/.gemini/oauth_creds.json
         .or_else(|_| read_file_credentials(home_dir))?;
 
     let mut account = build_account_from_refresh_token(&refresh_token, None, Some("本机导入".to_string()))?;
@@ -1772,7 +2301,9 @@ pub fn is_auto_refresh_due(last_refresh_time: Option<&str>, interval_minutes: u3
     elapsed.num_minutes() >= interval_minutes as i64
 }
 
-/// Refresh all account quotas concurrently, matching Antigravity-Manager's refresh_all_quotas_logic.
+/// Refresh all account quotas concurrently, matching Antigravity-Manager v4.9.8 `refresh_all_quotas_logic`.
+/// Always queries `loadCodeAssist` (`fetch_project_and_tier`) so subscription tier (`FREE` vs `PRO` vs `ULTRA`)
+/// is always authoritative and self-heals any stale tier values.
 /// Returns the count of successfully refreshed accounts.
 pub fn refresh_all_quotas(store: &mut AntigravityStore) -> usize {
     if store.accounts.is_empty() {
@@ -1783,7 +2314,7 @@ pub fn refresh_all_quotas(store: &mut AntigravityStore) -> usize {
         let mut handles = Vec::new();
         for acc in &mut store.accounts {
             handles.push(s.spawn(move || {
-                // Skip accounts that are already known to be forbidden due to TOS violation (Antigravity-Manager parity)
+                // Skip accounts that are already known to be forbidden due to TOS violation
                 if let Some(quota) = &acc.quota {
                     if quota.is_forbidden {
                         if let Some(reason) = &quota.forbidden_reason {
@@ -1794,13 +2325,20 @@ pub fn refresh_all_quotas(store: &mut AntigravityStore) -> usize {
                     }
                 }
                 if let Ok(()) = ensure_fresh_token(acc) {
-                    if acc.project_id.is_none() || acc.tier.is_none() {
-                        let (pid, tier) = fetch_project_and_tier(&acc.access_token);
-                        if pid.is_some() { acc.project_id = pid; }
-                        if tier.is_some() { acc.tier = tier; }
+                    // Always query loadCodeAssist for authoritative project_id & subscription tier
+                    let (pid, tier) = fetch_project_and_tier(&acc.access_token);
+                    if pid.is_some() {
+                        acc.project_id = pid;
                     }
-                    if let Ok(q) = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref()) {
+                    if tier.is_some() {
+                        acc.tier = tier.clone();
+                    }
+                    if let Ok(mut q) = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref()) {
+                        if let Some(ref t) = acc.tier {
+                            q.subscription_tier = Some(t.clone());
+                        }
                         acc.quota = Some(q);
+                        acc.ensure_subscription_tier();
                         return true;
                     }
                 }
@@ -1816,38 +2354,211 @@ pub fn refresh_all_quotas(store: &mut AntigravityStore) -> usize {
     success_count
 }
 
-/// Auto-sync current active account from local machine (Antigravity-Manager parity).
-/// If local machine has an active account, marks it as active in the store (and imports it if not present).
-/// Returns true if the active account or store changed.
-pub fn auto_sync_active_account(home_dir: &Path, store: &mut AntigravityStore) -> bool {
-    let local_acc = match import_from_local_system(home_dir) {
-        Ok(a) => a,
-        Err(_) => return false,
+fn find_account_id_by_refresh_token(store: &AntigravityStore, rt: &str) -> Option<String> {
+    let trimmed = rt.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    store
+        .accounts
+        .iter()
+        .find(|a| a.refresh_token.trim() == trimmed)
+        .map(|a| a.id.clone())
+}
+
+fn read_antigravity_manager_active_ids(
+    home_dir: &Path,
+    store: &AntigravityStore,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let index_file = home_dir.join(".antigravity_tools").join("accounts.json");
+    let Ok(content) = std::fs::read_to_string(&index_file) else {
+        return (None, None, None);
+    };
+    let Ok(index) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return (None, None, None);
     };
 
-    if let Some(pos) = store.accounts.iter().position(|a| a.email.eq_ignore_ascii_case(&local_acc.email)) {
-        let was_active = store.accounts[pos].is_active;
-        if !was_active {
-            for a in &mut store.accounts {
-                a.is_active = false;
+    let resolve_id = |key: &str| -> Option<String> {
+        let id = index.get(key).and_then(|v| v.as_str())?;
+        if store.accounts.iter().any(|a| a.id == id) {
+            return Some(id.to_string());
+        }
+        // Fallback: read detail file in ~/.antigravity_tools/accounts/{id}.json and match by email or refresh_token
+        let detail_path = home_dir
+            .join(".antigravity_tools")
+            .join("accounts")
+            .join(format!("{}.json", id));
+        let detail_str = std::fs::read_to_string(&detail_path).ok()?;
+        let detail: serde_json::Value = serde_json::from_str(&detail_str).ok()?;
+        if let Some(rt) = detail
+            .get("token")
+            .and_then(|t| t.get("refresh_token"))
+            .and_then(|v| v.as_str())
+        {
+            if let Some(matched) = find_account_id_by_refresh_token(store, rt) {
+                return Some(matched);
             }
-            store.accounts[pos].is_active = true;
-            store.active_account_id = Some(store.accounts[pos].id.clone());
-            return true;
         }
-        false
-    } else {
-        // New account discovered from system, add it as active
-        for a in &mut store.accounts {
-            a.is_active = false;
+        if let Some(email) = detail.get("email").and_then(|v| v.as_str()) {
+            if let Some(acc) = store
+                .accounts
+                .iter()
+                .find(|a| a.email.eq_ignore_ascii_case(email))
+            {
+                return Some(acc.id.clone());
+            }
         }
-        let mut new_acc = local_acc;
-        new_acc.is_active = true;
-        let id = new_acc.id.clone();
-        store.accounts.push(new_acc);
-        store.active_account_id = Some(id);
-        true
+        None
+    };
+
+    let classic = resolve_id("current_classic_account_id").or_else(|| resolve_id("current_account_id"));
+    let ide = resolve_id("current_ide_account_id");
+    let agy = resolve_id("current_agy_account_id");
+    (classic, ide, agy)
+}
+
+/// Detect active account IDs across all 3 Antigravity clients (`APP`, `IDE`, `CLI`),
+/// combining live credential detection on disk/keyring with tracked store IDs and `~/.antigravity_tools`.
+pub fn detect_active_clients_status(home_dir: &Path, store: &AntigravityStore) -> ActiveClientsStatus {
+    // 1. Live detection from IDE state.vscdb (`%APPDATA%\Antigravity IDE\...`)
+    let live_ide_id = get_refresh_token_from_db(Some("ide"))
+        .ok()
+        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+
+    // 2. Live detection from CLI token (`~/.gemini/antigravity-cli/antigravity-oauth-token`)
+    let live_agy_id = read_antigravity_cli_credentials(home_dir)
+        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+
+    // 3. Live detection from Classic DB (`%APPDATA%\Antigravity\...`) or Keyring / oauth_creds.json
+    let live_classic_db_id = get_refresh_token_from_db(Some("classic"))
+        .ok()
+        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+    let live_keyring_id = read_from_system_keyring()
+        .ok()
+        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+    let live_oauth_file_id = read_file_credentials(home_dir)
+        .ok()
+        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+
+    // 4. Fallback to Antigravity-Manager's accounts.json if present
+    let (mgr_classic, mgr_ide, mgr_agy) = read_antigravity_manager_active_ids(home_dir, store);
+
+    let valid_store_id = |opt: &Option<String>| -> Option<String> {
+        opt.as_ref()
+            .filter(|id| store.accounts.iter().any(|a| &a.id == *id))
+            .cloned()
+    };
+
+    let ide_account_id = live_ide_id
+        .or_else(|| valid_store_id(&store.current_ide_account_id))
+        .or(mgr_ide);
+
+    let agy_account_id = live_agy_id
+        .or_else(|| valid_store_id(&store.current_agy_account_id))
+        .or(mgr_agy);
+
+    let classic_account_id = live_classic_db_id
+        .or_else(|| valid_store_id(&store.current_classic_account_id))
+        .or(mgr_classic)
+        .or(live_keyring_id)
+        .or(live_oauth_file_id)
+        .or_else(|| valid_store_id(&store.active_account_id));
+
+    ActiveClientsStatus {
+        classic_account_id,
+        ide_account_id,
+        agy_account_id,
     }
+}
+
+/// Sync `store.current_classic_account_id`, `store.current_ide_account_id`, `store.current_agy_account_id`,
+/// and each account's `is_active` flag (`true` if active in any of `APP`, `IDE`, or `CLI`).
+pub fn sync_store_active_flags(home_dir: &Path, store: &mut AntigravityStore) -> ActiveClientsStatus {
+    let status = detect_active_clients_status(home_dir, store);
+    store.current_classic_account_id = status.classic_account_id.clone();
+    store.current_ide_account_id = status.ide_account_id.clone();
+    store.current_agy_account_id = status.agy_account_id.clone();
+    if status.classic_account_id.is_some() {
+        store.active_account_id = status.classic_account_id.clone();
+    } else if status.ide_account_id.is_some() {
+        store.active_account_id = status.ide_account_id.clone();
+    } else if status.agy_account_id.is_some() {
+        store.active_account_id = status.agy_account_id.clone();
+    }
+    for acc in &mut store.accounts {
+        acc.is_active = status.is_any_active(&acc.id);
+    }
+    status
+}
+
+/// Auto-sync current active accounts from local machine (APP, IDE, CLI).
+/// Imports any newly logged-in local account if not yet in the store, and updates multi-client active flags.
+/// Returns true if the active accounts or store changed.
+pub fn auto_sync_active_account(home_dir: &Path, store: &mut AntigravityStore) -> bool {
+    let prev_classic = store.current_classic_account_id.clone();
+    let prev_ide = store.current_ide_account_id.clone();
+    let prev_agy = store.current_agy_account_id.clone();
+    let prev_active_vec: Vec<bool> = store.accounts.iter().map(|a| a.is_active).collect();
+    let mut added_new = false;
+
+    // Collect candidate refresh tokens currently active on this machine
+    let mut local_tokens: Vec<(String, &'static str)> = Vec::new();
+    if let Ok(rt) = get_refresh_token_from_db(Some("ide")) {
+        if !rt.trim().is_empty() {
+            local_tokens.push((rt, "Antigravity IDE"));
+        }
+    }
+    if let Some(rt) = read_antigravity_cli_credentials(home_dir) {
+        if !rt.trim().is_empty() {
+            local_tokens.push((rt, "Antigravity CLI"));
+        }
+    }
+    if let Ok(rt) = get_refresh_token_from_db(Some("classic")) {
+        if !rt.trim().is_empty() {
+            local_tokens.push((rt, "Antigravity APP"));
+        }
+    }
+    if let Ok(rt) = read_from_system_keyring() {
+        if !rt.trim().is_empty() {
+            local_tokens.push((rt, "本机导入"));
+        }
+    }
+
+    for (rt, label) in local_tokens {
+        if find_account_id_by_refresh_token(store, &rt).is_none() {
+            if let Ok(new_acc) = build_account_from_refresh_token(&rt, None, Some(label.to_string())) {
+                if let Some(pos) = store
+                    .accounts
+                    .iter()
+                    .position(|a| a.email.eq_ignore_ascii_case(&new_acc.email))
+                {
+                    store.accounts[pos].refresh_token = new_acc.refresh_token;
+                    store.accounts[pos].access_token = new_acc.access_token;
+                    store.accounts[pos].expiry_timestamp = new_acc.expiry_timestamp;
+                    if new_acc.tier.is_some() {
+                        store.accounts[pos].tier = new_acc.tier;
+                    }
+                    if new_acc.quota.is_some() {
+                        store.accounts[pos].quota = new_acc.quota;
+                    }
+                    store.accounts[pos].ensure_subscription_tier();
+                    added_new = true;
+                } else {
+                    store.accounts.push(new_acc);
+                    added_new = true;
+                }
+            }
+        }
+    }
+
+    sync_store_active_flags(home_dir, store);
+    let new_active_vec: Vec<bool> = store.accounts.iter().map(|a| a.is_active).collect();
+
+    added_new
+        || prev_classic != store.current_classic_account_id
+        || prev_ide != store.current_ide_account_id
+        || prev_agy != store.current_agy_account_id
+        || prev_active_vec != new_active_vec
 }
 
 /// Import all accounts from Antigravity Manager (~/.antigravity_tools).
@@ -1860,6 +2571,9 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
     let content = std::fs::read_to_string(&index_file).map_err(|e| e.to_string())?;
     let index: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     let current_id = index.get("current_account_id").and_then(|v| v.as_str());
+    let current_classic_id = index.get("current_classic_account_id").and_then(|v| v.as_str());
+    let current_ide_id = index.get("current_ide_account_id").and_then(|v| v.as_str());
+    let current_agy_id = index.get("current_agy_account_id").and_then(|v| v.as_str());
 
     let mut accounts = Vec::new();
     let accounts_arr = index.get("accounts").and_then(|v| v.as_array()).ok_or("accounts 列表格式错误")?;
@@ -1894,7 +2608,10 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
         );
         acc.name = name;
         acc.project_id = project_id;
-        acc.is_active = current_id == Some(acc_id);
+        acc.is_active = current_id == Some(acc_id)
+            || current_classic_id == Some(acc_id)
+            || current_ide_id == Some(acc_id)
+            || current_agy_id == Some(acc_id);
         acc.custom_label = detail.get("custom_label").and_then(|v| v.as_str()).map(String::from);
 
         // Resolve subscription tier from detail.tier or detail.quota.subscription_tier
@@ -1962,12 +2679,24 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
                                 bucket_id,
                             });
                         }
+                    } else if let Some(window) = g.get("window").and_then(|v| v.as_str()) {
+                        let fraction = g.get("remaining_fraction").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                        let reset_time = g.get("reset_time").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let bucket_id = g.get("bucket_id").or_else(|| g.get("bucketId")).and_then(|v| v.as_str()).map(|s| s.to_string());
+                        quota.quota_groups.push(QuotaGroupInfo {
+                            display_name: g_name,
+                            window: window.to_string(),
+                            remaining_fraction: fraction,
+                            reset_time,
+                            bucket_id,
+                        });
                     }
                 }
             }
             acc.quota = Some(quota);
         }
 
+        acc.ensure_subscription_tier();
         accounts.push(acc);
     }
     Ok(accounts)
@@ -2015,17 +2744,43 @@ pub fn update_account_device_profile(
     Ok(())
 }
 
-/// Switch active account: updates Windows Credential Manager, ~/.gemini/oauth_creds.json, and store.
+/// Hot-switch helper: terminate Antigravity language_server child processes so the running client reloads credentials without full restart.
+fn trigger_language_server_hot_reload() {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        for proc_name in &[
+            "language_server_windows_x64.exe",
+            "language_server_windows_arm64.exe",
+            "language_server.exe",
+        ] {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/IM", proc_name])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "language_server"])
+            .output();
+    }
+}
+
+/// Switch active account (defaults to Classic / APP target).
 pub fn switch_account(
     home_dir: &Path,
     app_data: &Path,
     store: &mut AntigravityStore,
     account_id: &str,
 ) -> Result<(), String> {
-    switch_account_target(home_dir, app_data, store, account_id, None)
+    switch_account_target(home_dir, app_data, store, account_id, Some("classic"))
 }
 
-/// Switch active account targeting classic, IDE, or CLI.
+/// Switch active account targeting `classic` (APP), `ide` (IDE), or `agy` (CLI),
+/// matching Antigravity-Manager v4.9.8 multi-client switching semantics.
 pub fn switch_account_target(
     home_dir: &Path,
     app_data: &Path,
@@ -2033,38 +2788,99 @@ pub fn switch_account_target(
     account_id: &str,
     target: Option<&str>,
 ) -> Result<(), String> {
-    let account = store.get_account_mut(account_id)
-        .ok_or_else(|| format!("Account {} not found", account_id))?;
+    let target_mode = match target {
+        Some("ide") => "ide",
+        Some("agy") | Some("cli") => "agy",
+        _ => "classic",
+    };
 
-    if account.disabled {
-        return Err("Cannot switch to a disabled account".to_string());
-    }
+    let account_clone = {
+        let account = store
+            .get_account_mut(account_id)
+            .ok_or_else(|| format!("Account {} not found", account_id))?;
 
-    // Ensure valid token before switching
-    ensure_fresh_token(account)?;
+        if account.disabled {
+            return Err("无法切换到已禁用的账号".to_string());
+        }
 
-    // 1. Write to system keyring
-    write_to_system_keyring(account)?;
+        // Ensure valid token before switching
+        ensure_fresh_token(account)?;
+        account.last_used = Utc::now().timestamp();
+        account.clone()
+    };
 
-    // 2. Write to ~/.gemini files
-    write_file_credentials(home_dir, account)?;
-
-    // 3. If target is IDE or classic and device profile exists, write to storage.json
-    if let Some(ref profile) = account.device_profile {
-        let _ = write_device_profile_to_storage(target, profile);
-    }
-
-    // 4. Update store state
-    for acc in &mut store.accounts {
-        acc.is_active = acc.id == account_id;
-        if acc.is_active {
-            acc.last_used = Utc::now().timestamp();
+    match target_mode {
+        "ide" => {
+            // 1. Apply device profile to Antigravity IDE storage.json + state.vscdb if configured
+            if let Some(ref profile) = account_clone.device_profile {
+                let _ = write_device_profile_to_storage(Some("ide"), profile);
+            }
+            // 2. Inject OAuth token and user status into Antigravity IDE's state.vscdb
+            let ide_db_paths = get_all_candidate_db_paths(Some("ide"));
+            let mut injected_any = false;
+            let mut last_err = None;
+            for db_path in &ide_db_paths {
+                if db_path.exists() {
+                    if let Some(ref profile) = account_clone.device_profile {
+                        let _ = write_service_machine_id_to_db(db_path, &profile.dev_device_id);
+                    }
+                    match inject_token_to_db(db_path, &account_clone) {
+                        Ok(()) => injected_any = true,
+                        Err(e) => last_err = Some(e),
+                    }
+                }
+            }
+            if !injected_any {
+                if let Some(err) = last_err {
+                    return Err(format!("写入 Antigravity IDE 数据库失败: {}", err));
+                }
+                return Err("未检测到 Antigravity IDE 数据库 (state.vscdb)，请先启动一次 Antigravity IDE".to_string());
+            }
+            store.current_ide_account_id = Some(account_id.to_string());
+            store.current_target_ide = Some("ide".to_string());
+        }
+        "agy" => {
+            // 1. Write to system keyring (`gemini:antigravity`)
+            write_to_system_keyring(&account_clone)?;
+            // 2. Write to `~/.gemini/antigravity-cli/antigravity-oauth-token` (and `.bak`)
+            write_agy_cli_credentials(home_dir, &account_clone)?;
+            // 3. Also sync `~/.gemini/oauth_creds.json`
+            let _ = write_file_credentials(home_dir, &account_clone);
+            store.current_agy_account_id = Some(account_id.to_string());
+            store.current_target_ide = Some("agy".to_string());
+        }
+        _ => {
+            // Classic / APP mode:
+            // 1. Write to system keyring
+            write_to_system_keyring(&account_clone)?;
+            // 2. Write to `~/.gemini/oauth_creds.json`
+            write_file_credentials(home_dir, &account_clone)?;
+            // 3. Apply device profile to Classic storage.json and inject into Classic state.vscdb if present
+            if let Some(ref profile) = account_clone.device_profile {
+                let _ = write_device_profile_to_storage(Some("classic"), profile);
+            }
+            for db_path in get_all_candidate_db_paths(Some("classic")) {
+                if db_path.exists() {
+                    if let Some(ref profile) = account_clone.device_profile {
+                        let _ = write_service_machine_id_to_db(&db_path, &profile.dev_device_id);
+                    }
+                    let _ = inject_token_to_db(&db_path, &account_clone);
+                }
+            }
+            // 4. Hot-reload language_server child process if running
+            trigger_language_server_hot_reload();
+            store.current_classic_account_id = Some(account_id.to_string());
+            store.active_account_id = Some(account_id.to_string());
+            store.current_target_ide = Some("classic".to_string());
         }
     }
-    store.active_account_id = Some(account_id.to_string());
 
+    sync_store_active_flags(home_dir, store);
     save_store(app_data, store)?;
-    info!("Successfully switched active Antigravity account to {} (target: {:?})", account_id, target);
+    info!(
+        "Successfully switched Antigravity account to {} (target: {})",
+        account_id, target_mode
+    );
     Ok(())
 }
 
@@ -3023,5 +3839,122 @@ mod tests {
                 assert!(!all_accs.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn test_tier_detection_free_not_misidentified_as_pro() {
+        assert_eq!(normalize_subscription_tier("free-tier"), "FREE");
+        assert_eq!(normalize_subscription_tier("FREE"), "FREE");
+        assert_eq!(normalize_subscription_tier("standard-tier"), "FREE");
+        assert_eq!(normalize_subscription_tier("pro"), "PRO");
+        assert_eq!(normalize_subscription_tier("gemini-code-assist-pro"), "PRO");
+        assert_eq!(normalize_subscription_tier("google-one-ai-ultra"), "ULTRA");
+
+        let free_load_resp: LoadProjectResponse = serde_json::from_str(
+            r#"{
+                "cloudaicompanionProject": "proj-free-123",
+                "currentTier": { "id": "free-tier", "name": "Free Tier" },
+                "allowedTiers": [
+                    { "id": "free-tier", "isDefault": true },
+                    { "id": "pro-tier", "isDefault": false }
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(extract_tier_from_load_project(&free_load_resp), "FREE");
+
+        let pro_load_resp: LoadProjectResponse = serde_json::from_str(
+            r#"{
+                "cloudaicompanionProject": "proj-pro-123",
+                "paidTier": { "id": "gemini-pro-tier", "name": "Pro" },
+                "currentTier": { "id": "free-tier" }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(extract_tier_from_load_project(&pro_load_resp), "PRO");
+    }
+
+    #[test]
+    fn test_db_inject_and_extract_oauth_state_roundtrip() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("state.vscdb");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut acc = AntigravityAccount::new(
+            "acc-ide-1".into(),
+            "ide_user@example.com".into(),
+            "ya29.access_token_xyz".into(),
+            "1//04refresh_token_ide_roundtrip_123456".into(),
+            1800000000,
+        );
+        acc.project_id = Some("enterprise-proj-99".into());
+
+        inject_token_to_db(&db_path, &acc).unwrap();
+
+        let extracted = extract_oauth_state_from_file(&db_path).unwrap();
+        assert_eq!(
+            extracted.refresh_token,
+            "1//04refresh_token_ide_roundtrip_123456"
+        );
+        assert!(extracted.is_gcp_tos);
+        assert_eq!(
+            extracted.project_id.as_deref(),
+            Some("enterprise-proj-99")
+        );
+    }
+
+    #[test]
+    fn test_multi_client_active_detection() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+
+        let acc_app = AntigravityAccount::new(
+            "id-app".into(),
+            "app@example.com".into(),
+            "at-app".into(),
+            "1//04rt_app_account_1234567890".into(),
+            1800000000,
+        );
+        let acc_ide = AntigravityAccount::new(
+            "id-ide".into(),
+            "ide@example.com".into(),
+            "at-ide".into(),
+            "1//04rt_ide_account_1234567890".into(),
+            1800000000,
+        );
+        let acc_cli = AntigravityAccount::new(
+            "id-cli".into(),
+            "cli@example.com".into(),
+            "at-cli".into(),
+            "1//04rt_cli_account_1234567890".into(),
+            1800000000,
+        );
+
+        // Write CLI credentials for acc_cli
+        write_agy_cli_credentials(home, &acc_cli).unwrap();
+        assert_eq!(
+            read_antigravity_cli_credentials(home).as_deref(),
+            Some("1//04rt_cli_account_1234567890")
+        );
+
+        let mut store = AntigravityStore {
+            accounts: vec![acc_app, acc_ide, acc_cli],
+            active_account_id: Some("id-app".into()),
+            current_target_ide: Some("classic".into()),
+            current_classic_account_id: Some("id-app".into()),
+            current_ide_account_id: Some("id-ide".into()),
+            current_agy_account_id: Some("id-cli".into()),
+        };
+
+        let status = sync_store_active_flags(home, &mut store);
+        assert_eq!(status.agy_account_id.as_deref(), Some("id-cli"));
+        assert!(status.is_agy("id-cli"));
+        assert!(store.get_account("id-cli").unwrap().is_active);
     }
 }

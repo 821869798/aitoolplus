@@ -5,12 +5,13 @@
 
 use std::time::Duration;
 use aitoolplus_core::antigravity::{
-    AntigravityAccount, AntigravitySessionMeta, AntigravityStore, DeviceProfile, OAuthServerSession,
-    build_account_from_refresh_token, exchange_auth_code, extract_oauth_code, extract_tokens_from_text,
-    fetch_project_and_tier, fetch_quota, fetch_user_info, import_all_local_accounts,
-    import_from_custom_db_path, import_from_local_system, import_from_v1_backup, load_store, open_browser,
-    save_store, scan_antigravity_sessions, switch_account_target, toggle_account_disabled,
-    update_account_device_profile, update_account_label,
+    ActiveClientsStatus, AntigravityAccount, AntigravitySessionMeta, AntigravityStore, DeviceProfile,
+    OAuthServerSession, build_account_from_refresh_token, detect_active_clients_status,
+    exchange_auth_code, extract_oauth_code, extract_tokens_from_text, fetch_project_and_tier,
+    fetch_quota, fetch_user_info, import_all_local_accounts, import_from_custom_db_path,
+    import_from_local_system, import_from_v1_backup, load_store, open_browser, save_store,
+    scan_antigravity_sessions, switch_account_target, sync_store_active_flags,
+    toggle_account_disabled, update_account_device_profile, update_account_label,
 };
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -168,13 +169,15 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    // Lazily load store from disk if not loaded yet
+    // Lazily load store from disk if not loaded yet, and sync active client flags (APP / IDE / CLI)
     if ws.ui.antigravity_store.is_none() {
-        let store = load_store(&ws.paths.app_data);
+        let mut store = load_store(&ws.paths.app_data);
+        sync_store_active_flags(&ws.paths.home, &mut store);
         ws.ui.antigravity_store = Some(store);
     }
 
     let store = ws.ui.antigravity_store.clone().unwrap_or_default();
+    let active_clients = detect_active_clients_status(&ws.paths.home, &store);
     let accounts = &store.accounts;
 
     // CC-Switch & Antigravity-Manager Parity: Auto-refresh on page entry if due
@@ -189,12 +192,13 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
         ws.ui.antigravity_refreshing_all = true;
         let accounts_to_refresh = accounts.clone();
         let app_data = ws.paths.app_data.clone();
+        let home_dir = ws.paths.home.clone();
         let weak = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
             let updated_accounts = cx.background_spawn(async move {
                 let mut s = aitoolplus_core::antigravity::AntigravityStore {
                     accounts: accounts_to_refresh,
-                    active_account_id: None,
+                    ..Default::default()
                 };
                 aitoolplus_core::antigravity::refresh_all_quotas(&mut s);
                 s.accounts
@@ -204,6 +208,7 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                 ws.ui.antigravity_refreshing_all = false;
                 if let Some(s) = &mut ws.ui.antigravity_store {
                     s.accounts = updated_accounts;
+                    sync_store_active_flags(&home_dir, s);
                     let _ = save_store(&app_data, s);
                 }
                 ws.settings.last_antigravity_refresh_time = Some(chrono::Utc::now().to_rfc3339());
@@ -477,7 +482,7 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     } else {
         let mut list = div().flex().flex_col().gap(px(12.0));
         for acc in &filtered_accounts {
-            list = list.child(render_account_card(acc, ws, cx));
+            list = list.child(render_account_card(acc, &active_clients, ws, cx));
         }
         section = section.child(list);
     }
@@ -678,133 +683,236 @@ pub struct ModelFamilyQuota {
     pub weekly: Option<WeeklyQuotaItem>,
 }
 
-/// Extract dual quotas (5-hour and 7-day weekly) for both Gemini and Claude/GPT model families.
-/// Inspects upstream Antigravity-Manager bucket conventions:
-/// If weekly quota is exhausted (remaining_fraction <= 0.001 and reset_time > now),
-/// the 5-hour quota is marked `is_weekly_constrained = true`, forcing percentage to 0% and
-/// displaying a deepened red border warning in the UI.
-pub fn extract_family_quotas(account: &AntigravityAccount) -> (ModelFamilyQuota, ModelFamilyQuota) {
+/// Extract dual quotas (5-hour and 7-day weekly) for both Gemini and Claude/GPT model families,
+/// plus the weekly quota for `Gemini 4 Argon` (only when `argon` actually exists in the account's quota).
+pub fn extract_account_quotas(
+    account: &AntigravityAccount,
+) -> (ModelFamilyQuota, ModelFamilyQuota, Option<WeeklyQuotaItem>) {
     let quota = match &account.quota {
         Some(q) => q,
-        None => return (ModelFamilyQuota::default(), ModelFamilyQuota::default()),
+        None => return (ModelFamilyQuota::default(), ModelFamilyQuota::default(), None),
     };
 
+    let is_free_tier = account.get_tier().eq_ignore_ascii_case("FREE");
+    let now = Utc::now();
+
     let find_model_reset_time = |keyword: &str| -> String {
-        quota.models.iter()
-            .find(|m| m.name.to_lowercase().contains(keyword) && !m.reset_time.trim().is_empty())
+        quota
+            .models
+            .iter()
+            .find(|m| {
+                let n = m.name.to_lowercase();
+                !n.contains("argon") && n.contains(keyword) && !m.reset_time.trim().is_empty()
+            })
             .map(|m| m.reset_time.clone())
             .unwrap_or_default()
     };
 
     let is_future_reset = |reset_time: &str| -> bool {
         if let Some(dt) = parse_flexible_date(reset_time) {
-            dt > Utc::now()
+            dt > now
         } else {
             !reset_time.trim().is_empty()
         }
     };
 
     let inspect_family = |is_third_party: bool| -> ModelFamilyQuota {
-        let matching_groups: Vec<_> = quota.quota_groups.iter().filter(|g| {
-            let d = g.display_name.to_lowercase();
-            let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
-            let is_3p = d.contains("claude") || d.contains("gpt") || d.contains("3p") || bid.contains("3p");
-            if is_third_party {
-                is_3p
+        let matching_groups: Vec<_> = quota
+            .quota_groups
+            .iter()
+            .filter(|g| {
+                let d = g.display_name.to_lowercase();
+                let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+                // Argon has its own dedicated weekly bucket
+                if d.contains("argon") || bid.contains("argon") {
+                    return false;
+                }
+                let is_3p =
+                    d.contains("claude") || d.contains("gpt") || d.contains("3p") || bid.contains("3p");
+                if is_third_party {
+                    is_3p
+                } else {
+                    !is_3p && (d.contains("gemini") || (!d.contains("claude") && !d.contains("gpt")))
+                }
+            })
+            .collect();
+
+        // Fallback models for this family (excluding argon), split into 5H vs Weekly windows
+        // exactly as in Antigravity-Manager src/utils/quotaDisplay.ts:216-269:
+        // - 0 < reset_time - now <= 6 hours -> fiveHourModels
+        // - reset_time - now > 6 hours -> weeklyModels
+        let matched_models: Vec<_> = quota
+            .models
+            .iter()
+            .filter(|m| {
+                let n = m.name.to_lowercase();
+                if n.contains("argon") {
+                    return false;
+                }
+                if is_third_party {
+                    n.contains("claude") || n.contains("gpt")
+                } else {
+                    n.contains("gemini") && !n.contains("image") && !n.contains("imagen")
+                }
+            })
+            .collect();
+
+        let six_hours_secs = 6 * 3600;
+        let five_hour_models: Vec<_> = matched_models
+            .iter()
+            .copied()
+            .filter(|m| {
+                parse_flexible_date(&m.reset_time).map_or(false, |dt| {
+                    let diff = (dt - now).num_seconds();
+                    diff > 0 && diff <= six_hours_secs
+                })
+            })
+            .collect();
+        let weekly_models: Vec<_> = matched_models
+            .iter()
+            .copied()
+            .filter(|m| {
+                parse_flexible_date(&m.reset_time).map_or(false, |dt| {
+                    let diff = (dt - now).num_seconds();
+                    diff > six_hours_secs
+                })
+            })
+            .collect();
+
+        let mut fallback_5h = five_hour_models.iter().copied().min_by_key(|m| m.percentage);
+        let mut fallback_weekly = weekly_models.iter().copied().min_by_key(|m| m.percentage);
+
+        if fallback_5h.is_none() && fallback_weekly.is_none() && !matched_models.is_empty() {
+            let min_model = matched_models.iter().copied().min_by_key(|m| m.percentage);
+            if is_free_tier {
+                fallback_weekly = min_model;
             } else {
-                !is_3p && (d.contains("gemini") || (!d.contains("claude") && !d.contains("gpt")))
+                fallback_5h = min_model;
             }
-        }).collect();
+        }
 
         // 1. Weekly bucket: /week|7d/
-        let weekly_bucket = matching_groups.iter().filter(|g| {
-            let win = g.window.to_lowercase();
-            let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
-            win.contains("week") || bid.contains("week") || win.contains("7d") || bid.contains("7d")
-        }).max_by(|a, b| {
-            a.reset_time.cmp(&b.reset_time)
-        });
+        let weekly_bucket = matching_groups
+            .iter()
+            .filter(|g| {
+                let win = g.window.to_lowercase();
+                let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+                win.contains("week") || bid.contains("week") || win.contains("7d") || bid.contains("7d")
+            })
+            .max_by(|a, b| a.reset_time.cmp(&b.reset_time));
 
-        let weekly_item = weekly_bucket.map(|g| {
-            let mut rt = g.reset_time.clone();
-            if rt.trim().is_empty() {
-                rt = find_model_reset_time(if is_third_party { "claude" } else { "gemini" });
-            }
-            WeeklyQuotaItem {
-                percentage: (g.remaining_fraction * 100.0).round() as i32,
-                reset_time: rt,
-            }
-        }).or_else(|| {
-            if !is_third_party {
-                quota.window_weekly.map(|w| WeeklyQuotaItem {
-                    percentage: (w * 100.0).round() as i32,
-                    reset_time: find_model_reset_time("gemini"),
+        let weekly_item = weekly_bucket
+            .map(|g| {
+                let mut rt = g.reset_time.clone();
+                if rt.trim().is_empty() {
+                    rt = find_model_reset_time(if is_third_party { "claude" } else { "gemini" });
+                }
+                WeeklyQuotaItem {
+                    percentage: (g.remaining_fraction * 100.0).round() as i32,
+                    reset_time: rt,
+                }
+            })
+            .or_else(|| {
+                if !is_third_party {
+                    quota.window_weekly.map(|w| WeeklyQuotaItem {
+                        percentage: (w * 100.0).round() as i32,
+                        reset_time: find_model_reset_time("gemini"),
+                    })
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                fallback_weekly.map(|m| WeeklyQuotaItem {
+                    percentage: m.percentage,
+                    reset_time: m.reset_time.clone(),
                 })
-            } else {
-                None
-            }
-        });
+            });
 
-        // Upstream Antigravity-Manager logic:
-        // const weekly = buckets.filter(bucket => /week|7d/i.test(`${bucket.window} ${bucket.bucket_id}`)
-        //     && bucket.remaining_fraction <= 0.001 && Date.parse(bucket.reset_time) > Date.now())
-        let is_weekly_constrained = if let Some(ref w_bucket) = weekly_bucket {
+        // Upstream Antigravity-Manager src/utils/quotaDisplay.ts:285-293:
+        // isWeeklyExhausted: effectiveWeekly != null && effectiveWeekly <= 0
+        // isWeeklyConstrained: isWeeklyExhausted || (effectiveWeekly != null && raw5h != null && effectiveWeekly < raw5h)
+        let is_weekly_exhausted = if let Some(ref w_bucket) = weekly_bucket {
             w_bucket.remaining_fraction <= 0.001 && is_future_reset(&w_bucket.reset_time)
         } else if !is_third_party && quota.window_weekly.map_or(false, |w| w <= 0.001) {
             true
         } else {
-            false
+            weekly_item
+                .as_ref()
+                .map_or(false, |w| w.percentage <= 0 && is_future_reset(&w.reset_time))
         };
 
-        let weekly_reset_time = weekly_bucket.map(|b| b.reset_time.clone())
-            .unwrap_or_else(|| weekly_item.as_ref().map(|w| w.reset_time.clone()).unwrap_or_default());
+        let weekly_reset_time = weekly_bucket
+            .map(|b| b.reset_time.clone())
+            .unwrap_or_else(|| {
+                weekly_item
+                    .as_ref()
+                    .map(|w| w.reset_time.clone())
+                    .unwrap_or_default()
+            });
 
-        // 2. 5-Hour bucket: /5h|hour/
-        let five_hour_bucket = matching_groups.iter().filter(|g| {
-            let win = g.window.to_lowercase();
-            let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
-            win.contains("5h") || bid.contains("5h") || win.contains("hour") || bid.contains("hour")
-        }).min_by(|a, b| {
-            a.remaining_fraction.partial_cmp(&b.remaining_fraction).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // 2. 5-Hour bucket: /5h|hour/ (never for FREE tier)
+        let five_hour_bucket = if is_free_tier {
+            None
+        } else {
+            matching_groups
+                .iter()
+                .filter(|g| {
+                    let win = g.window.to_lowercase();
+                    let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+                    win.contains("5h") || bid.contains("5h") || win.contains("hour") || bid.contains("hour")
+                })
+                .min_by(|a, b| {
+                    a.remaining_fraction
+                        .partial_cmp(&b.remaining_fraction)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        };
 
-        let five_hour_item = if let Some(b) = five_hour_bucket {
+        let five_hour_item = if is_free_tier {
+            None
+        } else if let Some(b) = five_hour_bucket {
             let mut rt = b.reset_time.clone();
             if rt.trim().is_empty() {
                 rt = find_model_reset_time(if is_third_party { "claude" } else { "gemini" });
             }
             let raw_pct = (b.remaining_fraction * 100.0).round() as i32;
-            let final_pct = if is_weekly_constrained { 0 } else { raw_pct };
+            let final_pct = if is_weekly_exhausted { 0 } else { raw_pct };
             Some(CoreQuotaItem {
                 percentage: final_pct,
-                reset_time: if is_weekly_constrained && !weekly_reset_time.is_empty() { weekly_reset_time.clone() } else { rt },
-                is_weekly_constrained,
+                reset_time: if is_weekly_exhausted && !weekly_reset_time.is_empty() {
+                    weekly_reset_time.clone()
+                } else {
+                    rt
+                },
+                is_weekly_constrained: is_weekly_exhausted,
                 weekly_reset_time: weekly_reset_time.clone(),
             })
         } else if !is_third_party && quota.window_5h.is_some() {
             let raw_pct = (quota.window_5h.unwrap() * 100.0).round() as i32;
-            let final_pct = if is_weekly_constrained { 0 } else { raw_pct };
+            let final_pct = if is_weekly_exhausted { 0 } else { raw_pct };
             Some(CoreQuotaItem {
                 percentage: final_pct,
-                reset_time: if is_weekly_constrained && !weekly_reset_time.is_empty() { weekly_reset_time.clone() } else { find_model_reset_time("gemini") },
-                is_weekly_constrained,
+                reset_time: if is_weekly_exhausted && !weekly_reset_time.is_empty() {
+                    weekly_reset_time.clone()
+                } else {
+                    find_model_reset_time("gemini")
+                },
+                is_weekly_constrained: is_weekly_exhausted,
                 weekly_reset_time: weekly_reset_time.clone(),
             })
         } else {
-            let model_fallback = quota.models.iter().find(|m| {
-                let n = m.name.to_lowercase();
-                if is_third_party {
-                    n.contains("claude") || n.contains("gpt")
-                } else {
-                    n.contains("gemini")
-                }
-            });
-            model_fallback.map(|m| {
-                let final_pct = if is_weekly_constrained { 0 } else { m.percentage };
+            fallback_5h.map(|m| {
+                let raw_pct = m.percentage;
+                let final_pct = if is_weekly_exhausted { 0 } else { raw_pct };
                 CoreQuotaItem {
                     percentage: final_pct,
-                    reset_time: if is_weekly_constrained && !weekly_reset_time.is_empty() { weekly_reset_time.clone() } else { m.reset_time.clone() },
-                    is_weekly_constrained,
+                    reset_time: if is_weekly_exhausted && !weekly_reset_time.is_empty() {
+                        weekly_reset_time.clone()
+                    } else {
+                        m.reset_time.clone()
+                    },
+                    is_weekly_constrained: is_weekly_exhausted,
                     weekly_reset_time: weekly_reset_time.clone(),
                 }
             })
@@ -818,6 +926,64 @@ pub fn extract_family_quotas(account: &AntigravityAccount) -> (ModelFamilyQuota,
 
     let gemini = inspect_family(false);
     let claude = inspect_family(true);
+
+    // 3. Extract Gemini 4 Argon weekly quota (matching Antigravity-Manager src/utils/quotaDisplay.ts:314-328):
+    // ONLY return Some(WeeklyQuotaItem) when the account actually has Argon in `quota_groups` or `models`.
+    let argon_group = quota.quota_groups.iter().find(|g| {
+        let d = g.display_name.to_lowercase();
+        let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+        d.contains("argon") || bid.contains("argon")
+    });
+    let argon_model = quota.models.iter().find(|m| {
+        let n = m.name.to_lowercase();
+        let dn = m.display_name.as_deref().unwrap_or("").to_lowercase();
+        n.contains("argon") || dn.contains("argon")
+    });
+
+    let default_weekly_reset = gemini
+        .weekly
+        .as_ref()
+        .map(|w| w.reset_time.clone())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            claude
+                .weekly
+                .as_ref()
+                .map(|w| w.reset_time.clone())
+                .filter(|s| !s.trim().is_empty())
+        })
+        .unwrap_or_default();
+
+    let argon_weekly = if let Some(g) = argon_group {
+        let rt = if g.reset_time.trim().is_empty() {
+            default_weekly_reset
+        } else {
+            g.reset_time.clone()
+        };
+        Some(WeeklyQuotaItem {
+            percentage: (g.remaining_fraction * 100.0).round() as i32,
+            reset_time: rt,
+        })
+    } else if let Some(m) = argon_model {
+        let rt = if m.reset_time.trim().is_empty() {
+            default_weekly_reset
+        } else {
+            m.reset_time.clone()
+        };
+        Some(WeeklyQuotaItem {
+            percentage: m.percentage,
+            reset_time: rt,
+        })
+    } else {
+        None
+    };
+
+    (gemini, claude, argon_weekly)
+}
+
+/// Extract dual quotas (5-hour and 7-day weekly) for both Gemini and Claude/GPT model families.
+pub fn extract_family_quotas(account: &AntigravityAccount) -> (ModelFamilyQuota, ModelFamilyQuota) {
+    let (gemini, claude, _) = extract_account_quotas(account);
     (gemini, claude)
 }
 
@@ -1198,25 +1364,270 @@ fn render_quota_bar_placeholder(
         .into_any_element()
 }
 
-/// Render a column combining 5-hour rolling quota and 7-day weekly quota for a model family.
+/// Render a horizontal row combining 5-hour rolling quota and 7-day weekly quota for a model family (`一行一类`).
+/// - Renders the 5H bar on the left when `family.five_hour` is present (and `!is_free_tier`).
+/// - Renders the Weekly bar on the right when `family.weekly` is present.
+/// - Renders a single placeholder bar only when both `five_hour` and `weekly` are absent.
 fn render_model_quota_column(
     title: &'static str,
     icon_svg: &'static [u8],
     family: &ModelFamilyQuota,
+    is_free_tier: bool,
     theme: &Theme,
     i18n: &crate::i18n::I18n,
 ) -> gpui::AnyElement {
     let t = theme;
     let i = i18n;
+    let show_5h = !is_free_tier && family.five_hour.is_some();
+    let show_weekly = family.weekly.is_some();
 
     div()
-        .flex_1()
-        .min_w(px(200.0))
+        .w_full()
         .flex()
-        .flex_col()
+        .items_center()
+        .gap(px(8.0))
+        .when(show_5h, |s| {
+            s.child(
+                div()
+                    .flex_1()
+                    .min_w(px(180.0))
+                    .child(render_five_hour_quota_bar(
+                        title,
+                        icon_svg,
+                        family.five_hour.as_ref(),
+                        t,
+                        i,
+                    )),
+            )
+        })
+        .when(show_weekly, |s| {
+            s.child(
+                div()
+                    .flex_1()
+                    .min_w(px(180.0))
+                    .child(render_weekly_quota_bar(
+                        title,
+                        icon_svg,
+                        family.weekly.as_ref(),
+                        t,
+                        i,
+                    )),
+            )
+        })
+        .when(!show_5h && !show_weekly, |s| {
+            s.child(
+                div()
+                    .flex_1()
+                    .min_w(px(180.0))
+                    .child(render_quota_bar_placeholder(title, icon_svg, t)),
+            )
+        })
+        .into_any_element()
+}
+
+/// Render the `Gemini 4 Argon` 7-day weekly quota bar (matching Antigravity-Manager v4.9.8).
+fn render_argon_weekly_quota_bar(
+    item: &WeeklyQuotaItem,
+    t: &Theme,
+    i: &crate::i18n::I18n,
+) -> gpui::AnyElement {
+    let pct = item.percentage.clamp(0, 100);
+    let (countdown, time_kind) = format_time_remaining(&item.reset_time);
+    let bar_color = if pct >= 50 {
+        t.success
+    } else if pct >= 20 {
+        t.warning
+    } else {
+        t.danger
+    };
+    let time_color = match time_kind {
+        "success" => t.success,
+        "warning" => t.warning,
+        _ => t.text_muted,
+    };
+
+    div()
+        .relative()
+        .h(px(25.0))
+        .w_full()
+        .flex()
+        .items_center()
+        .px(px(7.0))
+        .rounded(px(6.0))
+        .bg(t.input_bg)
+        .border_1()
+        .border_color(if pct == 0 {
+            t.danger.opacity(0.4)
+        } else {
+            t.card_border
+        })
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(gpui::relative(pct as f32 / 100.0))
+                .bg(bar_color)
+                .opacity(0.18),
+        )
+        .child(
+            div()
+                .relative()
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(4.0))
+                .text_size(px(10.5))
+                .font_family("Consolas, monospace")
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.5))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(t.text_primary)
+                        .child(
+                            gpui::svg()
+                                .data(crate::icons::GEMINI_SVG)
+                                .size(px(11.5))
+                                .text_color(gpui::rgb(0x8b5cf6)),
+                        )
+                        .child(i.raw("Gemini 4 Argon 周配额", "Gemini 4 Argon Weekly")),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(2.5))
+                        .text_size(px(10.0))
+                        .text_color(time_color)
+                        .child(
+                            gpui::svg()
+                                .data(crate::icons::CLOCK_SVG)
+                                .size(px(9.5))
+                                .text_color(time_color),
+                        )
+                        .child(countdown),
+                )
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(bar_color)
+                        .child(format!("{}%", pct)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// Render an active client badge (`APP`, `IDE`, or `CLI`) matching Antigravity-Manager v4.9.8.
+fn render_client_active_badge(
+    id: impl Into<gpui::ElementId>,
+    label: &'static str,
+    fg_hex: u32,
+    bg_rgba: u32,
+    border_rgba: u32,
+    tooltip_str: impl Into<SharedString>,
+) -> gpui::AnyElement {
+    let tip: SharedString = tooltip_str.into();
+    div()
+        .id(id.into())
+        .flex()
+        .items_center()
         .gap(px(4.0))
-        .child(render_five_hour_quota_bar(title, icon_svg, family.five_hour.as_ref(), t, i))
-        .child(render_weekly_quota_bar(title, icon_svg, family.weekly.as_ref(), t, i))
+        .px(px(6.5))
+        .py(px(1.5))
+        .rounded(px(5.0))
+        .bg(crate::rgba_const(bg_rgba))
+        .border_1()
+        .border_color(crate::rgba_const(border_rgba))
+        .text_size(px(10.0))
+        .font_weight(gpui::FontWeight::BOLD)
+        .text_color(gpui::rgb(fg_hex))
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tip.clone())).into())
+        .child(
+            div()
+                .size(px(5.0))
+                .rounded_full()
+                .bg(gpui::rgb(fg_hex)),
+        )
+        .child(label)
+        .into_any_element()
+}
+
+/// Render a compact labeled switch button (`APP`, `IDE`, `CLI`) that highlights when active.
+fn render_client_switch_btn<F>(
+    id: impl Into<gpui::ElementId>,
+    svg_data: &'static [u8],
+    label: &'static str,
+    tooltip: impl Into<SharedString>,
+    is_target_active: bool,
+    active_fg_hex: u32,
+    active_bg_rgba: u32,
+    active_border_rgba: u32,
+    t: &Theme,
+    cx: &mut Context<Workspace>,
+    on_click: F,
+) -> gpui::AnyElement
+where
+    F: Fn(&mut Workspace, &gpui::ClickEvent, &mut gpui::Window, &mut Context<Workspace>) + 'static,
+{
+    let tc = t.clone();
+    let tooltip_str: SharedString = tooltip.into();
+    let fg = if is_target_active {
+        gpui::rgb(active_fg_hex)
+    } else {
+        t.text_secondary
+    };
+    let bg = if is_target_active {
+        crate::rgba_const(active_bg_rgba)
+    } else {
+        t.input_bg.opacity(0.6)
+    };
+    let border = if is_target_active {
+        crate::rgba_const(active_border_rgba)
+    } else {
+        t.card_border
+    };
+
+    div()
+        .id(id.into())
+        .cursor_pointer()
+        .h(px(25.0))
+        .px(px(6.0))
+        .rounded(px(5.0))
+        .bg(bg)
+        .border_1()
+        .border_color(border)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(3.5))
+        .text_size(px(10.5))
+        .font_weight(if is_target_active {
+            gpui::FontWeight::BOLD
+        } else {
+            gpui::FontWeight::MEDIUM
+        })
+        .text_color(fg)
+        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip_str.clone())).into())
+        .hover(move |h| {
+            if is_target_active {
+                h.opacity(0.9)
+            } else {
+                h.bg(tc.card_hover)
+                    .border_color(tc.card_border)
+                    .text_color(tc.text_primary)
+            }
+        })
+        .active(move |a| a.opacity(0.8))
+        .child(gpui::svg().data(svg_data).size(px(11.5)).text_color(fg))
+        .child(label)
+        .on_click(cx.listener(move |ws, ev, window, cx| {
+            on_click(ws, ev, window, cx);
+        }))
         .into_any_element()
 }
 
@@ -1359,9 +1770,11 @@ pub fn render_tier_badge(theme: &Theme, tier_str: &str) -> gpui::AnyElement {
     }
 }
 
-/// Render an individual account card with credentials, tier, two-usage meters, and action buttons.
+/// Render an individual account card with credentials, tier, multi-client active badges (`APP` / `IDE` / `CLI`),
+/// quota meters (`Gemini`, `Claude / GPT`, `Gemini 4 Argon`), and action buttons.
 fn render_account_card(
     account: &AntigravityAccount,
+    active_clients: &ActiveClientsStatus,
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
 ) -> gpui::AnyElement {
@@ -1369,14 +1782,17 @@ fn render_account_card(
     let i = ws.i18n;
     let acc_id = account.id.clone();
     let email = account.email.clone();
-    let is_active = account.is_active;
+    let is_classic_active = active_clients.is_classic(&acc_id);
+    let is_ide_active = active_clients.is_ide(&acc_id);
+    let is_agy_active = active_clients.is_agy(&acc_id);
+    let is_active = is_classic_active || is_ide_active || is_agy_active;
     let is_disabled = account.disabled;
 
     let last_used_str = DateTime::from_timestamp(account.last_used, 0)
         .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default();
 
-    // 1. Header row: Email + Badges + Project ID + Last used (Compact, no big avatar)
+    // 1. Header row: Email + Tier Badge + Multi-client Active Badges (APP / IDE / CLI) + Project ID + Last used
     let header_row = div()
         .flex()
         .items_center()
@@ -1392,33 +1808,54 @@ fn render_account_card(
                     div()
                         .text_size(px(13.0))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(if is_active { t.accent } else if is_disabled { t.text_muted } else { t.text_primary })
+                        .text_color(if is_active {
+                            t.accent
+                        } else if is_disabled {
+                            t.text_muted
+                        } else {
+                            t.text_primary
+                        })
                         .child(display_email(&account.email, ws.settings.antigravity_mask_email)),
                 )
                 .child(render_tier_badge(&t, account.get_tier()))
-                .when(is_active, |s| {
-                    s.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.5))
-                            .px(px(7.0))
-                            .py(px(2.0))
-                            .rounded(px(10.0))
-                            .bg(t.accent_subtle)
-                            .border_1()
-                            .border_color(t.accent.opacity(0.35))
-                            .text_size(px(11.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(t.accent)
-                            .child(
-                                div()
-                                    .size(px(5.5))
-                                    .rounded_full()
-                                    .bg(t.accent),
-                            )
-                            .child(i.t("antigravity.active")),
-                    )
+                .when(is_classic_active, |s| {
+                    s.child(render_client_active_badge(
+                        format!("ag-badge-app-{}", acc_id),
+                        "APP",
+                        0x3b82f6,
+                        0x3b82f61f,
+                        0x3b82f659,
+                        i.raw(
+                            "当前 Antigravity APP (Classic) 正在使用此账号",
+                            "Currently active in Antigravity APP (Classic)",
+                        ),
+                    ))
+                })
+                .when(is_ide_active, |s| {
+                    s.child(render_client_active_badge(
+                        format!("ag-badge-ide-{}", acc_id),
+                        "IDE",
+                        0x0ea5e9,
+                        0x0ea5e91f,
+                        0x0ea5e959,
+                        i.raw(
+                            "当前 Antigravity IDE 正在使用此账号",
+                            "Currently active in Antigravity IDE",
+                        ),
+                    ))
+                })
+                .when(is_agy_active, |s| {
+                    s.child(render_client_active_badge(
+                        format!("ag-badge-cli-{}", acc_id),
+                        "CLI",
+                        0x10b981,
+                        0x10b9811f,
+                        0x10b98159,
+                        i.raw(
+                            "当前 Antigravity CLI (agy) 正在使用此账号",
+                            "Currently active in Antigravity CLI (agy)",
+                        ),
+                    ))
                 })
                 .when(is_disabled, |s| {
                     let disabled_reason = account.disabled_reason.clone();
@@ -1497,7 +1934,7 @@ fn render_account_card(
                 .child(last_used_str),
         );
 
-    // 2. Below header row: 3-column layout (Column 1: Gemini, Column 2: Claude/GPT, Column 3: Actions)
+    // 2. Below header row: Quota meters (left) + Actions (right)
     let account_for_details = account.clone();
     let account_for_device = account.clone();
     let account_id_for_label = acc_id.clone();
@@ -1513,7 +1950,7 @@ fn render_account_card(
         .flex_col()
         .items_end()
         .gap(px(4.0))
-        // Row 1: 6 buttons
+        // Row 1: Details, Device Fingerprint, Edit Label, Refresh Quota, Export, Copy Refresh Token, Toggle, Delete
         .child(
             div()
                 .flex()
@@ -1539,8 +1976,12 @@ fn render_account_card(
                     &t,
                     cx,
                     move |ws, _, _, cx| {
-                        let prof = account_for_device.device_profile.clone().unwrap_or_else(DeviceProfile::generate_random);
-                        ws.ui.antigravity_device_account = Some((account_for_device.clone(), prof));
+                        let prof = account_for_device
+                            .device_profile
+                            .clone()
+                            .unwrap_or_else(DeviceProfile::generate_random);
+                        ws.ui.antigravity_device_account =
+                            Some((account_for_device.clone(), prof));
                         cx.notify();
                     },
                 ))
@@ -1562,7 +2003,8 @@ fn render_account_card(
                             inp.focus_handle.focus(window, cx);
                             inp.start_blink(cx);
                         });
-                        ws.ui.antigravity_editing_label = Some((account_id_for_label.clone(), input));
+                        ws.ui.antigravity_editing_label =
+                            Some((account_id_for_label.clone(), input));
                         cx.notify();
                     },
                 ))
@@ -1603,7 +2045,9 @@ fn render_account_card(
                         &t,
                         cx,
                         move |ws, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(token_clone.clone()));
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                token_clone.clone(),
+                            ));
                             let msg = ws.i18n.t("antigravity.refresh_token_copied_to").to_string();
                             ws.ui.toast(msg, false);
                             cx.notify();
@@ -1611,33 +2055,41 @@ fn render_account_card(
                     )
                 }),
         )
-        // Row 2: 5 buttons
+        // Row 2: Client Switch Buttons (APP | IDE | CLI) + Enable/Disable + Delete
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(2.0))
+                .gap(px(2.5))
                 .child({
                     let switch_id = acc_id.clone();
-                    render_action_icon_btn(
+                    render_client_switch_btn(
                         format!("switch-app-{}", switch_id),
                         ARROW_RIGHT_LEFT_SVG,
+                        "APP",
                         i.t("antigravity.switch_to_antigravity_app"),
-                        false,
+                        is_classic_active,
+                        0x3b82f6,
+                        0x3b82f624,
+                        0x3b82f666,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
-                            switch_account_target_action(&switch_id, None, ws, cx);
+                            switch_account_target_action(&switch_id, Some("classic"), ws, cx);
                         },
                     )
                 })
                 .child({
                     let switch_id = acc_id.clone();
-                    render_action_icon_btn(
+                    render_client_switch_btn(
                         format!("switch-ide-{}", switch_id),
-                        REPEAT_SVG,
+                        CODE_SVG,
+                        "IDE",
                         i.t("antigravity.switch_to_antigravity_ide"),
-                        false,
+                        is_ide_active,
+                        0x0ea5e9,
+                        0x0ea5e924,
+                        0x0ea5e966,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
@@ -1647,11 +2099,15 @@ fn render_account_card(
                 })
                 .child({
                     let switch_id = acc_id.clone();
-                    render_action_icon_btn(
+                    render_client_switch_btn(
                         format!("switch-cli-{}", switch_id),
                         TERMINAL_SVG,
+                        "CLI",
                         i.t("antigravity.switch_to_cli_agy"),
-                        false,
+                        is_agy_active,
+                        0x10b981,
+                        0x10b98124,
+                        0x10b98166,
                         &t,
                         cx,
                         move |ws, _, _, cx| {
@@ -1663,8 +2119,16 @@ fn render_account_card(
                     let tog_id = acc_id.clone();
                     render_action_icon_btn(
                         format!("toggle-{}", tog_id),
-                        if is_disabled { TOGGLE_LEFT_SVG } else { TOGGLE_RIGHT_SVG },
-                        if is_disabled { i.t("antigravity.enable_account") } else { i.t("antigravity.disable_account") },
+                        if is_disabled {
+                            TOGGLE_LEFT_SVG
+                        } else {
+                            TOGGLE_RIGHT_SVG
+                        },
+                        if is_disabled {
+                            i.t("antigravity.enable_account")
+                        } else {
+                            i.t("antigravity.disable_account")
+                        },
                         false,
                         &t,
                         cx,
@@ -1724,17 +2188,43 @@ fn render_account_card(
                 )
                 .child(actions_column)
         } else {
-            let (gemini_data, claude_data) = extract_family_quotas(account);
-            let col1_gemini = render_model_quota_column("Gemini", crate::icons::GEMINI_SVG, &gemini_data, &t, &i);
-            let col2_claude = render_model_quota_column("Claude / GPT", crate::icons::CLAUDE_SVG, &claude_data, &t, &i);
+            let is_free_tier = account.get_tier().eq_ignore_ascii_case("FREE");
+            let (gemini_data, claude_data, argon_weekly) = extract_account_quotas(account);
+            let col1_gemini = render_model_quota_column(
+                "Gemini",
+                crate::icons::GEMINI_SVG,
+                &gemini_data,
+                is_free_tier,
+                &t,
+                &i,
+            );
+            let col2_claude = render_model_quota_column(
+                "Claude / GPT",
+                crate::icons::CLAUDE_SVG,
+                &claude_data,
+                is_free_tier,
+                &t,
+                &i,
+            );
+
+            let quotas_container = div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(col1_gemini)
+                .child(col2_claude)
+                .when_some(argon_weekly.as_ref(), |s, argon_item| {
+                    s.child(render_argon_weekly_quota_bar(argon_item, &t, &i))
+                });
 
             div()
                 .flex()
                 .items_center()
                 .justify_between()
                 .gap(px(10.0))
-                .child(col1_gemini)
-                .child(col2_claude)
+                .child(quotas_container)
                 .child(actions_column)
         }
     } else {
@@ -1783,6 +2273,11 @@ pub fn render_account_details_dialog(
 ) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
+    let store = ws.ui.antigravity_store.clone().unwrap_or_default();
+    let active_clients = detect_active_clients_status(&ws.paths.home, &store);
+    let is_classic_active = active_clients.is_classic(&account.id);
+    let is_ide_active = active_clients.is_ide(&account.id);
+    let is_agy_active = active_clients.is_agy(&account.id);
 
     let header_info = div()
         .flex()
@@ -1799,6 +2294,7 @@ pub fn render_account_details_dialog(
                 .flex()
                 .items_center()
                 .gap(px(8.0))
+                .flex_wrap()
                 .child(
                     div()
                         .text_size(px(13.0))
@@ -1807,6 +2303,36 @@ pub fn render_account_details_dialog(
                         .child(display_email(&account.email, ws.settings.antigravity_mask_email)),
                 )
                 .child(render_tier_badge(&t, account.get_tier()))
+                .when(is_classic_active, |s| {
+                    s.child(render_client_active_badge(
+                        "modal-badge-app",
+                        "APP",
+                        0x3b82f6,
+                        0x3b82f61f,
+                        0x3b82f659,
+                        "Antigravity APP (Classic)",
+                    ))
+                })
+                .when(is_ide_active, |s| {
+                    s.child(render_client_active_badge(
+                        "modal-badge-ide",
+                        "IDE",
+                        0x0ea5e9,
+                        0x0ea5e91f,
+                        0x0ea5e959,
+                        "Antigravity IDE",
+                    ))
+                })
+                .when(is_agy_active, |s| {
+                    s.child(render_client_active_badge(
+                        "modal-badge-cli",
+                        "CLI",
+                        0x10b981,
+                        0x10b9811f,
+                        0x10b98159,
+                        "Antigravity CLI (agy)",
+                    ))
+                })
                 .when_some(account.project_id.as_ref(), |s, pid| {
                     s.child(
                         div()
@@ -1819,7 +2345,31 @@ pub fn render_account_details_dialog(
 
     let quota = account.quota.as_ref();
     let models = quota.map(|q| &q.models[..]).unwrap_or(&[]);
-    let quota_groups = quota.map(|q| &q.quota_groups[..]).unwrap_or(&[]);
+    let raw_quota_groups = quota.map(|q| &q.quota_groups[..]).unwrap_or(&[]);
+    let (_, _, argon_weekly) = extract_account_quotas(account);
+
+    // Ensure Gemini 4 Argon is included in the displayed quota groups (matching Antigravity-Manager AccountDetailsDialog.tsx)
+    let mut display_groups: Vec<aitoolplus_core::antigravity::QuotaGroupInfo> =
+        raw_quota_groups.to_vec();
+    let has_argon_in_groups = display_groups.iter().any(|g| {
+        g.display_name.to_lowercase().contains("argon")
+            || g.bucket_id
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("argon")
+    });
+    if !has_argon_in_groups {
+        if let Some(ref argon_item) = argon_weekly {
+            display_groups.push(aitoolplus_core::antigravity::QuotaGroupInfo {
+                display_name: "Gemini 4 Argon".to_string(),
+                window: "weekly".to_string(),
+                remaining_fraction: (argon_item.percentage as f64) / 100.0,
+                reset_time: argon_item.reset_time.clone(),
+                bucket_id: Some("argon-weekly".to_string()),
+            });
+        }
+    }
 
     let mut models_grid = div()
         .flex()
@@ -1961,11 +2511,12 @@ pub fn render_account_details_dialog(
 
     // Quota groups summary
     let mut groups_view = div().flex().flex_col().gap(px(8.0));
-    if !quota_groups.is_empty() {
+    if !display_groups.is_empty() {
         let mut grp_row = div().flex().items_center().gap(px(10.0)).flex_wrap();
-        for g in quota_groups {
+        for g in &display_groups {
             let pct = (g.remaining_fraction * 100.0).round() as i32;
             let bar_color = if pct > 50 { t.success } else if pct > 20 { t.warning } else { t.danger };
+            let (reset_cd, _) = format_time_remaining(&g.reset_time);
             grp_row = grp_row.child(
                 div()
                     .p(px(8.0))
@@ -1983,6 +2534,14 @@ pub fn render_account_details_dialog(
                             .text_color(t.text_secondary)
                             .child(format!("{} ({})", g.display_name, g.window)),
                     )
+                    .when(!reset_cd.is_empty() && reset_cd != "—", |s| {
+                        s.child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(t.text_muted)
+                                .child(reset_cd),
+                        )
+                    })
                     .child(
                         div()
                             .text_size(px(12.0))
@@ -2011,7 +2570,7 @@ pub fn render_account_details_dialog(
                 .child(i.t("antigravity.all_model_detailed_quotas")),
         )
         .child(models_grid)
-        .when(!quota_groups.is_empty(), |s| {
+        .when(!display_groups.is_empty(), |s| {
             s.child(
                 div()
                     .text_size(px(12.5))
@@ -3286,6 +3845,7 @@ fn import_all_local_accounts_action(ws: &mut Workspace, cx: &mut Context<Workspa
                             store.accounts.push(acc);
                         }
                     }
+                    sync_store_active_flags(&ws.paths.home, &mut store);
                     let _ = save_store(&app_data, &store);
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
@@ -3390,6 +3950,7 @@ fn import_v1_backup_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
                             store.accounts.push(acc);
                         }
                     }
+                    sync_store_active_flags(&ws.paths.home, &mut store);
                     let _ = save_store(&app_data, &store);
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
@@ -3440,6 +4001,7 @@ fn import_local_account_action(ws: &mut Workspace, cx: &mut Context<Workspace>) 
                     } else {
                         store.accounts.push(account);
                     }
+                    sync_store_active_flags(&ws.paths.home, &mut store);
                     let _ = save_store(&app_data, &store);
                     ws.ui.antigravity_store = Some(store);
 
@@ -3493,6 +4055,7 @@ pub(super) fn import_from_manager_action(ws: &mut Workspace, cx: &mut Context<Wo
                             store.accounts.push(acc);
                         }
                     }
+                    sync_store_active_flags(&ws.paths.home, &mut store);
                     let _ = save_store(&app_data, &store);
                     ws.ui.antigravity_store = Some(store);
 
@@ -3539,17 +4102,20 @@ fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut C
         let result = cx.background_spawn(async move {
             let mut acc = account;
             aitoolplus_core::antigravity::ensure_fresh_token(&mut acc)?;
-            if acc.project_id.is_none() || acc.tier.is_none() {
-                let (project_id, tier) = fetch_project_and_tier(&acc.access_token);
-                if project_id.is_some() {
-                    acc.project_id = project_id;
-                }
-                if tier.is_some() {
-                    acc.tier = tier;
-                }
+            // Always query loadCodeAssist for authoritative project_id & subscription tier
+            let (project_id, tier) = fetch_project_and_tier(&acc.access_token);
+            if project_id.is_some() {
+                acc.project_id = project_id;
             }
-            let quota = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref())?;
+            if tier.is_some() {
+                acc.tier = tier.clone();
+            }
+            let mut quota = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref())?;
+            if let Some(ref t) = acc.tier {
+                quota.subscription_tier = Some(t.clone());
+            }
             acc.quota = Some(quota);
+            acc.ensure_subscription_tier();
             Ok::<AntigravityAccount, String>(acc)
         }).await;
 
@@ -3560,6 +4126,7 @@ fn refresh_account_quota_action(account_id: &str, ws: &mut Workspace, cx: &mut C
                     let mut store = ws.ui.antigravity_store.clone().unwrap_or_default();
                     if let Some(pos) = store.accounts.iter().position(|a| a.id == account_id) {
                         store.accounts[pos] = acc;
+                        sync_store_active_flags(&ws.paths.home, &mut store);
                         let _ = save_store(&app_data, &store);
                         ws.ui.antigravity_store = Some(store);
                     }
@@ -3592,6 +4159,7 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 
     let accounts_to_refresh = store.accounts.clone();
     let app_data = ws.paths.app_data.clone();
+    let home_dir = ws.paths.home.clone();
     let weak = cx.entity().downgrade();
 
     ws.ui.toast(
@@ -3602,44 +4170,19 @@ fn refresh_all_quotas_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 
     cx.spawn(async move |_this, cx| {
         let updated_accounts = cx.background_spawn(async move {
-            let mut accounts = accounts_to_refresh;
-            std::thread::scope(|s| {
-                let mut handles = Vec::new();
-                for acc in &mut accounts {
-                    handles.push(s.spawn(move || {
-                        // Skip accounts that are already known to be forbidden due to TOS violation (aligned with Antigravity-Manager)
-                        if let Some(quota) = &acc.quota {
-                            if quota.is_forbidden {
-                                if let Some(reason) = &quota.forbidden_reason {
-                                    if reason.contains("TOS_VIOLATION") || reason.contains("violation of Terms of Service") {
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                        if let Ok(()) = aitoolplus_core::antigravity::ensure_fresh_token(acc) {
-                            if acc.project_id.is_none() || acc.tier.is_none() {
-                                let (pid, tier) = fetch_project_and_tier(&acc.access_token);
-                                if pid.is_some() { acc.project_id = pid; }
-                                if tier.is_some() { acc.tier = tier; }
-                            }
-                            if let Ok(q) = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref()) {
-                                acc.quota = Some(q);
-                            }
-                        }
-                    }));
-                }
-                for handle in handles {
-                    let _ = handle.join();
-                }
-            });
-            accounts
+            let mut s = aitoolplus_core::antigravity::AntigravityStore {
+                accounts: accounts_to_refresh,
+                ..Default::default()
+            };
+            aitoolplus_core::antigravity::refresh_all_quotas(&mut s);
+            s.accounts
         }).await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
             ws.ui.antigravity_refreshing_all = false;
             if let Some(s) = &mut ws.ui.antigravity_store {
                 s.accounts = updated_accounts;
+                sync_store_active_flags(&home_dir, s);
                 let _ = save_store(&app_data, s);
             }
             ws.settings.last_antigravity_refresh_time = Some(chrono::Utc::now().to_rfc3339());
@@ -3904,6 +4447,110 @@ mod tests {
         assert_eq!(mask_email("a@b.com"), "a***@b.com");
         assert_eq!(mask_email("ab@c.org"), "a***@c.org");
         assert_eq!(mask_email("invalid"), "inv***");
+    }
+
+    #[test]
+    fn test_extract_account_quotas_with_argon_and_free_tier() {
+        // 1. PRO account with explicit Gemini 4 Argon weekly bucket
+        let mut pro_acc = AntigravityAccount::new(
+            "acc-pro".into(),
+            "pro@example.com".into(),
+            "access".into(),
+            "refresh".into(),
+            Utc::now().timestamp() + 3600,
+        );
+        pro_acc.tier = Some("PRO".into());
+        let mut pro_quota = AntigravityQuota::default();
+        pro_quota.quota_groups = vec![
+            QuotaGroupInfo {
+                display_name: "Gemini Models".into(),
+                window: "5h".into(),
+                remaining_fraction: 0.90,
+                reset_time: "2026-10-24T12:00:00Z".into(),
+                bucket_id: Some("gemini-5h".into()),
+            },
+            QuotaGroupInfo {
+                display_name: "Gemini Models".into(),
+                window: "weekly".into(),
+                remaining_fraction: 0.80,
+                reset_time: "2026-10-30T12:00:00Z".into(),
+                bucket_id: Some("gemini-weekly".into()),
+            },
+            QuotaGroupInfo {
+                display_name: "Gemini 4 Argon".into(),
+                window: "weekly".into(),
+                remaining_fraction: 0.65,
+                reset_time: "2026-10-30T12:00:00Z".into(),
+                bucket_id: Some("argon-weekly".into()),
+            },
+        ];
+        pro_acc.quota = Some(pro_quota);
+
+        let (gemini, _claude, argon) = extract_account_quotas(&pro_acc);
+        assert_eq!(gemini.five_hour.unwrap().percentage, 90);
+        assert_eq!(gemini.weekly.unwrap().percentage, 80);
+        let argon_item = argon.expect("Argon weekly quota should be extracted");
+        assert_eq!(argon_item.percentage, 65);
+        assert_eq!(argon_item.reset_time, "2026-10-30T12:00:00Z");
+
+        // 2. FREE account: only weekly quota should be populated (no 5h window, no Argon)
+        let mut free_acc = AntigravityAccount::new(
+            "acc-free".into(),
+            "free@example.com".into(),
+            "access".into(),
+            "refresh".into(),
+            Utc::now().timestamp() + 3600,
+        );
+        free_acc.tier = Some("FREE".into());
+        let mut free_quota = AntigravityQuota::default();
+        free_quota.models.push(aitoolplus_core::antigravity::ModelQuotaInfo {
+            name: "gemini-3-flash".into(),
+            display_name: Some("Gemini 3 Flash".into()),
+            percentage: 75,
+            reset_time: "2026-10-30T00:00:00Z".into(),
+            supports_thinking: false,
+            recommended: true,
+        });
+        free_acc.quota = Some(free_quota);
+
+        let (free_gemini, _free_claude, free_argon) = extract_account_quotas(&free_acc);
+        assert!(free_gemini.five_hour.is_none());
+        assert_eq!(free_gemini.weekly.unwrap().percentage, 75);
+        assert!(free_argon.is_none());
+
+        // 3. PRO account WITHOUT Gemini 4 Argon in quota_groups or models: argon must be None (not synthesized)
+        let mut pro_no_argon_acc = AntigravityAccount::new(
+            "acc-pro-no-argon".into(),
+            "pro-no-argon@example.com".into(),
+            "access".into(),
+            "refresh".into(),
+            Utc::now().timestamp() + 3600,
+        );
+        pro_no_argon_acc.tier = Some("PRO".into());
+        let mut pro_no_argon_quota = AntigravityQuota::default();
+        pro_no_argon_quota.quota_groups = vec![
+            QuotaGroupInfo {
+                display_name: "Gemini Models".into(),
+                window: "5h".into(),
+                remaining_fraction: 1.0,
+                reset_time: "2026-10-24T12:00:00Z".into(),
+                bucket_id: Some("gemini-5h".into()),
+            },
+            QuotaGroupInfo {
+                display_name: "Gemini Models".into(),
+                window: "weekly".into(),
+                remaining_fraction: 0.90,
+                reset_time: "2026-10-30T12:00:00Z".into(),
+                bucket_id: Some("gemini-weekly".into()),
+            },
+        ];
+        pro_no_argon_acc.quota = Some(pro_no_argon_quota);
+
+        let (_g, _c, no_argon) = extract_account_quotas(&pro_no_argon_acc);
+        assert!(
+            no_argon.is_none(),
+            "Accounts without Argon in quota_groups or models must not display Gemini 4 Argon"
+        );
     }
 }
 
