@@ -556,6 +556,7 @@ pub fn skills_tools() -> &'static [ToolId] {
         ToolId::OpenCode,
         ToolId::OhMyPi,
         ToolId::Kimi,
+        ToolId::Hermes,
     ]
 }
 
@@ -569,6 +570,7 @@ pub fn tool_skills_dir(paths: &Paths, tool: ToolId) -> Option<PathBuf> {
         ToolId::OpenCode => root.join("skill"),
         ToolId::OhMyPi => root.join("skills"),
         ToolId::Kimi => root.join("skills"),
+        ToolId::Hermes => root.join("skills"),
         _ => return None,
     })
 }
@@ -825,7 +827,7 @@ pub fn candidate_skill_dirs(paths: &Paths) -> Vec<PathBuf> {
         paths.home.join(".claude").join("skills"),
         paths.home.join(".codex").join("skills"),
         paths.home.join(".pi").join("agent").join("skills"),
-        paths.home.join(".config").join("oh-my-pi").join("skills"),
+        paths.home.join(".omp").join("agent").join("skills"),
         paths.home.join(".config").join("opencode").join("skill"),
         paths.home.join(".kimi-code").join("skills"),
         paths.home.join(".cc-switch").join("skills"),
@@ -2159,7 +2161,7 @@ mod tests {
         );
         assert_eq!(
             tool_skills_dir(&paths, ToolId::OhMyPi).unwrap(),
-            paths.home.join(".config").join("oh-my-pi").join("skills")
+            paths.home.join(".omp").join("agent").join("skills")
         );
     }
 

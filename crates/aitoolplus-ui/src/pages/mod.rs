@@ -2000,6 +2000,54 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
             });
             ws.persist_store();
 
+            // Clean up native runtime files for tools that persist multi-provider catalogs (parity with cc-switch)
+            match tool {
+                aitoolplus_core::ToolId::Pi => {
+                    let paths = (*ws.paths).clone();
+                    if let Err(e) = aitoolplus_core::pi_runtime::remove_provider(&paths, &id) {
+                        tracing::warn!("failed to remove provider from Pi runtime: {e}");
+                    }
+                }
+                aitoolplus_core::ToolId::OhMyPi => {
+                    let omp_paths = aitoolplus_core::oh_my_pi::OmpRuntimePaths::from_paths(&ws.paths);
+                    let key = id.strip_prefix("omp:").unwrap_or(&id);
+                    if let Err(e) = aitoolplus_core::oh_my_pi::remove_provider(&omp_paths, key) {
+                        tracing::warn!("failed to remove provider from OhMyPi runtime: {e}");
+                    }
+                }
+                aitoolplus_core::ToolId::OpenCode => {
+                    let paths = (*ws.paths).clone();
+                    if let Err(e) = aitoolplus_core::adapters::opencode::remove_provider(&paths, &id) {
+                        tracing::warn!("failed to remove provider from OpenCode runtime: {e}");
+                    }
+                }
+                aitoolplus_core::ToolId::OpenClaw => {
+                    let paths = (*ws.paths).clone();
+                    if let Err(e) = aitoolplus_core::adapters::openclaw::remove_provider(&paths, &id) {
+                        tracing::warn!("failed to remove provider from OpenClaw runtime: {e}");
+                    }
+                }
+                aitoolplus_core::ToolId::Hermes => {
+                    let h = aitoolplus_core::hermes::HermesRuntimePaths::from_paths(&ws.paths);
+                    if let Err(e) = aitoolplus_core::hermes::remove_provider(&h, &id) {
+                        tracing::warn!("failed to remove provider from Hermes runtime: {e}");
+                    }
+                }
+                aitoolplus_core::ToolId::Dsh => {
+                    let d = aitoolplus_core::dsh::DshRuntimePaths::from_paths(&ws.paths);
+                    if let Err(e) = aitoolplus_core::dsh::remove_provider(&d, &id) {
+                        tracing::warn!("failed to remove provider from DSH runtime: {e}");
+                    }
+                }
+                aitoolplus_core::ToolId::ClaudeDesktop => {
+                    let cd = aitoolplus_core::claude_desktop::ClaudeDesktopPaths::from_paths(&ws.paths);
+                    if let Err(e) = aitoolplus_core::claude_desktop::remove_provider(&cd, &id) {
+                        tracing::warn!("failed to remove provider from Claude Desktop: {e}");
+                    }
+                }
+                _ => {}
+            }
+
             // Sync with Gateway manifest if this deleted provider was the active P0
             let cli_key = match tool {
                 aitoolplus_core::ToolId::ClaudeCode => Some(aitoolplus_core::gateway::GatewayCliKey::Claude),

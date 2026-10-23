@@ -1124,16 +1124,6 @@ impl gpui::Render for TextArea {
                     cx.notify();
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                let is_left_down = event.pressed_button == Some(MouseButton::Left);
-                this.on_mouse_move(event.position, is_left_down, cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                    this.on_mouse_up(event.position, cx);
-                }),
-            )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
@@ -1206,8 +1196,11 @@ impl Element for TextAreaElement {
     ) -> Self::PrepaintState {
         let ta = self.input.read(cx);
         let is_focused = ta.focus_handle.is_focused(window);
-        if !is_focused && ta._blink_task.is_some() {
-            self.input.update(cx, |ta, cx| ta.stop_blink(cx));
+        if !is_focused && (ta._blink_task.is_some() || ta.drag_anchor.is_some()) {
+            self.input.update(cx, |ta, cx| {
+                ta.stop_blink(cx);
+                ta.drag_anchor = None;
+            });
         }
         let ta = self.input.read(cx);
         let content = ta.content.clone();
@@ -1379,8 +1372,8 @@ impl Element for TextAreaElement {
         for (v_idx, (v_range, shaped)) in visual_lines.iter().enumerate() {
             let top = bounds.top() + line_height * v_idx as f32;
 
-            // Paint text selection only when NOT actively composing IME marked text
-            if !content.is_empty() && selected.end > selected.start && marked_range.is_none() {
+            // Paint text selection only when focused and NOT actively composing IME marked text
+            if is_focused && !content.is_empty() && selected.end > selected.start && marked_range.is_none() {
                 let sel_start = selected.start.max(v_range.start).min(v_range.end);
                 let sel_end = selected.end.max(v_range.start).min(v_range.end);
                 if sel_end > sel_start {
@@ -1471,6 +1464,35 @@ impl Element for TextAreaElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
+
+        window.on_mouse_event({
+            let input = self.input.clone();
+            move |event: &MouseMoveEvent, _, window, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    input.update(cx, |this, cx| {
+                        if this.focus_handle.is_focused(window) && this.drag_anchor.is_some() {
+                            this.on_mouse_move(event.position, true, cx);
+                        } else if !this.focus_handle.is_focused(window) && this.drag_anchor.is_some() {
+                            this.drag_anchor = None;
+                        }
+                    });
+                }
+            }
+        });
+
+        window.on_mouse_event({
+            let input = self.input.clone();
+            move |_: &MouseUpEvent, phase, _, cx| {
+                if !phase.bubble() {
+                    return;
+                }
+                input.update(cx, |this, cx| {
+                    if this.drag_anchor.is_some() {
+                        this.on_mouse_up(Point::default(), cx);
+                    }
+                });
+            }
+        });
 
         for sel in prepaint.selections.drain(..) {
             window.paint_quad(sel);

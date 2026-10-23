@@ -149,6 +149,9 @@ pub fn set_provider_enabled(
     provider: &ProviderRecord,
     enabled: bool,
 ) -> Result<Vec<PathBuf>, String> {
+    if !enabled {
+        return remove_provider(paths, &provider.id);
+    }
     let runtime = PiRuntimePaths::from_paths(paths);
     let key = provider
         .id
@@ -169,43 +172,70 @@ pub fn set_provider_enabled(
 
     let mut files = vec![runtime.models.clone()];
 
-    if enabled {
-        let mut model_provider = incoming.clone();
-        if let Some(obj) = model_provider.as_object_mut() {
-            obj.remove("_auth");
-            obj.remove("_providerKey");
-        }
-        providers.insert(key.to_string(), model_provider);
+    let mut model_provider = incoming.clone();
+    if let Some(obj) = model_provider.as_object_mut() {
+        obj.remove("_auth");
+        obj.remove("_providerKey");
+    }
+    providers.insert(key.to_string(), model_provider);
 
-        if let Some(credential) = incoming.get("_auth") {
-            let mut auth = read_object(&runtime.auth)?;
-            auth.as_object_mut()
-                .ok_or_else(|| "Pi auth.json must be an object".to_string())?
-                .insert(key.to_string(), credential.clone());
-            save_json_atomic(&runtime.auth, &auth).map_err(|e| e.to_string())?;
-            files.push(runtime.auth.clone());
-        }
-    } else {
-        providers.remove(key);
+    if let Some(credential) = incoming.get("_auth") {
         let mut auth = read_object(&runtime.auth)?;
-        if let Some(auth_obj) = auth.as_object_mut() {
-            if auth_obj.remove(key).is_some() {
-                save_json_atomic(&runtime.auth, &auth).map_err(|e| e.to_string())?;
-                files.push(runtime.auth.clone());
-            }
-        }
-        let mut settings = read_object(&runtime.settings)?;
-        if let Some(obj) = settings.as_object_mut() {
-            if obj.get("defaultProvider").and_then(Value::as_str) == Some(key) {
-                obj.remove("defaultProvider");
-                obj.remove("defaultModel");
-                save_json_atomic(&runtime.settings, &settings).map_err(|e| e.to_string())?;
-                files.push(runtime.settings.clone());
-            }
-        }
+        auth.as_object_mut()
+            .ok_or_else(|| "Pi auth.json must be an object".to_string())?
+            .insert(key.to_string(), credential.clone());
+        save_json_atomic(&runtime.auth, &auth).map_err(|e| e.to_string())?;
+        files.push(runtime.auth.clone());
     }
 
     save_json_atomic(&runtime.models, &models).map_err(|e| e.to_string())?;
+    Ok(files)
+}
+
+/// Remove a provider completely from Pi's runtime files:
+/// - removes key from `models.json` under `providers`
+/// - removes key from `auth.json`
+/// - clears `defaultProvider` and `defaultModel` in `settings.json` if pointing to key
+pub fn remove_provider(paths: &Paths, provider_id: &str) -> Result<Vec<PathBuf>, String> {
+    let runtime = PiRuntimePaths::from_paths(paths);
+    let key = provider_id
+        .strip_prefix("pi:")
+        .unwrap_or(provider_id);
+
+    let mut files = Vec::new();
+
+    let mut models = read_object(&runtime.models)?;
+    let mut model_changed = false;
+    if let Some(model_root) = models.as_object_mut() {
+        if let Some(providers) = model_root.get_mut("providers").and_then(Value::as_object_mut) {
+            if providers.remove(key).is_some() {
+                model_changed = true;
+            }
+        }
+    }
+    if model_changed {
+        save_json_atomic(&runtime.models, &models).map_err(|e| e.to_string())?;
+        files.push(runtime.models.clone());
+    }
+
+    let mut auth = read_object(&runtime.auth)?;
+    if let Some(auth_obj) = auth.as_object_mut() {
+        if auth_obj.remove(key).is_some() {
+            save_json_atomic(&runtime.auth, &auth).map_err(|e| e.to_string())?;
+            files.push(runtime.auth.clone());
+        }
+    }
+
+    let mut settings = read_object(&runtime.settings)?;
+    if let Some(obj) = settings.as_object_mut() {
+        if obj.get("defaultProvider").and_then(Value::as_str) == Some(key) {
+            obj.remove("defaultProvider");
+            obj.remove("defaultModel");
+            save_json_atomic(&runtime.settings, &settings).map_err(|e| e.to_string())?;
+            files.push(runtime.settings.clone());
+        }
+    }
+
     Ok(files)
 }
 
@@ -291,5 +321,50 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(root.join("settings.json")).unwrap())
                 .unwrap();
         assert_eq!(settings["keep"], 42);
+    }
+
+    #[test]
+    fn remove_provider_cleans_models_auth_and_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path().join("home"), dir.path().join("data"));
+        let root = paths.tool_root(ToolId::Pi);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("models.json"),
+            r#"{"providers":{"alpha":{"name":"Alpha"},"beta":{"name":"Beta"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("auth.json"),
+            r#"{"alpha":{"type":"api_key","key":"k"},"beta":{"type":"api_key","key":"k2"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("settings.json"),
+            r#"{"defaultProvider":"alpha","defaultModel":"m1","other":1}"#,
+        )
+        .unwrap();
+
+        let files = remove_provider(&paths, "pi:alpha").unwrap();
+        assert_eq!(files.len(), 3);
+
+        let models: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("models.json")).unwrap())
+                .unwrap();
+        assert!(models["providers"].get("alpha").is_none());
+        assert!(models["providers"].get("beta").is_some());
+
+        let auth: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("auth.json")).unwrap())
+                .unwrap();
+        assert!(auth.get("alpha").is_none());
+        assert!(auth.get("beta").is_some());
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("settings.json")).unwrap())
+                .unwrap();
+        assert!(settings.get("defaultProvider").is_none());
+        assert!(settings.get("defaultModel").is_none());
+        assert_eq!(settings["other"], 1);
     }
 }

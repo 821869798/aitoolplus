@@ -38,6 +38,45 @@ pub fn resolve_config_file(paths: &Paths) -> std::path::PathBuf {
     root.join("opencode.json")
 }
 
+/// Remove an OpenCode provider from the effective config file (opencode.json / opencode.jsonc).
+pub fn remove_provider(paths: &Paths, provider_id: &str) -> Result<Vec<std::path::PathBuf>, String> {
+    let path = resolve_config_file(paths);
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let key = provider_id.strip_prefix("opencode:").unwrap_or(provider_id);
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut config = parse_jsonc(&raw).map_err(|e| e.to_string())?;
+    let mut changed = false;
+
+    if let Some(providers) = config.get_mut("provider").and_then(Value::as_object_mut) {
+        if providers.remove(key).is_some() {
+            changed = true;
+        }
+    }
+    if let Some(providers) = config.get_mut("providers").and_then(Value::as_object_mut) {
+        if providers.remove(key).is_some() {
+            changed = true;
+        }
+    }
+    if let Some(m) = config.get("model").and_then(Value::as_str) {
+        if m.starts_with(&format!("{key}/")) || m == key {
+            if let Some(obj) = config.as_object_mut() {
+                obj.remove("model");
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        write_atomic(&path, &serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        Ok(vec![path])
+    } else {
+        Ok(vec![])
+    }
+}
+
 /// Parse JSONC (strip line/block comments outside strings).
 fn parse_jsonc(raw: &str) -> Result<Value, String> {
     if raw.trim().is_empty() {
@@ -304,5 +343,30 @@ mod tests {
             std::env::remove_var("OPENCODE_CONFIG");
         }
         assert_eq!(resolved, tmp);
+    }
+
+    #[test]
+    fn test_remove_provider_cleans_config() {
+        let (_dir, paths) = setup();
+        let cfg = resolve_config_file(&paths);
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cfg,
+            r#"{
+                "provider": {"to_remove": {"name": "R"}},
+                "providers": {"to_remove": {"name": "R"}, "keep": {"name": "K"}},
+                "model": "to_remove/m1"
+            }"#,
+        ).unwrap();
+
+        let removed = remove_provider(&paths, "opencode:to_remove").unwrap();
+        assert!(!removed.is_empty());
+
+        let content = std::fs::read_to_string(&cfg).unwrap();
+        let json: Value = serde_json::from_str(&content).unwrap();
+        assert!(json.get("provider").and_then(|p| p.get("to_remove")).is_none());
+        assert!(json.get("providers").and_then(|p| p.get("to_remove")).is_none());
+        assert!(json.get("providers").and_then(|p| p.get("keep")).is_some());
+        assert!(json.get("model").is_none());
     }
 }

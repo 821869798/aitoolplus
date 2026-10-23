@@ -159,6 +159,8 @@ pub(super) fn apply_restored(
     if let Some((store, settings)) = loaded {
         ws.store = store;
         ws.settings = settings;
+        ws.ui.common_editors.clear();
+        ws.sync_all_tools_to_live();
         ws.persist_store();
         ws.ui.skills_discovered = true;
     }

@@ -1038,6 +1038,13 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Sync all tools' configured providers from store to their live runtime files.
+    /// Parity with cc-switch sync_current_to_live.
+    pub fn sync_all_tools_to_live(&mut self) {
+        let port = self.ui.gateway_status.as_ref().map(|s| s.port);
+        aitoolplus_core::providers::sync_all_to_live(&self.paths, self.store.store(), port);
+    }
+
     pub fn current_pi_dropdown_options(&self) -> Vec<String> {
         let Some(field) = self.ui.pi_dropdown_open else {
             return Vec::new();
@@ -1146,40 +1153,95 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(dialog) = self.ui.provider_dialog.as_mut() else { return; };
-        if target_id == "claude_model" || target_id == "default_model" {
-            dialog.model.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+        let matched_cl = dialog
+            .fetched_models
+            .iter()
+            .find(|m| m.id == selected_id)
+            .and_then(|m| m.context_length);
+
+        if target_id == "claude_model"
+            || target_id == "default_model"
+            || target_id == "codex_default_model"
+            || target_id == "primary"
+        {
+            dialog.model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
+        } else if target_id == "sonnet" {
+            dialog.sonnet_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
+            let curr_name = dialog.sonnet_name.read(cx).text().trim().to_string();
+            if curr_name.is_empty() {
+                let fallback = selected_disp.unwrap_or(selected_id);
+                dialog.sonnet_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
+            }
+        } else if target_id == "opus" {
+            dialog.opus_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
+            let curr_name = dialog.opus_name.read(cx).text().trim().to_string();
+            if curr_name.is_empty() {
+                let fallback = selected_disp.unwrap_or(selected_id);
+                dialog.opus_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
+            }
+        } else if target_id == "haiku" {
+            dialog.haiku_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
+            let curr_name = dialog.haiku_name.read(cx).text().trim().to_string();
+            if curr_name.is_empty() {
+                let fallback = selected_disp.unwrap_or(selected_id);
+                dialog.haiku_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
+            }
+        } else if target_id == "fable" {
+            dialog.fable_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
+            let curr_name = dialog.fable_name.read(cx).text().trim().to_string();
+            if curr_name.is_empty() {
+                let fallback = selected_disp.unwrap_or(selected_id);
+                dialog.fable_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
+            }
+        } else if target_id == "subagent" {
+            dialog.subagent_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
         } else if let Some(idx_str) = target_id.strip_prefix("pi_") {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if let Some(pi_m) = dialog.pi_models.get_mut(idx) {
-                    pi_m.id.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                    pi_m.id.update(cx, |inp, cx| inp.set_text(selected_id, cx));
                     let curr_name = pi_m.name.read(cx).text().trim().to_string();
                     if curr_name.is_empty() {
                         let fallback = selected_disp.unwrap_or(selected_id);
-                        pi_m.name.update(cx, |inp, cx| inp.set_text_silent(fallback, cx));
+                        pi_m.name.update(cx, |inp, cx| inp.set_text(fallback, cx));
+                    }
+                    if let Some(cl) = matched_cl {
+                        let curr_cw = pi_m.context_window.read(cx).text().trim().to_string();
+                        if curr_cw.is_empty() {
+                            pi_m.context_window.update(cx, |inp, cx| inp.set_text(cl.to_string(), cx));
+                        }
                     }
                 }
             }
-        } else if let Some(idx_str) = target_id.strip_prefix("codex_") {
+        } else if let Some(idx_str) = target_id
+            .strip_prefix("codex_row_")
+            .or_else(|| target_id.strip_prefix("codex_"))
+        {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if let Some(cdx_m) = dialog.codex_catalog_models.get_mut(idx) {
-                    cdx_m.model.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                    cdx_m.model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
                     let curr_name = cdx_m.display_name.read(cx).text().trim().to_string();
                     if curr_name.is_empty() {
                         let fallback = selected_disp.unwrap_or(selected_id);
-                        cdx_m.display_name.update(cx, |inp, cx| inp.set_text_silent(fallback, cx));
+                        cdx_m.display_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
+                    }
+                    if let Some(cl) = matched_cl {
+                        let curr_cw = cdx_m.context_window.read(cx).text().trim().to_string();
+                        if curr_cw.is_empty() || curr_cw == "128000" {
+                            cdx_m.context_window.update(cx, |inp, cx| inp.set_text(cl.to_string(), cx));
+                        }
                     }
                 }
             }
         } else if let Some(idx_str) = target_id.strip_prefix("rewrite_req_") {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if let Some(rw) = dialog.model_rewrites.get_mut(idx) {
-                    rw.from.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                    rw.from.update(cx, |inp, cx| inp.set_text(selected_id, cx));
                 }
             }
         } else if let Some(idx_str) = target_id.strip_prefix("rewrite_target_") {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if let Some(rw) = dialog.model_rewrites.get_mut(idx) {
-                    rw.to.update(cx, |inp, cx| inp.set_text_silent(selected_id, cx));
+                    rw.to.update(cx, |inp, cx| inp.set_text(selected_id, cx));
                 }
             }
         }

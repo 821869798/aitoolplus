@@ -89,7 +89,7 @@ impl Paths {
             ToolId::OpenCode => home.join(".config").join("opencode"),
             ToolId::OpenClaw => home.join(".openclaw"),
             ToolId::Pi => home.join(".pi").join("agent"),
-            ToolId::OhMyPi => home.join(".config").join("oh-my-pi"),
+            ToolId::OhMyPi => crate::oh_my_pi::omp_root(self),
             ToolId::ClaudeDesktop => crate::claude_desktop::claude_desktop_root(self),
             ToolId::Hermes => crate::hermes::hermes_root(self),
             ToolId::Dsh => crate::dsh::dsh_root(self),

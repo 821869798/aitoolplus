@@ -41,12 +41,22 @@ pub fn omp_root(paths: &Paths) -> PathBuf {
     if let Some(dir) = paths.tool_roots.get(&ToolId::OhMyPi) {
         return dir.clone();
     }
-    if let Ok(env) = std::env::var("OH_MY_PI_HOME")
-        && !env.is_empty()
+    if let Ok(env) = std::env::var("PI_CODING_AGENT_DIR")
+        .or_else(|_| std::env::var("OH_MY_PI_HOME"))
     {
-        return PathBuf::from(env);
+        if !env.trim().is_empty() {
+            return PathBuf::from(env);
+        }
     }
-    paths.home.join(".config").join("oh-my-pi")
+    let default_omp = paths.home.join(".omp").join("agent");
+    if default_omp.exists() {
+        return default_omp;
+    }
+    let legacy_omp = paths.home.join(".config").join("oh-my-pi");
+    if legacy_omp.exists() {
+        return legacy_omp;
+    }
+    default_omp
 }
 
 fn read_yaml(path: &PathBuf) -> Result<serde_yaml::Value, String> {
@@ -81,10 +91,18 @@ pub fn import_runtime(
         return Ok(0);
     };
 
+    let providers_map = map
+        .get(&serde_yaml::Value::String("providers".into()))
+        .and_then(|v| v.as_mapping())
+        .unwrap_or(map);
+
     let mut added = 0;
     let mut next = providers.iter().map(|p| p.sort_index).max().unwrap_or(-1);
-    for (key, value) in map {
+    for (key, value) in providers_map {
         let Some(key) = key.as_str() else { continue };
+        if key == "providers" {
+            continue;
+        }
         let json: Value =
             serde_json::to_value(value).map_err(|e| format!("convert provider: {e}"))?;
         let name = json
@@ -124,17 +142,83 @@ pub fn apply_provider(
 
     let mut doc = read_yaml(&paths.models)?;
     if !matches!(doc, serde_yaml::Value::Mapping(_)) {
-        return Err("models.yml root must be a mapping".into());
+        doc = serde_yaml::Value::Mapping(Default::default());
     }
     let incoming: Value = serde_json::from_str(&provider.settings_config)
         .map_err(|e| format!("invalid provider JSON: {e}"))?;
     let yaml_value = serde_yaml::to_value(&incoming).map_err(|e| e.to_string())?;
 
     if let Some(map) = doc.as_mapping_mut() {
-        map.insert(serde_yaml::Value::String(key.into()), yaml_value);
+        let providers_val = map
+            .entry(serde_yaml::Value::String("providers".into()))
+            .or_insert_with(|| serde_yaml::Value::Mapping(Default::default()));
+        if let Some(p_map) = providers_val.as_mapping_mut() {
+            p_map.insert(serde_yaml::Value::String(key.into()), yaml_value);
+        }
     }
     write_yaml_atomic(&paths.models, &doc)?;
-    Ok(vec![paths.models.clone()])
+    let mut files = vec![paths.models.clone()];
+
+    // If defaultModel is specified, update modelRoles.default in config.yml
+    let settings = provider.settings();
+    if let Some(model) = settings.get("defaultModel").and_then(Value::as_str).filter(|m| !m.is_empty()) {
+        let role = format!("{key}/{model}");
+        if let Ok(()) = config_set(paths, "modelRoles.default", &serde_json::Value::String(role)) {
+            files.push(paths.config.clone());
+        }
+    }
+
+    Ok(files)
+}
+
+/// Remove a provider from `models.yml`.
+pub fn remove_provider(paths: &OmpRuntimePaths, key: &str) -> Result<Vec<PathBuf>, String> {
+    let mut doc = read_yaml(&paths.models)?;
+    let mut files = vec![];
+    let mut changed = false;
+
+    if let Some(map) = doc.as_mapping_mut() {
+        if let Some(providers_val) = map.get_mut(&serde_yaml::Value::String("providers".into())) {
+            if let Some(p_map) = providers_val.as_mapping_mut() {
+                if p_map.remove(&serde_yaml::Value::String(key.to_string())).is_some() {
+                    changed = true;
+                }
+            }
+        }
+        if map.remove(&serde_yaml::Value::String(key.to_string())).is_some() {
+            changed = true;
+        }
+    }
+    if changed {
+        write_yaml_atomic(&paths.models, &doc)?;
+        files.push(paths.models.clone());
+    }
+
+    // Clean up config.yml's modelRoles.default if it pointed to this provider
+    if let Ok(Some(role)) = config_get(paths, "modelRoles.default") {
+        if let Some(role_str) = role.as_str() {
+            let prefix = format!("{key}/");
+            if role_str == key || role_str.starts_with(&prefix) {
+                if let Ok(mut config_doc) = read_yaml(&paths.config) {
+                    if let Some(cfg_map) = config_doc.as_mapping_mut() {
+                        if let Some(roles) = cfg_map
+                            .get_mut(&serde_yaml::Value::String("modelRoles".into()))
+                            .and_then(|v| v.as_mapping_mut())
+                        {
+                            roles.remove(&serde_yaml::Value::String("default".into()));
+                            if roles.is_empty() {
+                                cfg_map.remove(&serde_yaml::Value::String("modelRoles".into()));
+                            }
+                            let _ = write_yaml_atomic(&paths.config, &config_doc);
+                            files.push(paths.config.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(files)
 }
 
 /// Merge a complete JSON object into config.yml, preserving unknown fields.
@@ -286,5 +370,26 @@ mod tests {
         let (_dir, paths) = setup();
         let mut providers = vec![];
         assert_eq!(import_runtime(&paths, &mut providers).unwrap(), 0);
+    }
+
+    #[test]
+    fn remove_provider_removes_from_models_yml() {
+        let (_dir, paths) = setup();
+        let mut p = ProviderRecord::new("Alpha", "custom");
+        p.id = "omp:alpha".into();
+        p.settings_config = r#"{"name":"Alpha"}"#.into();
+        apply_provider(&paths, &p).unwrap();
+
+        let doc = read_yaml(&paths.models).unwrap();
+        let providers = doc.get(&serde_yaml::Value::String("providers".into())).unwrap();
+        assert!(providers.get(&serde_yaml::Value::String("alpha".into())).is_some());
+
+        let files = remove_provider(&paths, "alpha").unwrap();
+        assert_eq!(files.len(), 1);
+        let doc2 = read_yaml(&paths.models).unwrap();
+        let alpha_in_providers = doc2
+            .get(&serde_yaml::Value::String("providers".into()))
+            .and_then(|v| v.get(&serde_yaml::Value::String("alpha".into())));
+        assert!(alpha_in_providers.is_none());
     }
 }
