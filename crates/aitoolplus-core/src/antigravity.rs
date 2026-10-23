@@ -2608,6 +2608,20 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
         );
         acc.name = name;
         acc.project_id = project_id;
+        if let Some(ca) = detail
+            .get("created_at")
+            .and_then(|v| v.as_i64())
+            .or_else(|| a.get("created_at").and_then(|v| v.as_i64()))
+        {
+            acc.created_at = ca;
+        }
+        if let Some(lu) = detail
+            .get("last_used")
+            .and_then(|v| v.as_i64())
+            .or_else(|| a.get("last_used").and_then(|v| v.as_i64()))
+        {
+            acc.last_used = lu;
+        }
         acc.is_active = current_id == Some(acc_id)
             || current_classic_id == Some(acc_id)
             || current_ide_id == Some(acc_id)
