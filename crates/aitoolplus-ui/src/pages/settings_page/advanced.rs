@@ -1,13 +1,10 @@
 use gpui::{Context, IntoElement, div, prelude::*, px};
 
 use crate::components::{
-    ButtonVariant, button_l, button_with_icon_l, button_with_icon_loading_l, card, input_container, section_title,
-    segmented_pill_selector, settings_card, settings_row, toggle,
+    ButtonVariant, button_l, settings_card, settings_row, toggle,
 };
-use crate::text_input::TextInput;
 use crate::workspace::Workspace;
 
-use crate::pages::SettingsTab;
 
 pub(super) fn advanced_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();

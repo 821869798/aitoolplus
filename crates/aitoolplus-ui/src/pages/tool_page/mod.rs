@@ -1,24 +1,11 @@
 //! Per-tool page, split by tab.
-use aitoolplus_core::pi_extensions::{PiExtensionKind, PiExtensionScope};
-use aitoolplus_core::pi_pages::PiModelSettings;
-use aitoolplus_core::providers::{CATEGORIES, ProviderRecord};
-use aitoolplus_core::session::{self, SessionMeta};
+use aitoolplus_core::session::{self};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, deferred, div, prelude::*, px, uniform_list};
-use gpui_kit::base::{Align, ElementExt as _, Placement, Positioner, POPUP_PRIORITY};
-use serde_json::Value;
+use gpui::{Context, IntoElement, div, prelude::*, px};
 
-use crate::components::{
-    self, BadgeKind, ButtonVariant, Tooltip, badge, button_l, button_with_icon_l,
-    button_with_icon_loading_l, input_container, page_header, section_title, text_area_scroll_container, textarea_container,
-};
-use crate::i18n::I18n;
-use crate::text_area::TextArea;
-use crate::text_input::TextInput;
-use crate::theme::Theme;
 use crate::workspace::Workspace;
 
-use crate::pages::{PromptDialogState, ProviderDialogState, ToolTab, modal_scaffold_custom, modal_scaffold_sized};
+use crate::pages::ToolTab;
 
 mod common;
 mod extensions;
@@ -35,7 +22,7 @@ pub use provider_dialog::{
 };
 pub use runtime::render_runtime_edit_dialog;
 pub use sessions::load_agent_sessions;
-pub(crate) use sessions::{render_rename_dialog, render_virtual_agent_session_card, session_list_viewport};
+pub(crate) use sessions::{render_rename_dialog, session_list_viewport};
 
 pub fn render_tool_page(
     tool: ToolId,

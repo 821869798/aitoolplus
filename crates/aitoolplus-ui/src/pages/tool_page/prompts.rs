@@ -1,29 +1,20 @@
-use aitoolplus_core::pi_extensions::{PiExtensionKind, PiExtensionScope};
-use aitoolplus_core::pi_pages::PiModelSettings;
-use aitoolplus_core::providers::{CATEGORIES, ProviderRecord};
-use aitoolplus_core::session::{self, SessionMeta};
 use aitoolplus_core::tools::ToolId;
-use gpui::{Context, IntoElement, deferred, div, prelude::*, px, uniform_list};
-use gpui_kit::base::{Align, ElementExt as _, Placement, Positioner, POPUP_PRIORITY};
-use serde_json::Value;
+use gpui::{Context, IntoElement, div, prelude::*, px};
 
 use crate::components::{
-    self, BadgeKind, ButtonVariant, Tooltip, badge, button_l, button_with_icon_l,
-    button_with_icon_loading_l, input_container, page_header, section_title, text_area_scroll_container, textarea_container,
+    BadgeKind, ButtonVariant, badge, button_l, button_with_icon_l, input_container, section_title, text_area_scroll_container,
 };
-use crate::i18n::I18n;
 use crate::text_area::TextArea;
 use crate::text_input::TextInput;
-use crate::theme::Theme;
 use crate::workspace::Workspace;
 
-use crate::pages::{PromptDialogState, ProviderDialogState, ToolTab, modal_scaffold_custom, modal_scaffold_sized};
+use crate::pages::{PromptDialogState, modal_scaffold_sized};
 
-use super::common::{open_in_browser, plugin_tag, spawn_tool_action};
 
 pub struct BuiltinPromptPreset {
     pub id: &'static str,
     pub name: &'static str,
+    #[allow(dead_code)]
     pub desc: &'static str,
     pub content: &'static str,
 }
@@ -752,7 +743,6 @@ pub fn render_prompt_dialog(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::provider_dialog::{build_provider_settings, ProviderFormData};
     use aitoolplus_core::tools::ToolId;
     use serde_json::Value;
