@@ -761,6 +761,7 @@ mod tests {
     fn test_claude_code_provider_settings_building() {
         let form = ProviderFormData {
             tool: ToolId::ClaudeCode,
+            name: "Krill Code",
             category: "custom",
             base_url: "https://api.krill.io/v1",
             api_key: "sk-krill-secret",
@@ -862,6 +863,7 @@ mod tests {
 
         let form = ProviderFormData {
             tool: ToolId::Pi,
+            name: "DeepSeek Pi",
             category: "custom",
             base_url: "https://api.deepseek.com",
             api_key: "sk-deepseek-test",
@@ -896,6 +898,10 @@ mod tests {
         let settings_str = build_provider_settings(&form).expect("should build Pi settings");
         let parsed: Value = serde_json::from_str(&settings_str).expect("must be valid JSON");
 
+        assert_eq!(
+            parsed.get("name").and_then(Value::as_str),
+            Some("DeepSeek Pi")
+        );
         assert_eq!(
             parsed.get("baseUrl").and_then(Value::as_str),
             Some("https://api.deepseek.com")
@@ -951,6 +957,7 @@ mod tests {
 
         let form = ProviderFormData {
             tool: ToolId::Pi,
+            name: "Krill Claude",
             category: "custom",
             base_url: "https://api.krill-code.net/coding",
             api_key: "nb_test",
@@ -1006,6 +1013,7 @@ mod tests {
         ];
         let form = ProviderFormData {
             tool: ToolId::Codex,
+            name: "DeepSeek Codex",
             category: "custom",
             base_url: "https://api.deepseek.com/v1",
             api_key: "sk-test-codex",
