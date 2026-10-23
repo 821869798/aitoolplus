@@ -486,9 +486,13 @@ pub fn open_provider_dialog(
     } else {
         String::new()
     };
+    let is_edit = existing.is_some();
     let pi_provider_key = cx.new(|cx| {
         let mut input = TextInput::new(i.t("tool_dialog.provider_key_e_g"), cx);
         input.set_text_silent(pi_key_val, cx);
+        if is_edit {
+            input.set_read_only(true, cx);
+        }
         input
     });
 
@@ -1117,11 +1121,13 @@ pub fn render_provider_dialog(
                                         });
 
                                         if matches!(dialog.tool, ToolId::Pi | ToolId::OhMyPi) {
-                                            if let Some(pk) = preset.settings.get("_providerKey").and_then(Value::as_str) {
-                                                dialog.pi_provider_key.update(cx, |inp, cx| inp.set_text_silent(pk, cx));
-                                            } else {
-                                                let pk_default = preset.name.to_lowercase().replace(' ', "-");
-                                                dialog.pi_provider_key.update(cx, |inp, cx| inp.set_text_silent(&pk_default, cx));
+                                            if dialog.editing_id.is_none() {
+                                                if let Some(pk) = preset.settings.get("_providerKey").and_then(Value::as_str) {
+                                                    dialog.pi_provider_key.update(cx, |inp, cx| inp.set_text_silent(pk, cx));
+                                                } else {
+                                                    let pk_default = preset.name.to_lowercase().replace(' ', "-");
+                                                    dialog.pi_provider_key.update(cx, |inp, cx| inp.set_text_silent(&pk_default, cx));
+                                                }
                                             }
                                             if let Some(fmt) = preset.settings.get("api").and_then(Value::as_str) {
                                                 dialog.pi_api_format = fmt.to_string();
@@ -1297,7 +1303,14 @@ pub fn render_provider_dialog(
                             .flex()
                             .flex_col()
                             .gap(px(4.0))
-                            .child(field_label(i.t("tool_dialog.provider_key")))
+                            .child(field_label(if editing_id.is_some() {
+                                i.raw(
+                                    "Provider Key (配置标识 · 已锁定)",
+                                    "Provider Key (Locked)",
+                                )
+                            } else {
+                                i.t("tool_dialog.provider_key")
+                            }))
                             .child(input_container(&t, pi_provider_key.clone())),
                     ),
             )
@@ -4050,6 +4063,7 @@ pub fn render_provider_dialog(
 
 pub struct ProviderFormData<'a> {
     pub tool: ToolId,
+    pub name: &'a str,
     pub category: &'a str,
     pub base_url: &'a str,
     pub api_key: &'a str,
@@ -4084,6 +4098,7 @@ pub struct ProviderFormData<'a> {
 pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<String, String> {
     let ProviderFormData {
         tool,
+        name,
         category,
         base_url,
         api_key,
@@ -4352,6 +4367,11 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
                 val = serde_json::json!({});
             }
             if let Some(obj) = val.as_object_mut() {
+                if !name.trim().is_empty() {
+                    obj.insert("name".into(), Value::String(name.trim().into()));
+                } else {
+                    obj.remove("name");
+                }
                 if !base_url.trim().is_empty() {
                     obj.insert("baseUrl".into(), Value::String(base_url.trim().into()));
                 } else {
@@ -4695,6 +4715,7 @@ pub(super) fn save_provider(
 
     let form_data = ProviderFormData {
         tool,
+        name: &name_txt,
         category: &category,
         base_url: &base_url_txt,
         api_key: &api_key_txt,
