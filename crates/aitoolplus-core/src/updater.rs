@@ -165,6 +165,19 @@ enum ReleasePayload {
     Tauri(TauriLatestRelease),
 }
 
+pub fn fallback_static_url(api: &str) -> Option<String> {
+    if api.contains("api.github.com/repos/") && api.ends_with("/releases/latest") {
+        Some(
+            api.replace("https://api.github.com/repos/", "https://github.com/")
+                .replace("/releases/latest", "/releases/latest/download/latest.json"),
+        )
+    } else if api.ends_with("/api/releases/latest") {
+        Some(api.replace("/api/releases/latest", "/releases/latest/download/latest.json"))
+    } else {
+        None
+    }
+}
+
 pub fn check_latest(current_version: &str) -> Result<UpdateInfo, String> {
     let version = std::env::var("AITOOLPLUS_CURRENT_VERSION")
         .ok()
@@ -177,20 +190,20 @@ pub fn check_latest(current_version: &str) -> Result<UpdateInfo, String> {
 
     match check_latest_at(&api, &version) {
         Ok(info) => Ok(info),
-        Err(err) if api == DEFAULT_RELEASES_API => {
-            // When GitHub API fails (such as HTTP 403 Rate Limit or network timeout),
-            // seamlessly fall back to static latest.json which is not rate-limited.
-            let static_url = "https://github.com/821869798/aitoolplus/releases/latest/download/latest.json";
-            if let Ok(info) = check_latest_at(static_url, &version) {
-                return Ok(info);
-            }
-            let mirror_url = format!("https://gh-proxy.com/{static_url}");
-            if let Ok(info) = check_latest_at(&mirror_url, &version) {
-                return Ok(info);
+        Err(err) => {
+            if let Some(static_url) = fallback_static_url(&api) {
+                if let Ok(info) = check_latest_at(&static_url, &version) {
+                    return Ok(info);
+                }
+                if static_url.starts_with("https://github.com/") {
+                    let mirror_url = format!("https://gh-proxy.com/{static_url}");
+                    if let Ok(info) = check_latest_at(&mirror_url, &version) {
+                        return Ok(info);
+                    }
+                }
             }
             Err(err)
         }
-        Err(err) => Err(err),
     }
 }
 
@@ -225,16 +238,15 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
             });
         }
         Err(ureq::Error::Status(403, _)) => {
-            if api.contains("api.github.com/repos/") && api.ends_with("/releases/latest") {
-                let static_url = api
-                    .replace("https://api.github.com/repos/", "https://github.com/")
-                    .replace("/releases/latest", "/releases/latest/download/latest.json");
+            if let Some(static_url) = fallback_static_url(api) {
                 if let Ok(info) = check_latest_at(&static_url, current_version) {
                     return Ok(info);
                 }
-                let mirror_url = format!("https://gh-proxy.com/{static_url}");
-                if let Ok(info) = check_latest_at(&mirror_url, current_version) {
-                    return Ok(info);
+                if static_url.starts_with("https://github.com/") {
+                    let mirror_url = format!("https://gh-proxy.com/{static_url}");
+                    if let Ok(info) = check_latest_at(&mirror_url, current_version) {
+                        return Ok(info);
+                    }
                 }
             }
             return Err("GitHub API rate limit exceeded (HTTP 403), please try again later".to_string());
@@ -1146,6 +1158,62 @@ mod tests {
         let err = check_latest_at(&format!("http://{address}/latest"), "0.1.0").unwrap_err();
         server.join().unwrap();
         assert!(err.contains("rate limit"));
+    }
+
+    #[test]
+    fn test_update_check_auto_fallback_on_403() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = std::thread::spawn(move || {
+            // First request: hits /api/releases/latest -> returns 403 Forbidden
+            let (mut stream1, _) = listener.accept().unwrap();
+            let mut reader1 = BufReader::new(stream1.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader1.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let response403 = "HTTP/1.1 403 Forbidden\r\nContent-Length: 31\r\nConnection: close\r\n\r\n{\"message\":\"API rate limit\"}";
+            stream1.write_all(response403.as_bytes()).unwrap();
+
+            // Second request: automatic fallback to /releases/latest/download/latest.json -> returns 200 OK
+            let (mut stream2, _) = listener.accept().unwrap();
+            let mut reader2 = BufReader::new(stream2.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                reader2.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let body = serde_json::json!({
+                "version": "0.1.12",
+                "notes": "Fallback release notes",
+                "pub_date": "2026-10-23T11:00:00Z",
+                "platforms": {
+                    "windows-x86_64": {
+                        "url": "https://example.com/aitoolplus-setup.exe"
+                    }
+                }
+            }).to_string();
+            let response200 = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream2.write_all(response200.as_bytes()).unwrap();
+        });
+
+        // Call API that returns 403; it must seamlessly fallback and succeed
+        let api_url = format!("http://{address}/api/releases/latest");
+        let info = check_latest_at(&api_url, "0.1.10").expect("should seamlessly fallback and succeed");
+        server.join().unwrap();
+
+        assert!(info.update_available);
+        assert_eq!(info.latest_version, "0.1.12");
+        assert!(info.assets.iter().any(|a| a.name == "aitoolplus-setup.exe"));
     }
 
     #[test]
