@@ -1,15 +1,12 @@
 use gpui::{Context, IntoElement, div, prelude::*, px};
 
 use crate::components::{
-    ButtonVariant, button_l, button_with_icon_l, button_with_icon_loading_l, card, input_container, section_title,
-    segmented_pill_selector, settings_card, settings_row, toggle,
+    ButtonVariant, button_l, button_with_icon_l, button_with_icon_loading_l, settings_card, settings_row, toggle,
 };
-use crate::text_input::TextInput;
 use crate::workspace::Workspace;
 
-use crate::pages::SettingsTab;
 
-use super::backup::{apply_restored, defer_io, format_file_size, open_dir_in_explorer, reload_after_restore, CloudRestoreError};
+use super::backup::{defer_io, open_dir_in_explorer};
 
 pub(super) fn data_import_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     div()

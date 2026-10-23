@@ -1,7 +1,7 @@
 use gpui::{Context, IntoElement, MouseButton, div, prelude::*, px};
 
-use crate::components::{ButtonVariant, Tooltip, button_l, button_with_icon_l, button_with_icon_loading_l, toggle};
-use crate::icons::{ALERT_SVG, CHECK_SVG, COPY_SVG, svg_icon};
+use crate::components::{ButtonVariant, Tooltip, button_l, button_with_icon_loading_l, toggle};
+use crate::icons::{ALERT_SVG, COPY_SVG, svg_icon};
 use crate::theme::Theme;
 use crate::workspace::Workspace;
 use aitoolplus_core::gateway::types::{GatewayCliKey, GatewayProxyMode};

@@ -10,8 +10,8 @@
 //! - Selection indicator (Checkmark `✓`).
 
 use gpui::{
-    Context, ElementId, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Window, deferred, div,
+    Context, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window, deferred, div,
     prelude::*, px,
 };
 use std::rc::Rc;
