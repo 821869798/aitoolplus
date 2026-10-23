@@ -174,17 +174,41 @@ pub fn check_latest(current_version: &str) -> Result<UpdateInfo, String> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_RELEASES_API.into());
-    check_latest_at(&api, &version)
+
+    match check_latest_at(&api, &version) {
+        Ok(info) => Ok(info),
+        Err(err) if api == DEFAULT_RELEASES_API => {
+            // When GitHub API fails (such as HTTP 403 Rate Limit or network timeout),
+            // seamlessly fall back to static latest.json which is not rate-limited.
+            let static_url = "https://github.com/821869798/aitoolplus/releases/latest/download/latest.json";
+            if let Ok(info) = check_latest_at(static_url, &version) {
+                return Ok(info);
+            }
+            let mirror_url = format!("https://gh-proxy.com/{static_url}");
+            if let Ok(info) = check_latest_at(&mirror_url, &version) {
+                return Ok(info);
+            }
+            Err(err)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, String> {
-    let res = ureq::AgentBuilder::new()
+    let mut req = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .get(api)
         .set("Accept", "application/vnd.github+json, application/json")
-        .set("User-Agent", "AIToolPlus-Updater")
-        .call();
+        .set("User-Agent", "AIToolPlus-Updater");
+
+    if let Ok(token) = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")) {
+        if !token.trim().is_empty() && api.contains("api.github.com") {
+            req = req.set("Authorization", &format!("Bearer {}", token.trim()));
+        }
+    }
+
+    let res = req.call();
 
     let response = match res {
         Ok(resp) => resp,
@@ -201,6 +225,18 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
             });
         }
         Err(ureq::Error::Status(403, _)) => {
+            if api.contains("api.github.com/repos/") && api.ends_with("/releases/latest") {
+                let static_url = api
+                    .replace("https://api.github.com/repos/", "https://github.com/")
+                    .replace("/releases/latest", "/releases/latest/download/latest.json");
+                if let Ok(info) = check_latest_at(&static_url, current_version) {
+                    return Ok(info);
+                }
+                let mirror_url = format!("https://gh-proxy.com/{static_url}");
+                if let Ok(info) = check_latest_at(&mirror_url, current_version) {
+                    return Ok(info);
+                }
+            }
             return Err("GitHub API rate limit exceeded (HTTP 403), please try again later".to_string());
         }
         Err(error) => return Err(format!("update check failed: {error}")),
@@ -246,18 +282,45 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
             let mut assets = Vec::new();
             for (platform_key, info) in tauri_rel.platforms {
                 if let Some(download_url) = info.url {
-                    let asset_name = if platform_key.contains("windows") {
-                        "aitoolplus-setup.exe".to_string()
+                    if platform_key.contains("windows") {
+                        let setup_url = download_url.clone();
+                        let zip_url = download_url.replace("aitoolplus-setup.exe", "aitoolplus-windows-x86_64.zip");
+                        let setup_sha_url = format!("{setup_url}.sha256");
+                        let zip_sha_url = format!("{zip_url}.sha256");
+
+                        assets.push(UpdateAsset {
+                            name: "aitoolplus-windows-x86_64.zip".to_string(),
+                            download_url: zip_url,
+                            size: 0,
+                        });
+                        assets.push(UpdateAsset {
+                            name: "aitoolplus-windows-x86_64.zip.sha256".to_string(),
+                            download_url: zip_sha_url,
+                            size: 0,
+                        });
+                        assets.push(UpdateAsset {
+                            name: "aitoolplus-setup.exe".to_string(),
+                            download_url: setup_url,
+                            size: 0,
+                        });
+                        assets.push(UpdateAsset {
+                            name: "aitoolplus-setup.exe.sha256".to_string(),
+                            download_url: setup_sha_url,
+                            size: 0,
+                        });
                     } else if platform_key.contains("darwin") || platform_key.contains("macos") {
-                        "aitoolplus.dmg".to_string()
+                        assets.push(UpdateAsset {
+                            name: "aitoolplus.dmg".to_string(),
+                            download_url,
+                            size: 0,
+                        });
                     } else {
-                        "aitoolplus.AppImage".to_string()
-                    };
-                    assets.push(UpdateAsset {
-                        name: asset_name,
-                        download_url,
-                        size: 0,
-                    });
+                        assets.push(UpdateAsset {
+                            name: "aitoolplus.AppImage".to_string(),
+                            download_url,
+                            size: 0,
+                        });
+                    }
                 }
             }
             Ok(UpdateInfo {
@@ -987,8 +1050,7 @@ mod tests {
         server.join().unwrap();
         assert!(info.update_available);
         assert_eq!(info.latest_version, "1.3.0");
-        assert_eq!(info.assets.len(), 1);
-        assert_eq!(info.assets[0].name, "aitoolplus-setup.exe");
+        assert!(info.assets.iter().any(|a| a.name == "aitoolplus-setup.exe"));
     }
 
     #[test]
