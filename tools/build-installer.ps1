@@ -2,7 +2,8 @@
 # Builds release binary and creates NSIS Setup installer.
 
 param (
-    [switch]$SkipBuild = $false
+    [switch]$SkipBuild = $false,
+    [switch]$Inno = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,23 +38,63 @@ if (-not (Test-Path $DistDir)) {
     New-Item -ItemType Directory -Path $DistDir | Out-Null
 }
 
-# 2. Build NSIS Installer
-Write-Host "`n[2/2] Creating NSIS Setup Installer..." -ForegroundColor Yellow
-$Makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
-if (-not $Makensis) {
-    # Check scoop shim or common locations
-    $ScoopMakensis = "$env:USERPROFILE\scoop\shims\makensis.exe"
-    if (Test-Path $ScoopMakensis) {
-        $Makensis = $ScoopMakensis
-    } else {
-        $ProgramFilesMakensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-        if (Test-Path $ProgramFilesMakensis) {
-            $Makensis = $ProgramFilesMakensis
+# 2. Build Installer
+if ($Inno) {
+    Write-Host "`n[2/2] Creating Inno Setup Installer..." -ForegroundColor Yellow
+    $isccCandidates = @(
+        (Get-Command iscc.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+        "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+        "${env:ProgramFiles}\Inno Setup 7\ISCC.exe"
+    )
+
+    $Iscc = $null
+    foreach ($path in $isccCandidates) {
+        if ($path -and (Test-Path $path)) {
+            $Iscc = $path
+            break
         }
     }
-}
 
-if ($Makensis) {
+    if (-not $Iscc) {
+        Write-Error "Inno Setup compiler (ISCC.exe) not found!"
+        exit 1
+    }
+
+    Write-Host "Using Inno Setup compiler: $Iscc" -ForegroundColor Cyan
+    $IssFile = Join-Path $RootDir "tools\installer.iss"
+    & $Iscc $IssFile
+    if ($LASTEXITCODE -eq 0) {
+        $SetupExe = Join-Path $DistDir "aitoolplus-setup.exe"
+        $ExeSizeMB = [math]::Round((Get-Item $SetupExe).Length / 1MB, 2)
+        Write-Host "Inno Setup Installer created: $SetupExe ($ExeSizeMB MB)" -ForegroundColor Green
+    } else {
+        Write-Error "ISCC failed with exit code $LASTEXITCODE"
+    }
+} else {
+    Write-Host "`n[2/2] Creating NSIS Setup Installer..." -ForegroundColor Yellow
+    $Makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
+    if (-not $Makensis) {
+        $ScoopMakensis = "$env:USERPROFILE\scoop\shims\makensis.exe"
+        if (Test-Path $ScoopMakensis) {
+            $Makensis = $ScoopMakensis
+        } else {
+            $ProgramFilesMakensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+            if (Test-Path $ProgramFilesMakensis) {
+                $Makensis = $ProgramFilesMakensis
+            }
+        }
+    }
+
+    if (-not $Makensis) {
+        Write-Error "makensis.exe not found! Please install NSIS (e.g. via 'scoop install nsis')."
+        exit 1
+    }
+
+    Write-Host "Using NSIS compiler: $Makensis" -ForegroundColor Cyan
     $NsiFile = Join-Path $RootDir "tools\installer.nsi"
     & $Makensis /INPUTCHARSET UTF8 $NsiFile
     if ($LASTEXITCODE -eq 0) {
@@ -61,10 +102,8 @@ if ($Makensis) {
         $ExeSizeMB = [math]::Round((Get-Item $SetupExe).Length / 1MB, 2)
         Write-Host "NSIS Setup Installer created: $SetupExe ($ExeSizeMB MB)" -ForegroundColor Green
     } else {
-        Write-Warning "makensis failed with exit code $LASTEXITCODE"
+        Write-Error "makensis failed with exit code $LASTEXITCODE"
     }
-} else {
-    Write-Warning "makensis.exe not found. Please install NSIS (e.g. via 'scoop install nsis' or from nsis.sourceforge.io)."
 }
 
 Write-Host "`nAll packaging tasks completed successfully!" -ForegroundColor Cyan

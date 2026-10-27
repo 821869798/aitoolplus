@@ -5,6 +5,7 @@ Unicode true
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
 Name "AI ToolPlus"
 OutFile "..\target\dist\aitoolplus-setup.exe"
@@ -28,6 +29,11 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstaller Pages
+Var un.Checkbox_DeleteData
+Var un.DeleteDataState
+
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW un.UnConfirmShow
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.UnConfirmLeave
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
@@ -41,8 +47,8 @@ LangString MUI_RUN_TEXT ${LANG_ENGLISH} "Launch AI ToolPlus"
 LangString SHORTCUT_UNINSTALL ${LANG_SIMPCHINESE} "卸载 AI ToolPlus"
 LangString SHORTCUT_UNINSTALL ${LANG_ENGLISH} "Uninstall AI ToolPlus"
 
-LangString MSG_DELETE_DATA ${LANG_SIMPCHINESE} "是否删除所有配置文件与用户数据 (~/.aitoolplus)?$\n$\nDo you want to delete all user data (~/.aitoolplus)?"
-LangString MSG_DELETE_DATA ${LANG_ENGLISH} "Do you want to delete all user data (~/.aitoolplus)?"
+LangString CHECKBOX_DELETE_DATA ${LANG_SIMPCHINESE} "同时删除所有配置文件与用户数据 (~/.aitoolplus)"
+LangString CHECKBOX_DELETE_DATA ${LANG_ENGLISH} "Also delete all configuration and user data (~/.aitoolplus)"
 
 Section "MainSection" SecMain
     ; Terminate running instance if any before overwriting
@@ -71,7 +77,7 @@ Section "MainSection" SecMain
     ; Register in Add/Remove Programs
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayName" "AI ToolPlus"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayIcon" "$INSTDIR\aitoolplus.exe"
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayVersion" "0.1.13"
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "DisplayVersion" "0.1.14"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "Publisher" "aitoolplus contributors"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "InstallLocation" "$INSTDIR"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus" "UninstallString" '"$INSTDIR\uninstall.exe"'
@@ -88,14 +94,61 @@ Section "MainSection" SecMain
     WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
+Function un.onInit
+    ; Check command-line options for silent uninstallation
+    ${GetParameters} $R0
+    ${GetOptions} $R0 "/DELETEDATA" $R1
+    ${IfNot} ${Errors}
+        StrCpy $un.DeleteDataState "1"
+    ${Else}
+        StrCpy $un.DeleteDataState "0"
+    ${EndIf}
+FunctionEnd
+
+Function un.UnConfirmShow
+    ; Find the inner dialog page (#32770)
+    FindWindow $0 "#32770" "" $HWNDPARENT
+
+    ; Allocate RECT in dialog units: left=15, top=82, width=280, height=14
+    System::Call '*(i 15, i 82, i 280, i 14) p .r2'
+    System::Call 'user32::MapDialogRect(i $0, p $2)'
+    System::Call '*$2(i .r3, i .r4, i .r5, i .r6)'
+    System::Free $2
+
+    ; Create Checkbox (WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX = 0x50010003)
+    System::Call 'user32::CreateWindowEx(i 0, t "BUTTON", t "$(CHECKBOX_DELETE_DATA)", i 0x50010003, i r3, i r4, i r5, i r6, i $0, i 1234, i 0, i 0) i .r1'
+    StrCpy $un.Checkbox_DeleteData $1
+
+    ; Set font to match parent dialog
+    SendMessage $HWNDPARENT 0x0031 0 0 $2
+    SendMessage $un.Checkbox_DeleteData 0x0030 $2 1
+
+    ; Default state: 0 (unchecked, preserving user data)
+    ${If} $un.DeleteDataState == "1"
+        SendMessage $un.Checkbox_DeleteData 0x00F1 1 0
+    ${Else}
+        SendMessage $un.Checkbox_DeleteData 0x00F1 0 0
+    ${EndIf}
+FunctionEnd
+
+Function un.UnConfirmLeave
+    SendMessage $un.Checkbox_DeleteData 0x00F0 0 0 $un.DeleteDataState
+FunctionEnd
+
 Section "Uninstall"
     ; Terminate running instance
     nsExec::Exec 'taskkill /F /IM aitoolplus.exe'
+    Sleep 300
 
     Delete "$INSTDIR\aitoolplus.exe"
     Delete "$INSTDIR\app.ico"
     Delete "$INSTDIR\uninstall.exe"
-    RMDir "$INSTDIR"
+
+    ; Clean up installation directory safely
+    ${If} $INSTDIR != ""
+    ${AndIf} ${FileExists} "$INSTDIR"
+        RMDir /r "$INSTDIR"
+    ${EndIf}
 
     ; Delete Shortcuts
     Delete "$SMPROGRAMS\AI ToolPlus\AI ToolPlus.lnk"
@@ -109,9 +162,9 @@ Section "Uninstall"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AIToolPlus"
     DeleteRegKey HKCU "Software\AIToolPlus"
 
-    ; Ask whether to remove user data
-    MessageBox MB_YESNO|MB_ICONQUESTION "$(MSG_DELETE_DATA)" IDNO skip_appdata
+    ; Only remove user data if checkbox was checked (or /DELETEDATA specified)
+    ${If} $un.DeleteDataState == "1"
         RMDir /r "$PROFILE\.aitoolplus"
         RMDir /r "$APPDATA\aitoolplus"
-    skip_appdata:
+    ${EndIf}
 SectionEnd
