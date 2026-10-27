@@ -1159,5 +1159,16 @@ mod tests {
 
         assert_eq!(dispatch("rewrite_req_0"), "rewrite_req");
         assert_eq!(dispatch("rewrite_target_1"), "rewrite_target");
+
+        let resolve_disp = |selected_id: &str, selected_disp: Option<&str>| -> String {
+            selected_disp
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(selected_id)
+                .to_string()
+        };
+        assert_eq!(resolve_disp("deepseek-chat", Some("DeepSeek-V3")), "DeepSeek-V3");
+        assert_eq!(resolve_disp("deepseek-chat", None), "deepseek-chat");
+        assert_eq!(resolve_disp("deepseek-chat", Some("   ")), "deepseek-chat");
     }
 }

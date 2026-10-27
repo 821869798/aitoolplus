@@ -1159,6 +1159,11 @@ impl Workspace {
             .find(|m| m.id == selected_id)
             .and_then(|m| m.context_length);
 
+        let new_disp_name = selected_disp
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(selected_id);
+
         if target_id == "claude_model"
             || target_id == "default_model"
             || target_id == "codex_default_model"
@@ -1167,48 +1172,25 @@ impl Workspace {
             dialog.model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
         } else if target_id == "sonnet" {
             dialog.sonnet_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
-            let curr_name = dialog.sonnet_name.read(cx).text().trim().to_string();
-            if curr_name.is_empty() {
-                let fallback = selected_disp.unwrap_or(selected_id);
-                dialog.sonnet_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
-            }
+            dialog.sonnet_name.update(cx, |inp, cx| inp.set_text(new_disp_name, cx));
         } else if target_id == "opus" {
             dialog.opus_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
-            let curr_name = dialog.opus_name.read(cx).text().trim().to_string();
-            if curr_name.is_empty() {
-                let fallback = selected_disp.unwrap_or(selected_id);
-                dialog.opus_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
-            }
+            dialog.opus_name.update(cx, |inp, cx| inp.set_text(new_disp_name, cx));
         } else if target_id == "haiku" {
             dialog.haiku_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
-            let curr_name = dialog.haiku_name.read(cx).text().trim().to_string();
-            if curr_name.is_empty() {
-                let fallback = selected_disp.unwrap_or(selected_id);
-                dialog.haiku_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
-            }
+            dialog.haiku_name.update(cx, |inp, cx| inp.set_text(new_disp_name, cx));
         } else if target_id == "fable" {
             dialog.fable_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
-            let curr_name = dialog.fable_name.read(cx).text().trim().to_string();
-            if curr_name.is_empty() {
-                let fallback = selected_disp.unwrap_or(selected_id);
-                dialog.fable_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
-            }
+            dialog.fable_name.update(cx, |inp, cx| inp.set_text(new_disp_name, cx));
         } else if target_id == "subagent" {
             dialog.subagent_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
         } else if let Some(idx_str) = target_id.strip_prefix("pi_") {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if let Some(pi_m) = dialog.pi_models.get_mut(idx) {
                     pi_m.id.update(cx, |inp, cx| inp.set_text(selected_id, cx));
-                    let curr_name = pi_m.name.read(cx).text().trim().to_string();
-                    if curr_name.is_empty() {
-                        let fallback = selected_disp.unwrap_or(selected_id);
-                        pi_m.name.update(cx, |inp, cx| inp.set_text(fallback, cx));
-                    }
+                    pi_m.name.update(cx, |inp, cx| inp.set_text(new_disp_name, cx));
                     if let Some(cl) = matched_cl {
-                        let curr_cw = pi_m.context_window.read(cx).text().trim().to_string();
-                        if curr_cw.is_empty() {
-                            pi_m.context_window.update(cx, |inp, cx| inp.set_text(cl.to_string(), cx));
-                        }
+                        pi_m.context_window.update(cx, |inp, cx| inp.set_text(cl.to_string(), cx));
                     }
                 }
             }
@@ -1219,16 +1201,9 @@ impl Workspace {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if let Some(cdx_m) = dialog.codex_catalog_models.get_mut(idx) {
                     cdx_m.model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
-                    let curr_name = cdx_m.display_name.read(cx).text().trim().to_string();
-                    if curr_name.is_empty() {
-                        let fallback = selected_disp.unwrap_or(selected_id);
-                        cdx_m.display_name.update(cx, |inp, cx| inp.set_text(fallback, cx));
-                    }
+                    cdx_m.display_name.update(cx, |inp, cx| inp.set_text(new_disp_name, cx));
                     if let Some(cl) = matched_cl {
-                        let curr_cw = cdx_m.context_window.read(cx).text().trim().to_string();
-                        if curr_cw.is_empty() || curr_cw == "128000" {
-                            cdx_m.context_window.update(cx, |inp, cx| inp.set_text(cl.to_string(), cx));
-                        }
+                        cdx_m.context_window.update(cx, |inp, cx| inp.set_text(cl.to_string(), cx));
                     }
                 }
             }
