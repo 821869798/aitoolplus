@@ -1018,6 +1018,7 @@ pub fn write_to_system_keyring(account: &AntigravityAccount) -> Result<(), Strin
     struct KeyringPayload {
         token: KeyringTokenDetails,
         auth_method: String,
+        id_token_email: String,
     }
 
     let payload = KeyringPayload {
@@ -1028,6 +1029,7 @@ pub fn write_to_system_keyring(account: &AntigravityAccount) -> Result<(), Strin
             expiry: expiry_str,
         },
         auth_method: "consumer".to_string(),
+        id_token_email: account.email.clone(),
     };
 
     let payload_json = serde_json::to_string(&payload)
@@ -1132,8 +1134,56 @@ fn extract_refresh_token_from_payload(payload_str: &str) -> Result<String, Strin
         .ok_or_else(|| "Refresh token not found in keyring payload".to_string())
 }
 
+/// Verify that the system keyring currently holds the expected refresh token (matching Antigravity-Manager `verify_agy_credentials`).
+pub fn verify_agy_credentials(expected_rt: &str) -> Result<(), String> {
+    let stored_rt = read_from_system_keyring()
+        .map_err(|e| format!("Verification failed (read back from keyring): {}", e))?;
+    if stored_rt != expected_rt {
+        return Err("Verification failed: stored refresh token in system keyring does not match written token".to_string());
+    }
+    Ok(())
+}
+
+/// Count currently running `agy` CLI processes (which hold old OAuth tokens in memory and may overwrite the system keyring when refreshing).
+pub fn count_running_agy_processes() -> usize {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let Ok(out) = std::process::Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq agy.exe", "/NH", "/FO", "CSV"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        else {
+            return 0;
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        stdout
+            .lines()
+            .filter(|line| line.to_ascii_lowercase().contains("\"agy.exe\""))
+            .count()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let Ok(out) = std::process::Command::new("pgrep")
+            .args(["-x", "agy"])
+            .output()
+        else {
+            return 0;
+        };
+        if !out.status.success() {
+            return 0;
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    }
+}
+
 /// Write Antigravity CLI (agy) file credentials:
-/// `~/.gemini/antigravity-cli/antigravity-oauth-token` and `.bak`.
+/// `~/.gemini/antigravity-cli/antigravity-oauth-token`, `.antigravity.bak`, and `.bak`
+/// matching Antigravity-Manager `write_antigravity_cli_credentials`.
 pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
     let cli_dir = home_dir.join(".gemini").join("antigravity-cli");
     if !cli_dir.exists() {
@@ -1143,47 +1193,42 @@ pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) 
 
     let expiry_iso = chrono::DateTime::<Utc>::from_timestamp(account.expiry_timestamp, 0)
         .unwrap_or_else(Utc::now)
-        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
 
     #[derive(Serialize)]
-    struct AgyCliTokenData {
+    struct AgyTokenDetail {
         access_token: String,
-        refresh_token: String,
         token_type: String,
+        refresh_token: String,
         expiry: String,
     }
 
     #[derive(Serialize)]
-    struct AgyCliPayload {
-        client_id: String,
-        client_secret: String,
-        token: AgyCliTokenData,
-        scopes: Vec<String>,
+    struct AgyOAuthTokenFile {
+        token: AgyTokenDetail,
+        auth_method: String,
+        id_token_email: String,
     }
 
-    let payload = AgyCliPayload {
-        client_id: CLIENT_ID.to_string(),
-        client_secret: CLIENT_SECRET.to_string(),
-        token: AgyCliTokenData {
+    let payload = AgyOAuthTokenFile {
+        token: AgyTokenDetail {
             access_token: account.access_token.clone(),
-            refresh_token: account.refresh_token.clone(),
             token_type: "Bearer".to_string(),
+            refresh_token: account.refresh_token.clone(),
             expiry: expiry_iso,
         },
-        scopes: vec![
-            "https://www.googleapis.com/auth/cloud-platform".to_string(),
-            "https://www.googleapis.com/auth/userinfo.email".to_string(),
-            "https://www.googleapis.com/auth/userinfo.profile".to_string(),
-            "https://www.googleapis.com/auth/cclog".to_string(),
-            "https://www.googleapis.com/auth/experimentsandconfigs".to_string(),
-            "openid".to_string(),
-        ],
+        auth_method: "consumer".to_string(),
+        id_token_email: account.email.clone(),
     };
 
-    let json_str = serde_json::to_string_pretty(&payload)
+    let json_str = serde_json::to_string(&payload)
         .map_err(|e| format!("Failed to serialize agy cli token: {}", e))?;
 
-    for filename in &["antigravity-oauth-token", "antigravity-oauth-token.bak"] {
+    for filename in &[
+        "antigravity-oauth-token",
+        "antigravity-oauth-token.antigravity.bak",
+        "antigravity-oauth-token.bak",
+    ] {
         let path = cli_dir.join(filename);
         std::fs::write(&path, &json_str)
             .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
@@ -1196,10 +1241,14 @@ pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) 
     Ok(())
 }
 
-/// Read refresh token from `~/.gemini/antigravity-cli/antigravity-oauth-token` (or `.bak`).
+/// Read refresh token from `~/.gemini/antigravity-cli/antigravity-oauth-token` (or `.antigravity.bak` / `.bak`).
 pub fn read_antigravity_cli_credentials(home_dir: &Path) -> Option<String> {
     let cli_dir = home_dir.join(".gemini").join("antigravity-cli");
-    for filename in &["antigravity-oauth-token", "antigravity-oauth-token.bak"] {
+    for filename in &[
+        "antigravity-oauth-token",
+        "antigravity-oauth-token.antigravity.bak",
+        "antigravity-oauth-token.bak",
+    ] {
         let path = cli_dir.join(filename);
         if !path.exists() {
             continue;
@@ -1430,7 +1479,8 @@ pub fn create_oauth_info(
     info.extend(encode_string_field(2, "Bearer"));
     info.extend(encode_string_field(3, refresh_token));
 
-    let timestamp_data = encode_varint_field(1, expiry as u64);
+    let mut timestamp_data = encode_varint_field(1, expiry as u64);
+    timestamp_data.extend(encode_varint_field(2, 0));
     info.extend(encode_len_delim_field(4, &timestamp_data));
 
     if is_gcp_tos {
@@ -1549,6 +1599,15 @@ pub fn remove_unified_topic_entry(
 pub fn inject_token_to_db(db_path: &Path, account: &AntigravityAccount) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db_path)
         .map_err(|e| format!("Failed to open database {:?}: {}", db_path, e))?;
+    let _ = conn.busy_timeout(Duration::from_millis(2000));
+
+    let email_lower = account.email.trim().to_ascii_lowercase();
+    let is_personal_domain = email_lower.ends_with("@gmail.com")
+        || email_lower.ends_with("@outlook.com")
+        || email_lower.ends_with("@hotmail.com")
+        || email_lower.ends_with("@qq.com")
+        || email_lower.ends_with("@163.com");
+    let is_gcp_tos = !is_personal_domain && account.get_tier() == "ENTERPRISE";
 
     let existing_oauth_entry: Option<String> = conn
         .query_row(
@@ -1561,7 +1620,7 @@ pub fn inject_token_to_db(db_path: &Path, account: &AntigravityAccount) -> Resul
         &account.access_token,
         &account.refresh_token,
         account.expiry_timestamp,
-        true,
+        is_gcp_tos,
     );
     let new_oauth_entry = create_unified_topic_entry(
         existing_oauth_entry.as_deref(),
@@ -1581,7 +1640,11 @@ pub fn inject_token_to_db(db_path: &Path, account: &AntigravityAccount) -> Resul
             |row| row.get(0),
         )
         .ok();
-    let user_email_proto = encode_string_field(7, &account.email);
+    let user_email_proto = [
+        encode_string_field(3, &account.email),
+        encode_string_field(7, &account.email),
+    ]
+    .concat();
     let new_user_status = create_unified_topic_entry(
         existing_user_status.as_deref(),
         "userStatusSentinelKey",
@@ -2425,22 +2488,24 @@ pub fn detect_active_clients_status(home_dir: &Path, store: &AntigravityStore) -
         .ok()
         .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
 
-    // 2. Live detection from CLI token (`~/.gemini/antigravity-cli/antigravity-oauth-token`)
-    let live_agy_id = read_antigravity_cli_credentials(home_dir)
-        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
-
-    // 3. Live detection from Classic DB (`%APPDATA%\Antigravity\...`) or Keyring / oauth_creds.json
-    let live_classic_db_id = get_refresh_token_from_db(Some("classic"))
+    // 2. Live detection from System Keyring (`gemini:antigravity` - primary credential store for `agy` CLI & Classic 2.0+)
+    let live_keyring_id = read_from_system_keyring()
         .ok()
         .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
-    let live_keyring_id = read_from_system_keyring()
+
+    // 3. Live detection from CLI fallback token file (`~/.gemini/antigravity-cli/antigravity-oauth-token`)
+    let live_agy_file_id = read_antigravity_cli_credentials(home_dir)
+        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+
+    // 4. Live detection from Classic DB (`%APPDATA%\Antigravity\...`) or `oauth_creds.json`
+    let live_classic_db_id = get_refresh_token_from_db(Some("classic"))
         .ok()
         .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
     let live_oauth_file_id = read_file_credentials(home_dir)
         .ok()
         .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
 
-    // 4. Fallback to Antigravity-Manager's accounts.json if present
+    // 5. Fallback to Antigravity-Manager's accounts.json if present
     let (mgr_classic, mgr_ide, mgr_agy) = read_antigravity_manager_active_ids(home_dir, store);
 
     let valid_store_id = |opt: &Option<String>| -> Option<String> {
@@ -2453,7 +2518,12 @@ pub fn detect_active_clients_status(home_dir: &Path, store: &AntigravityStore) -
         .or_else(|| valid_store_id(&store.current_ide_account_id))
         .or(mgr_ide);
 
-    let agy_account_id = live_agy_id
+    // Note: `agy` CLI uses `gemini:antigravity` in system keyring as its primary credential store on Windows/macOS/Linux
+    // and only falls back to `antigravity-oauth-token` when keyring is unavailable. Checking `live_keyring_id` first
+    // ensures we immediately detect if a background `agy` session refreshed and wrote back an older account to keyring.
+    let agy_account_id = live_keyring_id
+        .clone()
+        .or(live_agy_file_id)
         .or_else(|| valid_store_id(&store.current_agy_account_id))
         .or(mgr_agy);
 
@@ -2758,28 +2828,321 @@ pub fn update_account_device_profile(
     Ok(())
 }
 
-/// Hot-switch helper: terminate Antigravity language_server child processes so the running client reloads credentials without full restart.
-fn trigger_language_server_hot_reload() {
+/// Check if a path or string belongs to `Antigravity IDE` (matching Antigravity-Manager `is_antigravity_ide_str`).
+fn is_antigravity_ide_str(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    lower.contains("antigravity ide")
+        || lower.contains("antigravity-ide")
+        || lower.contains("antigravity_ide")
+}
+
+/// Sanitize restart arguments (matching Antigravity-Manager `sanitize_restart_args`).
+fn sanitize_restart_args(args: &[String]) -> Vec<String> {
+    args.iter()
+        .filter(|arg| {
+            let lower = arg.trim().to_ascii_lowercase();
+            !lower.is_empty()
+                && !lower.starts_with("--standalone")
+                && !lower.starts_with("--override_ide_name")
+                && !lower.starts_with("--subclient_type")
+                && !lower.contains("language_server")
+        })
+        .cloned()
+        .collect()
+}
+
+/// Snapshot running Antigravity (`classic` or `ide`) main process executable path, arguments, and PIDs.
+/// Strictly isolates `Antigravity IDE` from `Antigravity` Classic and never matches `aitoolplus` or `antigravity-manager`.
+fn find_running_client_processes(target: Option<&str>) -> (Vec<u32>, Option<PathBuf>, Vec<String>) {
+    let want_ide = target == Some("ide");
+
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        for proc_name in &[
-            "language_server_windows_x64.exe",
-            "language_server_windows_arm64.exe",
-            "language_server.exe",
-        ] {
+        let current_pid = std::process::id();
+        let ps_script = r#"Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'antigravity' -or $_.ExecutablePath -match 'antigravity' } | Select-Object ProcessId, Name, ExecutablePath, CommandLine | ConvertTo-Json -Compress"#;
+        let Ok(out) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        else {
+            return (Vec::new(), None, Vec::new());
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let trimmed = stdout.trim();
+        if trimmed.is_empty() {
+            return (Vec::new(), None, Vec::new());
+        }
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return (Vec::new(), None, Vec::new());
+        };
+        let items: Vec<&serde_json::Value> = match &val {
+            serde_json::Value::Array(arr) => arr.iter().collect(),
+            obj @ serde_json::Value::Object(_) => vec![obj],
+            _ => Vec::new(),
+        };
+
+        let mut pids = Vec::new();
+        let mut main_exe: Option<PathBuf> = None;
+        let mut main_args: Vec<String> = Vec::new();
+
+        for item in items {
+            let pid = item.get("ProcessId").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if pid == 0 || pid == current_pid {
+                continue;
+            }
+            let name = item.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+            let exe = item.get("ExecutablePath").and_then(|v| v.as_str()).unwrap_or("");
+            let cmd = item.get("CommandLine").and_then(|v| v.as_str()).unwrap_or("");
+            let name_lower = name.to_ascii_lowercase();
+            let exe_lower = exe.to_ascii_lowercase();
+            let cmd_lower = cmd.to_ascii_lowercase();
+
+            // Never touch manager/tools/cli processes
+            if name_lower.contains("tool")
+                || name_lower.contains("manager")
+                || exe_lower.contains("aitoolplus")
+                || exe_lower.contains("antigravity-manager")
+                || exe_lower.contains("antigravity_tools")
+                || name_lower == "agy.exe"
+                || name_lower == "agy"
+            {
+                continue;
+            }
+
+            let is_ide = is_antigravity_ide_str(&exe_lower)
+                || is_antigravity_ide_str(&name_lower)
+                || is_antigravity_ide_str(&cmd_lower);
+            if want_ide != is_ide {
+                continue;
+            }
+
+            let is_helper = cmd_lower.contains("--type=")
+                || cmd_lower.contains("node-ipc")
+                || cmd_lower.contains("--standalone")
+                || cmd_lower.contains("--subclient_type")
+                || cmd_lower.contains("--override_ide_name")
+                || name_lower.contains("language_server")
+                || exe_lower.contains("language_server")
+                || name_lower.contains("crashpad")
+                || name_lower.contains("helper");
+
+            if !is_helper {
+                pids.push(pid);
+                if main_exe.is_none() && !exe.is_empty() {
+                    let p = PathBuf::from(exe);
+                    if p.exists() {
+                        main_exe = Some(p);
+                        main_args = sanitize_restart_args(&[]);
+                    }
+                }
+            }
+        }
+        (pids, main_exe, main_args)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = want_ide;
+        (Vec::new(), None, Vec::new())
+    }
+}
+
+/// Terminate `language_server` child processes belonging to the target Antigravity client (`classic` or `ide`),
+/// without killing the other client's language_server (matching Antigravity-Manager `kill_language_server_subprocesses`).
+/// Returns the number of terminated `language_server` processes.
+fn kill_target_language_server_processes(target: Option<&str>) -> usize {
+    let want_ide = target == Some("ide");
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let ps_script = r#"Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'language_server' -or $_.ExecutablePath -match 'language_server' } | Select-Object ProcessId, Name, ExecutablePath, CommandLine | ConvertTo-Json -Compress"#;
+        let Ok(out) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        else {
+            return 0;
+        };
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let trimmed = stdout.trim();
+        if trimmed.is_empty() {
+            return 0;
+        }
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            return 0;
+        };
+        let items: Vec<&serde_json::Value> = match &val {
+            serde_json::Value::Array(arr) => arr.iter().collect(),
+            obj @ serde_json::Value::Object(_) => vec![obj],
+            _ => Vec::new(),
+        };
+
+        let mut killed = 0usize;
+        for item in items {
+            let pid = item.get("ProcessId").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if pid == 0 {
+                continue;
+            }
+            let exe = item.get("ExecutablePath").and_then(|v| v.as_str()).unwrap_or("");
+            let cmd = item.get("CommandLine").and_then(|v| v.as_str()).unwrap_or("");
+            let exe_lower = exe.to_ascii_lowercase();
+            let cmd_lower = cmd.to_ascii_lowercase();
+
+            if !exe_lower.contains("antigravity") && !cmd_lower.contains("antigravity") {
+                continue;
+            }
+            let is_ide = is_antigravity_ide_str(&exe_lower) || is_antigravity_ide_str(&cmd_lower);
+            if want_ide != is_ide {
+                continue;
+            }
+
+            if let Ok(res) = std::process::Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+            {
+                if res.status.success() {
+                    killed += 1;
+                }
+            }
+        }
+        killed
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = want_ide;
+        let out = std::process::Command::new("pkill")
+            .args(["-f", "language_server"])
+            .output();
+        if out.map(|o| o.status.success()).unwrap_or(false) {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+/// Close running Antigravity client processes (`classic` or `ide`) and wait up to 3s for exit
+/// (matching Antigravity-Manager `close_antigravity`).
+fn close_antigravity_client(target: Option<&str>) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let (pids, _, _) = find_running_client_processes(target);
+        if pids.is_empty() {
+            return;
+        }
+        for pid in &pids {
             let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/IM", proc_name])
+                .args(["/F", "/T", "/PID", &pid.to_string()])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
+        }
+        if target != Some("ide") {
+            let _ = kill_target_language_server_processes(Some("classic"));
+        }
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(3) {
+            let (remaining, _, _) = find_running_client_processes(target);
+            if remaining.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(150));
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let proc_pattern = if target == Some("ide") {
+            "Antigravity IDE"
+        } else {
+            "Antigravity"
+        };
         let _ = std::process::Command::new("pkill")
-            .args(["-f", "language_server"])
+            .args(["-f", proc_pattern])
             .output();
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// Restart Antigravity client (`classic` or `ide`) using snapshot executable path or standard locations
+/// (matching Antigravity-Manager `start_antigravity_with_fallback_path`).
+fn start_antigravity_client(target: Option<&str>, snapshot_exe: Option<&Path>, snapshot_args: &[String]) {
+    let candidate_exe = snapshot_exe
+        .filter(|p| p.exists())
+        .map(Path::to_path_buf)
+        .or_else(|| find_standard_antigravity_exe(target));
+
+    if let Some(exe_path) = candidate_exe {
+        let mut cmd = std::process::Command::new(&exe_path);
+        if let Some(parent) = exe_path.parent() {
+            cmd.current_dir(parent);
+        }
+        for arg in sanitize_restart_args(snapshot_args) {
+            cmd.arg(arg);
+        }
+        let _ = cmd.spawn();
+    }
+}
+
+/// Locate standard Antigravity (`classic` or `ide`) executable path on disk.
+fn find_standard_antigravity_exe(target: Option<&str>) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let folder_names: &[&str] = if target == Some("ide") {
+            &["Antigravity IDE", "antigravity-ide", "antigravity_ide"]
+        } else {
+            &["Antigravity"]
+        };
+        let exe_names: &[&str] = if target == Some("ide") {
+            &[
+                "Antigravity IDE.exe",
+                "antigravity-ide.exe",
+                "antigravity_ide.exe",
+                "Antigravity.exe",
+            ]
+        } else {
+            &["Antigravity.exe", "antigravity.exe"]
+        };
+
+        let local_appdata = std::env::var("LOCALAPPDATA").ok();
+        let program_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+        let program_files_x86 =
+            std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string());
+
+        for folder in folder_names {
+            for exe in exe_names {
+                if let Some(ref local) = local_appdata {
+                    let p1 = PathBuf::from(local).join("Programs").join(folder).join(exe);
+                    if p1.exists() {
+                        return Some(p1);
+                    }
+                    let p2 = PathBuf::from(local).join(folder).join(exe);
+                    if p2.exists() {
+                        return Some(p2);
+                    }
+                }
+                let p3 = PathBuf::from(&program_files).join(folder).join(exe);
+                if p3.exists() {
+                    return Some(p3);
+                }
+                let p4 = PathBuf::from(&program_files_x86).join(folder).join(exe);
+                if p4.exists() {
+                    return Some(p4);
+                }
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        None
     }
 }
 
@@ -2793,8 +3156,29 @@ pub fn switch_account(
     switch_account_target(home_dir, app_data, store, account_id, Some("classic"))
 }
 
+/// Helper to apply Classic credentials (Keyring + file credentials + storage.json + state.vscdb).
+fn apply_classic_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
+    write_to_system_keyring(account)?;
+    write_file_credentials(home_dir, account)?;
+    let _ = write_agy_cli_credentials(home_dir, account);
+    if let Some(ref profile) = account.device_profile {
+        let _ = write_device_profile_to_storage(Some("classic"), profile);
+    }
+    for db_path in get_all_candidate_db_paths(Some("classic")) {
+        if db_path.exists() {
+            let backup_path = db_path.with_extension("vscdb.backup");
+            let _ = std::fs::copy(&db_path, &backup_path);
+            if let Some(ref profile) = account.device_profile {
+                let _ = write_service_machine_id_to_db(&db_path, &profile.dev_device_id);
+            }
+            let _ = inject_token_to_db(&db_path, account);
+        }
+    }
+    Ok(())
+}
+
 /// Switch active account targeting `classic` (APP), `ide` (IDE), or `agy` (CLI),
-/// matching Antigravity-Manager v4.9.8 multi-client switching semantics.
+/// matching Antigravity-Manager v5.0.0 / v4.9.8 multi-client switching semantics.
 pub fn switch_account_target(
     home_dir: &Path,
     app_data: &Path,
@@ -2819,13 +3203,26 @@ pub fn switch_account_target(
 
         // Ensure valid token before switching
         ensure_fresh_token(account)?;
+        if account.device_profile.is_none() {
+            account.device_profile = Some(DeviceProfile::generate_random());
+        }
         account.last_used = Utc::now().timestamp();
         account.clone()
     };
 
     match target_mode {
         "ide" => {
-            // 1. Apply device profile to Antigravity IDE storage.json + state.vscdb if configured
+            // Matching Antigravity-Manager (`integration.rs:299-365`):
+            // IDE heavily relies on Extension Host in-memory state & SQLite single-writer lock.
+            // If IDE is running, snapshot its executable path/args, close it BEFORE injecting SQLite
+            // (so its shutdown hook cannot overwrite state.vscdb with the old account), inject, and restart it.
+            let (running_pids, snapshot_exe, snapshot_args) = find_running_client_processes(Some("ide"));
+            let was_running = !running_pids.is_empty();
+            if was_running {
+                close_antigravity_client(Some("ide"));
+            }
+
+            // 1. Apply device profile to Antigravity IDE storage.json + state.vscdb
             if let Some(ref profile) = account_clone.device_profile {
                 let _ = write_device_profile_to_storage(Some("ide"), profile);
             }
@@ -2835,6 +3232,8 @@ pub fn switch_account_target(
             let mut last_err = None;
             for db_path in &ide_db_paths {
                 if db_path.exists() {
+                    let backup_path = db_path.with_extension("vscdb.backup");
+                    let _ = std::fs::copy(db_path, &backup_path);
                     if let Some(ref profile) = account_clone.device_profile {
                         let _ = write_service_machine_id_to_db(db_path, &profile.dev_device_id);
                     }
@@ -2850,39 +3249,54 @@ pub fn switch_account_target(
                 }
                 return Err("未检测到 Antigravity IDE 数据库 (state.vscdb)，请先启动一次 Antigravity IDE".to_string());
             }
+
+            if was_running {
+                start_antigravity_client(Some("ide"), snapshot_exe.as_deref(), &snapshot_args);
+            }
+
             store.current_ide_account_id = Some(account_id.to_string());
             store.current_target_ide = Some("ide".to_string());
         }
         "agy" => {
-            // 1. Write to system keyring (`gemini:antigravity`)
+            // 1. Write to system keyring (`gemini:antigravity` - primary credential store for agy CLI)
             write_to_system_keyring(&account_clone)?;
-            // 2. Write to `~/.gemini/antigravity-cli/antigravity-oauth-token` (and `.bak`)
+            // 2. Write to `~/.gemini/antigravity-cli/antigravity-oauth-token` (and `.antigravity.bak` / `.bak`)
             write_agy_cli_credentials(home_dir, &account_clone)?;
             // 3. Also sync `~/.gemini/oauth_creds.json`
             let _ = write_file_credentials(home_dir, &account_clone);
+            // 4. Read-back verification from system keyring (matching Antigravity-Manager `verify_agy_credentials`)
+            verify_agy_credentials(&account_clone.refresh_token)?;
+            // 5. Sync device profile if storage.json exists (matching Antigravity-Manager `integration.rs:239-243`)
+            if let Some(ref profile) = account_clone.device_profile {
+                let _ = write_device_profile_to_storage(Some("classic"), profile);
+            }
             store.current_agy_account_id = Some(account_id.to_string());
             store.current_target_ide = Some("agy".to_string());
         }
         _ => {
-            // Classic / APP mode:
-            // 1. Write to system keyring
-            write_to_system_keyring(&account_clone)?;
-            // 2. Write to `~/.gemini/oauth_creds.json`
-            write_file_credentials(home_dir, &account_clone)?;
-            // 3. Apply device profile to Classic storage.json and inject into Classic state.vscdb if present
-            if let Some(ref profile) = account_clone.device_profile {
-                let _ = write_device_profile_to_storage(Some("classic"), profile);
-            }
-            for db_path in get_all_candidate_db_paths(Some("classic")) {
-                if db_path.exists() {
-                    if let Some(ref profile) = account_clone.device_profile {
-                        let _ = write_service_machine_id_to_db(&db_path, &profile.dev_device_id);
-                    }
-                    let _ = inject_token_to_db(&db_path, &account_clone);
+            // Classic / APP mode (matching Antigravity-Manager `integration.rs:308-414`):
+            // 1. Check if Classic client is currently running
+            let (running_pids, snapshot_exe, snapshot_args) = find_running_client_processes(Some("classic"));
+            let was_running = !running_pids.is_empty();
+
+            // 2. Write credentials first (pre-kill write for hot switch)
+            apply_classic_credentials(home_dir, &account_clone)?;
+
+            if was_running {
+                // 3. Attempt hot-switch by killing only Classic's `language_server` child processes
+                let killed_ls = kill_target_language_server_processes(Some("classic"));
+                if killed_ls > 0 {
+                    // Post-kill re-assert so dying language_server cannot overwrite keyring/DB with stale token
+                    std::thread::sleep(Duration::from_millis(120));
+                    let _ = apply_classic_credentials(home_dir, &account_clone);
+                } else {
+                    // Fallback to full restart if Classic was running without a separate language_server subprocess
+                    close_antigravity_client(Some("classic"));
+                    let _ = apply_classic_credentials(home_dir, &account_clone);
+                    start_antigravity_client(Some("classic"), snapshot_exe.as_deref(), &snapshot_args);
                 }
             }
-            // 4. Hot-reload language_server child process if running
-            trigger_language_server_hot_reload();
+
             store.current_classic_account_id = Some(account_id.to_string());
             store.active_account_id = Some(account_id.to_string());
             store.current_target_ide = Some("classic".to_string());
@@ -2898,38 +3312,103 @@ pub fn switch_account_target(
     Ok(())
 }
 
-/// Write device profile to VS Code / Antigravity IDE storage.json if present.
-pub fn write_device_profile_to_storage(_target: Option<&str>, _profile: &DeviceProfile) -> Result<(), String> {
+/// Resolve candidate `storage.json` paths for `classic` or `ide` across Windows, macOS, and Linux
+/// (matching Antigravity-Manager `device::get_storage_path`).
+fn get_candidate_storage_paths(target: Option<&str>) -> Vec<PathBuf> {
+    let folder_names: &[&str] = if target == Some("ide") {
+        &["Antigravity IDE", "antigravity-ide", "AntigravityIDE"]
+    } else {
+        &["Antigravity", "antigravity"]
+    };
+
+    let mut paths = Vec::new();
+
     #[cfg(target_os = "windows")]
     {
-        let target = _target;
-        let profile = _profile;
-        let appdata = match std::env::var("APPDATA") {
-            Ok(v) => v,
-            Err(_) => return Ok(()),
-        };
-        let folder = if target == Some("ide") { "Antigravity IDE" } else { "Antigravity" };
-        let storage_path = PathBuf::from(&appdata)
-            .join(folder)
-            .join("User")
-            .join("globalStorage")
-            .join("storage.json");
-
-        if storage_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&storage_path) {
-                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(map) = val.as_object_mut() {
-                        map.insert("telemetry.machineId".to_string(), serde_json::Value::String(profile.machine_id.clone()));
-                        map.insert("telemetry.macMachineId".to_string(), serde_json::Value::String(profile.mac_machine_id.clone()));
-                        map.insert("telemetry.devDeviceId".to_string(), serde_json::Value::String(profile.dev_device_id.clone()));
-                        map.insert("telemetry.sqmId".to_string(), serde_json::Value::String(profile.sqm_id.clone()));
-                        map.insert("storage.serviceMachineId".to_string(), serde_json::Value::String(profile.dev_device_id.clone()));
-                        if let Ok(pretty) = serde_json::to_string_pretty(&val) {
-                            let _ = std::fs::write(&storage_path, pretty);
-                        }
-                    }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            for folder_name in folder_names {
+                let app_dir = PathBuf::from(&appdata).join(folder_name);
+                let storage = app_dir.join("User").join("globalStorage").join("storage.json");
+                if storage.exists() || app_dir.exists() {
+                    paths.push(storage);
                 }
             }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(home);
+            for folder_name in folder_names {
+                let app_dir = home_path.join("Library/Application Support").join(folder_name);
+                let storage = app_dir.join("User/globalStorage/storage.json");
+                if storage.exists() || app_dir.exists() {
+                    paths.push(storage);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(home);
+            for folder_name in folder_names {
+                let app_dir = home_path.join(".config").join(folder_name);
+                let storage = app_dir.join("User/globalStorage/storage.json");
+                if storage.exists() || app_dir.exists() {
+                    paths.push(storage);
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+/// Write device profile to VS Code / Antigravity `storage.json` and sync `storage.serviceMachineId` to `state.vscdb`
+/// (matching Antigravity-Manager `device::write_profile` with both nested `telemetry` object and flat `telemetry.*` keys).
+pub fn write_device_profile_to_storage(target: Option<&str>, profile: &DeviceProfile) -> Result<(), String> {
+    for storage_path in get_candidate_storage_paths(target) {
+        let mut json: serde_json::Value = if storage_path.exists() {
+            let content = std::fs::read_to_string(&storage_path).unwrap_or_default();
+            serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            if let Some(parent) = storage_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            serde_json::json!({})
+        };
+
+        if !json.get("telemetry").is_some_and(|v| v.is_object()) {
+            if let Some(map) = json.as_object_mut() {
+                map.insert("telemetry".to_string(), serde_json::json!({}));
+            }
+        }
+
+        if let Some(telemetry) = json.get_mut("telemetry").and_then(|v| v.as_object_mut()) {
+            telemetry.insert("machineId".to_string(), serde_json::Value::String(profile.machine_id.clone()));
+            telemetry.insert("macMachineId".to_string(), serde_json::Value::String(profile.mac_machine_id.clone()));
+            telemetry.insert("devDeviceId".to_string(), serde_json::Value::String(profile.dev_device_id.clone()));
+            telemetry.insert("sqmId".to_string(), serde_json::Value::String(profile.sqm_id.clone()));
+        }
+
+        if let Some(map) = json.as_object_mut() {
+            map.insert("telemetry.machineId".to_string(), serde_json::Value::String(profile.machine_id.clone()));
+            map.insert("telemetry.macMachineId".to_string(), serde_json::Value::String(profile.mac_machine_id.clone()));
+            map.insert("telemetry.devDeviceId".to_string(), serde_json::Value::String(profile.dev_device_id.clone()));
+            map.insert("telemetry.sqmId".to_string(), serde_json::Value::String(profile.sqm_id.clone()));
+            map.insert("storage.serviceMachineId".to_string(), serde_json::Value::String(profile.dev_device_id.clone()));
+        }
+
+        if let Ok(pretty) = serde_json::to_string_pretty(&json) {
+            let _ = std::fs::write(&storage_path, pretty);
+        }
+
+        if let Some(parent) = storage_path.parent() {
+            let db_path = parent.join("state.vscdb");
+            let _ = write_service_machine_id_to_db(&db_path, &profile.dev_device_id);
         }
     }
     Ok(())
