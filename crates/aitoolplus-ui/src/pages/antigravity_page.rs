@@ -6,12 +6,13 @@
 use std::time::Duration;
 use aitoolplus_core::antigravity::{
     ActiveClientsStatus, AntigravityAccount, AntigravitySessionMeta, AntigravityStore, DeviceProfile,
-    OAuthServerSession, build_account_from_refresh_token, detect_active_clients_status,
-    exchange_auth_code, extract_oauth_code, extract_tokens_from_text, fetch_project_and_tier,
-    fetch_quota, fetch_user_info, import_all_local_accounts, import_from_custom_db_path,
-    import_from_local_system, import_from_v1_backup, load_store, open_browser, save_store,
-    scan_antigravity_sessions, switch_account_target, sync_store_active_flags,
-    toggle_account_disabled, update_account_device_profile, update_account_label,
+    OAuthServerSession, build_account_from_refresh_token, count_running_agy_processes,
+    detect_active_clients_status, exchange_auth_code, extract_oauth_code, extract_tokens_from_text,
+    fetch_project_and_tier, fetch_quota, fetch_user_info, import_all_local_accounts,
+    import_from_custom_db_path, import_from_local_system, import_from_v1_backup, load_store,
+    open_browser, save_store, scan_antigravity_sessions, switch_account_target,
+    sync_store_active_flags, toggle_account_disabled, update_account_device_profile,
+    update_account_label,
 };
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -4294,19 +4295,38 @@ fn switch_account_target_action(
     cx.notify();
 
     cx.spawn(async move |_this, cx| {
+        let is_agy_or_classic = !matches!(target_owned.as_deref(), Some("ide"));
         let result = cx.background_spawn(async move {
             switch_account_target(&home, &app_data, &mut store, &account_id_str, target_owned.as_deref())?;
-            Ok::<(AntigravityStore, String), String>((store, account_email))
+            let running_agy_count = if is_agy_or_classic {
+                count_running_agy_processes()
+            } else {
+                0
+            };
+            Ok::<(AntigravityStore, String, usize), String>((store, account_email, running_agy_count))
         }).await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
             match result {
-                Ok((new_store, email)) => {
+                Ok((new_store, email, running_agy_count)) => {
                     ws.ui.antigravity_store = Some(new_store);
-                    let msg = ws.i18n.raw(
-                        &format!("已成功切换 {} 活动账号为：{}", target_name, email),
-                        &format!("Switched {} active account to: {}", target_name_en, email),
-                    ).to_string();
+                    let msg = if running_agy_count > 0 {
+                        ws.i18n.raw(
+                            &format!(
+                                "已切换 {} 活动账号为：{}（注意：检测到 {} 个运行中的 agy 终端会话，旧会话刷新 Token 时可能会把旧账号写回系统凭据）",
+                                target_name, email, running_agy_count
+                            ),
+                            &format!(
+                                "Switched {} active account to: {} (Note: {} running agy sessions may still use and write back their previous credentials)",
+                                target_name_en, email, running_agy_count
+                            ),
+                        ).to_string()
+                    } else {
+                        ws.i18n.raw(
+                            &format!("已成功切换 {} 活动账号为：{}", target_name, email),
+                            &format!("Switched {} active account to: {}", target_name_en, email),
+                        ).to_string()
+                    };
                     ws.ui.toast(msg, false);
                 }
                 Err(e) => {
