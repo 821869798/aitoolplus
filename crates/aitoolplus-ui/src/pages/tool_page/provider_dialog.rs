@@ -24,6 +24,220 @@ pub(super) fn strip_1m(model: &str) -> (String, bool) {
     }
 }
 
+pub const PI_THINKING_LEVEL_DEFS: &[(&str, &str, &str)] = &[
+    ("off", "关闭 (off)", "none"),
+    ("minimal", "Minimal", "minimal"),
+    ("low", "Low", "low"),
+    ("medium", "Medium", "medium"),
+    ("high", "High", "high"),
+    ("xhigh", "XHigh", "xhigh"),
+    ("max", "Max", "max"),
+];
+
+pub fn build_pi_thinking_level_inputs(
+    raw_map: Option<&serde_json::Map<String, Value>>,
+    cx: &mut Context<Workspace>,
+) -> Vec<(String, gpui::Entity<TextInput>)> {
+    PI_THINKING_LEVEL_DEFS
+        .iter()
+        .map(|&(lvl, _label, default_val)| {
+            let init_val = raw_map
+                .and_then(|m| m.get(lvl))
+                .and_then(Value::as_str)
+                .unwrap_or(default_val)
+                .to_string();
+            let ent = cx.new(|cx| {
+                let mut inp = TextInput::new(default_val, cx);
+                inp.set_text_silent(init_val, cx);
+                inp
+            });
+            (lvl.to_string(), ent)
+        })
+        .collect()
+}
+
+pub fn sync_pi_thinking_level_inputs(
+    inputs: &[(String, gpui::Entity<TextInput>)],
+    raw_map: Option<&serde_json::Map<String, Value>>,
+    cx: &mut Context<Workspace>,
+) {
+    for &(lvl, _label, default_val) in PI_THINKING_LEVEL_DEFS {
+        if let Some((_, ent)) = inputs.iter().find(|(k, _)| k == lvl) {
+            let val = raw_map
+                .and_then(|m| m.get(lvl))
+                .and_then(Value::as_str)
+                .unwrap_or(default_val)
+                .to_string();
+            ent.update(cx, |inp, cx| inp.set_text_silent(val, cx));
+        }
+    }
+}
+
+pub fn infer_pi_thinking_profile(
+    model_id: &str,
+    api_format: &str,
+) -> Option<(serde_json::Map<String, Value>, bool)> {
+    let id = model_id.trim().to_ascii_lowercase();
+    if id.is_empty() {
+        return None;
+    }
+    let is_anthropic = api_format.is_empty()
+        || api_format == "anthropic-messages"
+        || api_format == "bedrock-converse-stream";
+    let is_openai = api_format.is_empty()
+        || api_format == "openai-completions"
+        || api_format == "openai-responses";
+    let is_gemini = api_format.is_empty() || api_format == "google-generative-ai";
+
+    let mut map = serde_json::Map::new();
+    if is_anthropic {
+        if id.contains("claude-opus-5-5")
+            || id.contains("claude-opus-5.5")
+            || id.contains("claude-fable-5")
+        {
+            map.insert("off".into(), Value::Null);
+            map.insert("xhigh".into(), Value::String("xhigh".into()));
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, true));
+        }
+        if id.contains("claude-opus-4-7")
+            || id.contains("claude-opus-4.7")
+            || id.contains("claude-opus-4-8")
+            || id.contains("claude-opus-4.8")
+            || id.contains("claude-opus-5")
+            || id.contains("claude-sonnet-5")
+        {
+            map.insert("xhigh".into(), Value::String("xhigh".into()));
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, true));
+        }
+        if id.contains("claude-opus-4-6") || id.contains("claude-opus-4.6") {
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, true));
+        }
+    }
+
+    if is_openai {
+        if id.contains("deepseek-v4") {
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::Null);
+            map.insert("medium".into(), Value::Null);
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, false));
+        }
+        if id.contains("kimi-k3") {
+            map.insert("off".into(), Value::Null);
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::String("low".into()));
+            map.insert("medium".into(), Value::Null);
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::Null);
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, false));
+        }
+        if id.contains("glm-5.2") || id.contains("glm-5-2") {
+            map.insert("off".into(), Value::Null);
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::Null);
+            map.insert("medium".into(), Value::Null);
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::Null);
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, false));
+        }
+        if id.contains("gpt-5.6")
+            || id.contains("gpt-5-6")
+            || id.contains("gpt-6-sol")
+            || id.contains("gpt-6-luna")
+        {
+            map.insert("off".into(), Value::String("none".into()));
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::String("low".into()));
+            map.insert("medium".into(), Value::String("medium".into()));
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::String("xhigh".into()));
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, false));
+        }
+        if id.contains("gpt-6-astra") {
+            map.insert("off".into(), Value::Null);
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::String("low".into()));
+            map.insert("medium".into(), Value::String("medium".into()));
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::String("xhigh".into()));
+            map.insert("max".into(), Value::String("max".into()));
+            return Some((map, false));
+        }
+        if id.contains("gpt-5.2")
+            || id.contains("gpt-5-2")
+            || id.contains("gpt-5.3")
+            || id.contains("gpt-5-3")
+            || id.contains("gpt-5.4")
+            || id.contains("gpt-5-4")
+            || id.contains("gpt-5.5")
+            || id.contains("gpt-5-5")
+        {
+            map.insert("off".into(), Value::String("none".into()));
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::String("low".into()));
+            map.insert("medium".into(), Value::String("medium".into()));
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::String("xhigh".into()));
+            map.insert("max".into(), Value::Null);
+            return Some((map, false));
+        }
+        if id.contains("gpt-5.1") || id.contains("gpt-5-1") {
+            map.insert("off".into(), Value::String("none".into()));
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::String("low".into()));
+            map.insert("medium".into(), Value::String("medium".into()));
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::Null);
+            map.insert("max".into(), Value::Null);
+            return Some((map, false));
+        }
+        if id.contains("gpt-5") && !id.contains("chat") {
+            map.insert("off".into(), Value::Null);
+            map.insert("minimal".into(), Value::String("minimal".into()));
+            map.insert("low".into(), Value::String("low".into()));
+            map.insert("medium".into(), Value::String("medium".into()));
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::Null);
+            map.insert("max".into(), Value::Null);
+            return Some((map, false));
+        }
+        if id == "o3"
+            || id.starts_with("o3-")
+            || id == "o4-mini"
+            || id.starts_with("o4-mini-")
+            || id.contains("grok-4.5")
+            || id.contains("grok-4-5")
+        {
+            map.insert("off".into(), Value::Null);
+            map.insert("minimal".into(), Value::Null);
+            map.insert("low".into(), Value::String("low".into()));
+            map.insert("medium".into(), Value::String("medium".into()));
+            map.insert("high".into(), Value::String("high".into()));
+            map.insert("xhigh".into(), Value::Null);
+            map.insert("max".into(), Value::Null);
+            return Some((map, false));
+        }
+    }
+
+    if is_gemini && (id.contains("gemini-3.1-pro") || id.contains("gemini-3-1-pro")) {
+        map.insert("off".into(), Value::Null);
+        map.insert("minimal".into(), Value::Null);
+        map.insert("low".into(), Value::String("LOW".into()));
+        map.insert("medium".into(), Value::Null);
+        map.insert("high".into(), Value::String("HIGH".into()));
+        return Some((map, false));
+    }
+
+    None
+}
+
 pub(super) struct ExtractedProviderConfig {
     base_url: String,
     api_key: String,
@@ -539,6 +753,7 @@ pub fn open_provider_dialog(
                 inp.set_text_silent(mt_str, cx);
                 inp
             });
+            let thinking_level_inputs = build_pi_thinking_level_inputs(raw_thinking_level_map.as_ref(), cx);
             pi_models.push(crate::pages::PiModelDraft {
                 key: format!("pi_model_{idx}"),
                 id: id_ent,
@@ -548,6 +763,8 @@ pub fn open_provider_dialog(
                 force_adaptive_thinking,
                 raw_compat,
                 raw_thinking_level_map,
+                thinking_level_inputs,
+                is_thinking_map_expanded: false,
                 context_window: cw_ent,
                 max_tokens: mt_ent,
                 is_expanded: false,
@@ -567,6 +784,7 @@ pub fn open_provider_dialog(
             inp.set_text_silent("128000", cx);
             inp
         });
+        let thinking_level_inputs = build_pi_thinking_level_inputs(None, cx);
         pi_models.push(crate::pages::PiModelDraft {
             key: "pi_model_0".to_string(),
             id: id_ent,
@@ -576,6 +794,8 @@ pub fn open_provider_dialog(
             force_adaptive_thinking: false,
             raw_compat: None,
             raw_thinking_level_map: None,
+            thinking_level_inputs,
+            is_thinking_map_expanded: false,
             context_window: cw_ent,
             max_tokens: mt_ent,
             is_expanded: true,
@@ -1170,6 +1390,7 @@ pub fn render_provider_dialog(
                                                         inp.set_text_silent(mt_str, cx);
                                                         inp
                                                     });
+                                                    let thinking_level_inputs = build_pi_thinking_level_inputs(raw_thinking_level_map.as_ref(), cx);
                                                     dialog.pi_models.push(crate::pages::PiModelDraft {
                                                         key: format!("pi_model_{m_i}"),
                                                         id: id_ent,
@@ -1179,6 +1400,8 @@ pub fn render_provider_dialog(
                                                         force_adaptive_thinking,
                                                         raw_compat,
                                                         raw_thinking_level_map,
+                                                        thinking_level_inputs,
+                                                        is_thinking_map_expanded: false,
                                                         context_window: cw_ent,
                                                         max_tokens: mt_ent,
                                                         is_expanded: false,
@@ -2097,9 +2320,18 @@ pub fn render_provider_dialog(
                                                         inp.set_text_silent("128000".to_string(), cx);
                                                         inp
                                                     });
-                                                    let reasoning = fm.id.contains("reasoner") || fm.id.contains("r1") || fm.id.contains("claude") || fm.id.contains("o1") || fm.id.contains("o3");
+                                                    let inferred = infer_pi_thinking_profile(&fm.id, &d.pi_api_format);
+                                                    let reasoning = inferred.is_some()
+                                                        || fm.id.contains("reasoner")
+                                                        || fm.id.contains("r1")
+                                                        || fm.id.contains("claude")
+                                                        || fm.id.contains("o1")
+                                                        || fm.id.contains("o3");
                                                     let is_anthropic = d.pi_api_format == "anthropic-messages" || d.pi_api_format == "bedrock-converse-stream";
-                                                    let force_adaptive_thinking = is_anthropic && (fm.id.contains("opus-5") || fm.id.contains("sonnet-5") || fm.id.contains("haiku-5"));
+                                                    let force_adaptive_thinking = inferred.as_ref().map(|(_, f)| *f).unwrap_or(false)
+                                                        || (is_anthropic && (fm.id.contains("opus-5") || fm.id.contains("sonnet-5") || fm.id.contains("haiku-5")));
+                                                    let raw_thinking_level_map = inferred.map(|(m, _)| m);
+                                                    let thinking_level_inputs = build_pi_thinking_level_inputs(raw_thinking_level_map.as_ref(), cx);
                                                     let key = format!("pi_model_{}", d.pi_models.len());
                                                     d.pi_models.push(crate::pages::PiModelDraft {
                                                         key,
@@ -2111,7 +2343,9 @@ pub fn render_provider_dialog(
                                                         image_input: false,
                                                         force_adaptive_thinking,
                                                         raw_compat: None,
-                                                        raw_thinking_level_map: None,
+                                                        raw_thinking_level_map,
+                                                        thinking_level_inputs,
+                                                        is_thinking_map_expanded: false,
                                                         is_expanded: false,
                                                     });
                                                     added += 1;
@@ -2149,6 +2383,7 @@ pub fn render_provider_dialog(
                                                 inp.set_text_silent("128000", cx);
                                                 inp
                                             });
+                                            let thinking_level_inputs = build_pi_thinking_level_inputs(None, cx);
                                             d.pi_models.push(crate::pages::PiModelDraft {
                                                 key,
                                                 id: id_ent,
@@ -2158,6 +2393,8 @@ pub fn render_provider_dialog(
                                                 force_adaptive_thinking: false,
                                                 raw_compat: None,
                                                 raw_thinking_level_map: None,
+                                                thinking_level_inputs,
+                                                is_thinking_map_expanded: false,
                                                 context_window: cw_ent,
                                                 max_tokens: mt_ent,
                                                 is_expanded: true,
@@ -2365,8 +2602,19 @@ pub fn render_provider_dialog(
                                         cx,
                                         move |ws, _ev, _w, cx| {
                                             if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                let api_fmt = d.pi_api_format.clone();
                                                 if let Some(m) = d.pi_models.get_mut(idx) {
                                                     m.reasoning = !m.reasoning;
+                                                    if m.reasoning && m.raw_thinking_level_map.is_none() {
+                                                        let cur_id = m.id.read(cx).text().trim().to_string();
+                                                        if let Some((inferred_map, adaptive)) = infer_pi_thinking_profile(&cur_id, &api_fmt) {
+                                                            sync_pi_thinking_level_inputs(&m.thinking_level_inputs, Some(&inferred_map), cx);
+                                                            m.raw_thinking_level_map = Some(inferred_map);
+                                                            if adaptive {
+                                                                m.force_adaptive_thinking = true;
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                             cx.notify();
@@ -2464,10 +2712,27 @@ pub fn render_provider_dialog(
                                             cx,
                                             move |ws, _ev, _w, cx| {
                                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                    let api_fmt = d.pi_api_format.clone();
                                                     if let Some(m) = d.pi_models.get_mut(idx) {
                                                         m.force_adaptive_thinking = !m.force_adaptive_thinking;
-                                                        if m.force_adaptive_thinking && !m.reasoning {
-                                                            m.reasoning = true;
+                                                        if m.force_adaptive_thinking {
+                                                            if !m.reasoning {
+                                                                m.reasoning = true;
+                                                            }
+                                                            let is_map_empty = m.raw_thinking_level_map.as_ref().map(|map| map.is_empty()).unwrap_or(true);
+                                                            if is_map_empty {
+                                                                let cur_id = m.id.read(cx).text().trim().to_string();
+                                                                let map = infer_pi_thinking_profile(&cur_id, &api_fmt)
+                                                                    .map(|(inferred, _)| inferred)
+                                                                    .unwrap_or_else(|| {
+                                                                        let mut default_adaptive = serde_json::Map::new();
+                                                                        default_adaptive.insert("xhigh".into(), Value::String("xhigh".into()));
+                                                                        default_adaptive.insert("max".into(), Value::String("max".into()));
+                                                                        default_adaptive
+                                                                    });
+                                                                sync_pi_thinking_level_inputs(&m.thinking_level_inputs, Some(&map), cx);
+                                                                m.raw_thinking_level_map = Some(map);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2476,6 +2741,366 @@ pub fn render_provider_dialog(
                                         )
                                     )
                             );
+                        }
+
+                        // 3.5. Thinking Level Map (思考档位) when Reasoning is enabled
+                        if is_reasoning {
+                            let is_tm_expanded = draft.is_thinking_map_expanded;
+                            let cur_map = draft.raw_thinking_level_map.clone().unwrap_or_default();
+                            let has_custom_levels = !cur_map.is_empty();
+                            let summary_text = if !has_custom_levels {
+                                "跟随 Pi 默认".to_string()
+                            } else {
+                                let mut parts = Vec::new();
+                                for &(lvl, label, _) in PI_THINKING_LEVEL_DEFS {
+                                    let short_lbl = if lvl == "off" { "关闭" } else { label };
+                                    match cur_map.get(lvl) {
+                                        Some(Value::Null) => parts.push(format!("{short_lbl}: 不可用")),
+                                        Some(Value::String(s)) => {
+                                            let input_val = draft
+                                                .thinking_level_inputs
+                                                .iter()
+                                                .find(|(k, _)| k == lvl)
+                                                .map(|(_, ent)| ent.read(cx).text().trim().to_string())
+                                                .filter(|v| !v.is_empty())
+                                                .unwrap_or_else(|| s.clone());
+                                            parts.push(format!("{short_lbl} ➔ {input_val}"));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                if parts.is_empty() {
+                                    "跟随 Pi 默认".to_string()
+                                } else {
+                                    parts.join(" · ")
+                                }
+                            };
+
+                            let mut tm_card = div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.0))
+                                .py(px(6.0))
+                                .px(px(8.0))
+                                .rounded(px(6.0))
+                                .bg(t2.input_bg.opacity(0.35))
+                                .border_1()
+                                .border_color(t2.card_border.opacity(0.5));
+
+                            // Header row
+                            let mut tm_header = div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(1.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(t2.text_primary)
+                                                .child("🎚️ 思考档位 (Thinking Levels)")
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(if has_custom_levels { t2.accent } else { t2.text_muted })
+                                                .truncate()
+                                                .child(summary_text)
+                                        )
+                                );
+
+                            let mut header_actions = div()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.0));
+
+                            // Quick button: Enable XHigh & Max
+                            {
+                                let has_xhigh_and_max = matches!(cur_map.get("xhigh"), Some(Value::String(_)))
+                                    && matches!(cur_map.get("max"), Some(Value::String(_)));
+                                let t_btn = t2.clone();
+                                let t_hover = t2.clone();
+                                header_actions = header_actions.child(
+                                    div()
+                                        .id(gpui::SharedString::from(format!("btn-pi-tm-preset-max-{idx}")))
+                                        .cursor_pointer()
+                                        .px(px(6.0))
+                                        .py(px(2.5))
+                                        .rounded(px(4.0))
+                                        .bg(if has_xhigh_and_max { t_btn.accent.opacity(0.15) } else { t_btn.card_bg })
+                                        .border_1()
+                                        .border_color(if has_xhigh_and_max { t_btn.accent } else { t_btn.card_border })
+                                        .text_size(px(10.5))
+                                        .font_weight(if has_xhigh_and_max { gpui::FontWeight::MEDIUM } else { gpui::FontWeight::NORMAL })
+                                        .text_color(if has_xhigh_and_max { t_btn.accent } else { t_btn.text_secondary })
+                                        .hover(move |s| {
+                                            if has_xhigh_and_max {
+                                                s.bg(t_hover.accent.opacity(0.22))
+                                            } else {
+                                                s.text_color(t_hover.text_primary)
+                                                    .border_color(t_hover.accent.opacity(0.5))
+                                            }
+                                        })
+                                        .child(if has_xhigh_and_max { "✓ 已开启 XHigh & Max" } else { "开启 XHigh & Max" })
+                                        .on_click(cx.listener(move |ws, _ev, _w, cx| {
+                                            if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                if let Some(m) = d.pi_models.get_mut(idx) {
+                                                    let mut map = m.raw_thinking_level_map.take().unwrap_or_default();
+                                                    let already_on = matches!(map.get("xhigh"), Some(Value::String(_)))
+                                                        && matches!(map.get("max"), Some(Value::String(_)));
+                                                    if already_on {
+                                                        map.remove("xhigh");
+                                                        map.remove("max");
+                                                        sync_pi_thinking_level_inputs(&m.thinking_level_inputs, Some(&map), cx);
+                                                        m.raw_thinking_level_map = if map.is_empty() { None } else { Some(map) };
+                                                    } else {
+                                                        map.insert("xhigh".into(), Value::String("xhigh".into()));
+                                                        map.insert("max".into(), Value::String("max".into()));
+                                                        sync_pi_thinking_level_inputs(&m.thinking_level_inputs, Some(&map), cx);
+                                                        m.raw_thinking_level_map = Some(map);
+                                                        m.is_thinking_map_expanded = true;
+                                                    }
+                                                }
+                                            }
+                                            cx.notify();
+                                        }))
+                                );
+                            }
+
+                            if has_custom_levels {
+                                let t_btn = t2.clone();
+                                header_actions = header_actions.child(
+                                    div()
+                                        .id(gpui::SharedString::from(format!("btn-pi-tm-reset-{idx}")))
+                                        .cursor_pointer()
+                                        .px(px(6.0))
+                                        .py(px(2.5))
+                                        .rounded(px(4.0))
+                                        .bg(t_btn.card_bg)
+                                        .border_1()
+                                        .border_color(t_btn.card_border)
+                                        .text_size(px(10.5))
+                                        .text_color(t_btn.text_secondary)
+                                        .hover(move |s| s.text_color(t_btn.text_primary))
+                                        .child("重置默认")
+                                        .on_click(cx.listener(move |ws, _ev, _w, cx| {
+                                            if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                if let Some(m) = d.pi_models.get_mut(idx) {
+                                                    m.raw_thinking_level_map = None;
+                                                    sync_pi_thinking_level_inputs(&m.thinking_level_inputs, None, cx);
+                                                }
+                                            }
+                                            cx.notify();
+                                        }))
+                                );
+                            }
+
+                            header_actions = header_actions.child(crate::components::icon_button_svg(
+                                format!("btn-expand-pi-tm-{idx}"),
+                                if is_tm_expanded { crate::icons::CHEVRON_DOWN_SVG } else { crate::icons::CHEVRON_RIGHT_SVG },
+                                if is_tm_expanded { "收起思考档位" } else { "展开配置思考档位" },
+                                false,
+                                &t2,
+                                cx,
+                                move |ws, _ev, _w, cx| {
+                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                        if let Some(m) = d.pi_models.get_mut(idx) {
+                                            m.is_thinking_map_expanded = !m.is_thinking_map_expanded;
+                                        }
+                                    }
+                                    cx.notify();
+                                },
+                            ));
+
+                            tm_header = tm_header.child(header_actions);
+                            tm_card = tm_card.child(tm_header);
+
+                            if is_tm_expanded {
+                                let mut levels_list = div()
+                                    .pt(px(4.0))
+                                    .border_t_1()
+                                    .border_color(t2.card_border.opacity(0.4))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(5.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(10.5))
+                                            .text_color(t2.text_muted)
+                                            .child("配置 Pi 各思考档位向上游传递的参数值（如开启 xhigh / max），或将模型不支持的档位设为不可用。")
+                                    );
+
+                                for &(lvl, label, default_val) in PI_THINKING_LEVEL_DEFS {
+                                    let entry_opt = cur_map.get(lvl);
+                                    let mode = match entry_opt {
+                                        None => 0u8, // Follow Pi default
+                                        Some(Value::String(_)) => 1u8, // Mapped to value
+                                        Some(Value::Null) => 2u8, // Unsupported
+                                        _ => 0u8,
+                                    };
+                                    let lvl_input_ent = draft
+                                        .thinking_level_inputs
+                                        .iter()
+                                        .find(|(k, _)| k == lvl)
+                                        .map(|(_, e)| e.clone());
+
+                                    let mut lvl_row = div()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .gap(px(6.0))
+                                        .py(px(2.0))
+                                        .px(px(4.0))
+                                        .rounded(px(4.0))
+                                        .bg(t2.card_bg.opacity(0.6))
+                                        .child(
+                                            div()
+                                                .w(px(74.0))
+                                                .text_size(px(11.0))
+                                                .font_weight(gpui::FontWeight::MEDIUM)
+                                                .text_color(t2.text_primary)
+                                                .child(label)
+                                        );
+
+                                    let mut right_controls = div()
+                                        .flex_1()
+                                        .flex()
+                                        .items_center()
+                                        .justify_end()
+                                        .gap(px(4.0));
+
+                                    // Mode 0: Pi 默认
+                                    {
+                                        let is_sel = mode == 0;
+                                        let t_m = t2.clone();
+                                        let lvl_str = lvl.to_string();
+                                        right_controls = right_controls.child(
+                                            div()
+                                                .id(gpui::SharedString::from(format!("btn-pi-tm-{idx}-{lvl}-default")))
+                                                .cursor_pointer()
+                                                .px(px(6.0))
+                                                .py(px(2.0))
+                                                .rounded(px(4.0))
+                                                .border_1()
+                                                .border_color(if is_sel { t_m.accent } else { t_m.card_border })
+                                                .bg(if is_sel { t_m.accent.opacity(0.15) } else { t_m.input_bg.opacity(0.4) })
+                                                .text_size(px(10.5))
+                                                .text_color(if is_sel { t_m.accent } else { t_m.text_secondary })
+                                                .child("Pi 默认")
+                                                .on_click(cx.listener(move |ws, _ev, _w, cx| {
+                                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                        if let Some(m) = d.pi_models.get_mut(idx) {
+                                                            if let Some(map) = m.raw_thinking_level_map.as_mut() {
+                                                                map.remove(&lvl_str);
+                                                                if map.is_empty() {
+                                                                    m.raw_thinking_level_map = None;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                        );
+                                    }
+
+                                    // Mode 1: 映射为
+                                    {
+                                        let is_sel = mode == 1;
+                                        let t_m = t2.clone();
+                                        let lvl_str = lvl.to_string();
+                                        let def_str = default_val.to_string();
+                                        right_controls = right_controls.child(
+                                            div()
+                                                .id(gpui::SharedString::from(format!("btn-pi-tm-{idx}-{lvl}-value")))
+                                                .cursor_pointer()
+                                                .px(px(6.0))
+                                                .py(px(2.0))
+                                                .rounded(px(4.0))
+                                                .border_1()
+                                                .border_color(if is_sel { t_m.accent } else { t_m.card_border })
+                                                .bg(if is_sel { t_m.accent.opacity(0.15) } else { t_m.input_bg.opacity(0.4) })
+                                                .text_size(px(10.5))
+                                                .text_color(if is_sel { t_m.accent } else { t_m.text_secondary })
+                                                .child("映射为")
+                                                .on_click(cx.listener(move |ws, _ev, _w, cx| {
+                                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                        if let Some(m) = d.pi_models.get_mut(idx) {
+                                                            let cur_txt = m
+                                                                .thinking_level_inputs
+                                                                .iter()
+                                                                .find(|(k, _)| k == &lvl_str)
+                                                                .map(|(_, ent)| ent.read(cx).text().trim().to_string())
+                                                                .filter(|s| !s.is_empty())
+                                                                .unwrap_or_else(|| def_str.clone());
+                                                            if let Some((_, ent)) = m.thinking_level_inputs.iter().find(|(k, _)| k == &lvl_str) {
+                                                                ent.update(cx, |inp, cx| inp.set_text_silent(cur_txt.clone(), cx));
+                                                            }
+                                                            let mut map = m.raw_thinking_level_map.take().unwrap_or_default();
+                                                            map.insert(lvl_str.clone(), Value::String(cur_txt));
+                                                            m.raw_thinking_level_map = Some(map);
+                                                        }
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                        );
+                                    }
+
+                                    // Mode 2: 不可用
+                                    {
+                                        let is_sel = mode == 2;
+                                        let t_m = t2.clone();
+                                        let lvl_str = lvl.to_string();
+                                        right_controls = right_controls.child(
+                                            div()
+                                                .id(gpui::SharedString::from(format!("btn-pi-tm-{idx}-{lvl}-null")))
+                                                .cursor_pointer()
+                                                .px(px(6.0))
+                                                .py(px(2.0))
+                                                .rounded(px(4.0))
+                                                .border_1()
+                                                .border_color(if is_sel { t_m.accent } else { t_m.card_border })
+                                                .bg(if is_sel { t_m.accent.opacity(0.15) } else { t_m.input_bg.opacity(0.4) })
+                                                .text_size(px(10.5))
+                                                .text_color(if is_sel { t_m.accent } else { t_m.text_secondary })
+                                                .child("不可用")
+                                                .on_click(cx.listener(move |ws, _ev, _w, cx| {
+                                                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                                        if let Some(m) = d.pi_models.get_mut(idx) {
+                                                            let mut map = m.raw_thinking_level_map.take().unwrap_or_default();
+                                                            map.insert(lvl_str.clone(), Value::Null);
+                                                            m.raw_thinking_level_map = Some(map);
+                                                        }
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                        );
+                                    }
+
+                                    if mode == 1 {
+                                        if let Some(inp_ent) = lvl_input_ent {
+                                            right_controls = right_controls.child(
+                                                div()
+                                                    .w(px(96.0))
+                                                    .child(input_container(&t2, inp_ent))
+                                            );
+                                        }
+                                    }
+
+                                    lvl_row = lvl_row.child(right_controls);
+                                    levels_list = levels_list.child(lvl_row);
+                                }
+
+                                tm_card = tm_card.child(levels_list);
+                            }
+
+                            exp_panel = exp_panel.child(tm_card);
                         }
 
                         // 4. Numeric parameters row (Context Window & Max Tokens)
@@ -4640,28 +5265,38 @@ pub(super) fn save_provider(
             if let Ok(mt_num) = mt.parse::<u64>() {
                 m_obj.insert("maxTokens".into(), Value::Number(mt_num.into()));
             }
+            let mut resolved_thinking_map = draft.raw_thinking_level_map.clone().unwrap_or_default();
+            for &(lvl, _label, default_val) in PI_THINKING_LEVEL_DEFS {
+                if matches!(resolved_thinking_map.get(lvl), Some(Value::String(_))) {
+                    if let Some((_, ent)) = draft.thinking_level_inputs.iter().find(|(k, _)| k == lvl) {
+                        let txt = ent.update(cx, |inp, _| inp.text().trim().to_string());
+                        let final_val = if txt.is_empty() { default_val.to_string() } else { txt };
+                        resolved_thinking_map.insert(lvl.to_string(), Value::String(final_val));
+                    }
+                }
+            }
+
             if draft.force_adaptive_thinking {
                 let mut compat_obj = draft.raw_compat.clone().unwrap_or_default();
                 compat_obj.insert("forceAdaptiveThinking".into(), Value::Bool(true));
                 compat_obj.insert("supportsTemperature".into(), Value::Bool(false));
                 m_obj.insert("compat".into(), Value::Object(compat_obj));
 
-                let mut map_obj = draft.raw_thinking_level_map.clone().unwrap_or_default();
-                if map_obj.is_empty() {
-                    map_obj.insert("xhigh".into(), Value::String("xhigh".into()));
-                    map_obj.insert("max".into(), Value::String("max".into()));
-                    map_obj.insert("minimal".into(), Value::String("low".into()));
+                if resolved_thinking_map.is_empty() {
+                    resolved_thinking_map.insert("xhigh".into(), Value::String("xhigh".into()));
+                    resolved_thinking_map.insert("max".into(), Value::String("max".into()));
+                    resolved_thinking_map.insert("minimal".into(), Value::String("low".into()));
                 }
-                m_obj.insert("thinkingLevelMap".into(), Value::Object(map_obj));
-            } else if let Some(mut compat_obj) = draft.raw_compat.clone() {
-                compat_obj.remove("forceAdaptiveThinking");
-                if !compat_obj.is_empty() {
-                    m_obj.insert("compat".into(), Value::Object(compat_obj));
-                }
-                if let Some(map_obj) = draft.raw_thinking_level_map.clone() {
-                    if !map_obj.is_empty() {
-                        m_obj.insert("thinkingLevelMap".into(), Value::Object(map_obj));
+                m_obj.insert("thinkingLevelMap".into(), Value::Object(resolved_thinking_map));
+            } else {
+                if let Some(mut compat_obj) = draft.raw_compat.clone() {
+                    compat_obj.remove("forceAdaptiveThinking");
+                    if !compat_obj.is_empty() {
+                        m_obj.insert("compat".into(), Value::Object(compat_obj));
                     }
+                }
+                if draft.reasoning && !resolved_thinking_map.is_empty() {
+                    m_obj.insert("thinkingLevelMap".into(), Value::Object(resolved_thinking_map));
                 }
             }
             pi_models_json.push(Value::Object(m_obj));

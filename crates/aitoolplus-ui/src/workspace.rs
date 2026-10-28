@@ -1186,11 +1186,28 @@ impl Workspace {
             dialog.subagent_model.update(cx, |inp, cx| inp.set_text(selected_id, cx));
         } else if let Some(idx_str) = target_id.strip_prefix("pi_") {
             if let Ok(idx) = idx_str.parse::<usize>() {
+                let api_fmt = dialog.pi_api_format.clone();
                 if let Some(pi_m) = dialog.pi_models.get_mut(idx) {
                     pi_m.id.update(cx, |inp, cx| inp.set_text(selected_id, cx));
                     pi_m.name.update(cx, |inp, cx| inp.set_text(new_disp_name, cx));
                     if let Some(cl) = matched_cl {
                         pi_m.context_window.update(cx, |inp, cx| inp.set_text(cl.to_string(), cx));
+                    }
+                    if let Some((inferred_map, adaptive)) =
+                        crate::pages::tool_page::infer_pi_thinking_profile(&selected_id, &api_fmt)
+                    {
+                        pi_m.reasoning = true;
+                        if adaptive {
+                            pi_m.force_adaptive_thinking = true;
+                        }
+                        if pi_m.raw_thinking_level_map.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+                            crate::pages::tool_page::sync_pi_thinking_level_inputs(
+                                &pi_m.thinking_level_inputs,
+                                Some(&inferred_map),
+                                cx,
+                            );
+                            pi_m.raw_thinking_level_map = Some(inferred_map);
+                        }
                     }
                 }
             }
