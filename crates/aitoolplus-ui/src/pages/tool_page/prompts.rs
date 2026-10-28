@@ -992,6 +992,25 @@ mod tests {
     }
 
     #[test]
+    fn test_pi_thinking_profile_inference() {
+        use crate::pages::tool_page::infer_pi_thinking_profile;
+
+        let (opus_map, opus_adaptive) =
+            infer_pi_thinking_profile("claude-opus-5-5", "anthropic-messages").expect("opus 5.5 profile");
+        assert!(opus_adaptive);
+        assert_eq!(opus_map.get("off"), Some(&Value::Null));
+        assert_eq!(opus_map.get("xhigh"), Some(&Value::String("xhigh".into())));
+        assert_eq!(opus_map.get("max"), Some(&Value::String("max".into())));
+
+        let (ds_map, ds_adaptive) =
+            infer_pi_thinking_profile("deepseek-v4", "openai-completions").expect("deepseek-v4 profile");
+        assert!(!ds_adaptive);
+        assert_eq!(ds_map.get("minimal"), Some(&Value::Null));
+        assert_eq!(ds_map.get("high"), Some(&Value::String("high".into())));
+        assert_eq!(ds_map.get("max"), Some(&Value::String("max".into())));
+    }
+
+    #[test]
     fn test_codex_provider_settings_building() {
         let catalog = vec![
             serde_json::json!({

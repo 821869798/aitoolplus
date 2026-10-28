@@ -576,6 +576,8 @@ pub struct PiModelDraft {
     pub force_adaptive_thinking: bool,
     pub raw_compat: Option<serde_json::Map<String, serde_json::Value>>,
     pub raw_thinking_level_map: Option<serde_json::Map<String, serde_json::Value>>,
+    pub thinking_level_inputs: Vec<(String, gpui::Entity<TextInput>)>,
+    pub is_thinking_map_expanded: bool,
     pub context_window: gpui::Entity<TextInput>,
     pub max_tokens: gpui::Entity<TextInput>,
     pub is_expanded: bool,

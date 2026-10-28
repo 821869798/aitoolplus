@@ -18,7 +18,7 @@ mod sessions;
 
 pub use prompts::{open_prompt_dialog, render_prompt_dialog};
 pub use provider_dialog::{
-    fetch_upstream_models_for_dialog, open_provider_dialog, render_provider_dialog,
+    fetch_upstream_models_for_dialog, infer_pi_thinking_profile, open_provider_dialog, render_provider_dialog, sync_pi_thinking_level_inputs,
 };
 pub use runtime::render_runtime_edit_dialog;
 pub use sessions::load_agent_sessions;
