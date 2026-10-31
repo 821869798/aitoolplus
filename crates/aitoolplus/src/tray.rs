@@ -300,7 +300,7 @@ fn pretty_tool_name(tool: &str) -> &'static str {
     const NAMES: [(&str, &str); 12] = [
         ("claude_code", "Claude Code"),
         ("codex", "Codex"),
-        ("gemini_cli", "Gemini CLI"),
+        ("gemini_cli", "Antigravity"),
         ("grok", "Grok"),
         ("kimi", "Kimi"),
         ("opencode", "OpenCode"),

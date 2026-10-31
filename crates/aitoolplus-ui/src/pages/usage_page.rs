@@ -18,19 +18,6 @@ pub fn render_usage_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
         ws.refresh_usage_data(cx);
     }
 
-    // Auto-scan local sessions on enter if enabled
-    // Wait until the first read has landed. Starting the scan in the same
-    // frame writes usage.db while that read is still open.
-    if ws.settings.usage_auto_scan_sessions
-        && !ws.ui.usage_has_auto_scanned
-        && !ws.ui.usage_syncing
-        && !ws.ui.usage_refreshing
-        && ws.ui.usage_summary.is_some()
-    {
-        ws.ui.usage_has_auto_scanned = true;
-        ws.trigger_session_sync(cx, false);
-    }
-
     let header = render_top_header(ws, cx);
     let hero = render_usage_hero(ws, cx);
     let chart = render_trend_chart(ws, cx);
@@ -65,11 +52,11 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    // App Filter icons: All (Grid), Claude, Codex, Gemini, Grok, OpenCode, Pi
+    // App Filter icons: All (Grid), Claude, Codex, Antigravity, Grok, OpenCode, Pi
     let current_app: &'static str = match ws.ui.usage_app_filter.as_deref() {
         Some("claude") => "claude",
         Some("codex") => "codex",
-        Some("gemini") => "gemini",
+        Some("agy") | Some("antigravity") => "agy",
         Some("grok") => "grok",
         Some("opencode") => "opencode",
         Some("pi") => "pi",
@@ -80,7 +67,7 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
         ("all", crate::icons::LAYOUT_GRID_SVG, "全部应用", "All Apps"),
         ("claude", crate::icons::CLAUDE_SVG, "Claude", "Claude"),
         ("codex", crate::icons::OPENAI_SVG, "Codex", "Codex"),
-        ("gemini", crate::icons::GEMINI_SVG, "Gemini", "Gemini"),
+        ("agy", crate::icons::GEMINI_SVG, "Antigravity", "Antigravity"),
         ("grok", crate::icons::GROK_SVG, "Grok", "Grok"),
         ("opencode", crate::icons::OPENCODE_SVG, "OpenCode", "OpenCode"),
         ("pi", crate::icons::PI_SVG, "Pi", "Pi"),
@@ -2029,7 +2016,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
     let apps = [
         ("claude", "Claude Code", crate::icons::CLAUDE_SVG, crate::rgba_const(0xd97757ff)),
         ("codex", "Codex", crate::icons::OPENAI_SVG, crate::rgba_const(0x10a37fff)),
-        ("gemini", "Gemini", crate::icons::GEMINI_SVG, crate::rgba_const(0x3186ffff)),
+        ("agy", "Antigravity", crate::icons::GEMINI_SVG, crate::rgba_const(0x3186ffff)),
         ("grok", "Grok", crate::icons::GROK_SVG, crate::rgba_const(0xf43f5eff)),
     ];
 
@@ -2071,7 +2058,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 Some(d) => d,
                 None => return,
             };
-            let apps = ["claude", "codex", "gemini", "grok"];
+            let apps = ["claude", "codex", "agy", "grok"];
             let mut valid = true;
             for app in &apps {
                 let mult_str = ws.ui.usage_app_pricing_inputs.get(*app)

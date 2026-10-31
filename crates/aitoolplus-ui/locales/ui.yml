@@ -1139,7 +1139,7 @@ settings_advanced:
     zh-CN: 已排除
     en: Excluded
   include_runtime_configs_prompt:
-    zh-CN: 包含 Claude Code、Codex、Gemini CLI、Pi 等工具的配置文件与 MCP 设置
+    zh-CN: 包含 Claude Code、Codex、Antigravity、Pi 等工具的配置文件与 MCP 设置
     en: Include runtime configs, prompts, and MCP settings for CLI tools
   include_cli_config_files:
     zh-CN: 包含各 CLI 运行时配置文件
@@ -1601,9 +1601,9 @@ settings_import:
     en: • Seamlessly migrates CC-Switch historical request logs, token analytics,
       and model pricing
   supports_importing_provider_co:
-    zh-CN: • 支持一键导入 Claude Code、Codex、Pi、OpenCode、Gemini CLI 等所有工具的供应商配置
+    zh-CN: • 支持一键导入 Claude Code、Codex、Pi、OpenCode、Antigravity 等所有工具的供应商配置
     en: • Supports importing provider configurations for Claude Code, Codex, Pi, OpenCode,
-      Gemini CLI, etc.
+      Antigravity, etc.
   database_file:
     zh-CN: 数据库文件：
     en: 'Database file: '
