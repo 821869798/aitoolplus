@@ -204,11 +204,6 @@ impl UsageDb {
         instance.init_tables()?;
         instance.ensure_default_pricing()?;
 
-        let cc_switch_db = paths.home.join(".cc-switch").join("cc-switch.db");
-        if cc_switch_db.is_file() {
-            let _ = instance.import_from_cc_switch(&cc_switch_db);
-        }
-
         Ok(instance)
     }
 
@@ -357,6 +352,12 @@ impl UsageDb {
             ("o3-mini", "OpenAI o3 Mini", "1.10", "4.40", "0.55", "0"),
             ("gemini-2.0-flash", "Gemini 2.0 Flash", "0.10", "0.40", "0.025", "0"),
             ("gemini-2.0-pro-exp", "Gemini 2.0 Pro", "1.25", "5.0", "0.3125", "0"),
+            ("gemini-3.8-flash", "Gemini 3.8 Flash", "0.75", "3.75", "0.075", "0"),
+            ("gemini-4-argon", "Gemini 4 Argon", "2.00", "10.00", "0.10", "0"),
+            ("claude-sonnet-5-5", "Claude Sonnet 5.5", "2.0", "10.0", "0.10", "2.50"),
+            ("claude-sonnet-5.5", "Claude Sonnet 5.5", "2.0", "10.0", "0.10", "2.50"),
+            ("claude-opus-5-5", "Claude Opus 5.5", "4.0", "20.0", "0.20", "5.0"),
+            ("claude-opus-5.5", "Claude Opus 5.5", "4.0", "20.0", "0.20", "5.0"),
             ("deepseek-chat", "DeepSeek V3", "0.14", "0.28", "0.014", "0"),
             ("deepseek-reasoner", "DeepSeek R1", "0.55", "2.19", "0.14", "0"),
             ("grok-2", "Grok 2", "2.0", "10.0", "0", "0"),
@@ -380,7 +381,7 @@ impl UsageDb {
         let app_seeds = [
             ("claude", "1.0", "response"),
             ("codex", "1.0", "response"),
-            ("gemini", "1.0", "response"),
+            ("agy", "1.0", "response"),
             ("grok", "1.0", "response"),
         ];
         if let Ok(mut app_stmt) = conn.prepare(
@@ -400,6 +401,7 @@ impl UsageDb {
             return Err(format!("CC-Switch 数据库不存在: {}", cc_switch_db_path.display()));
         }
 
+        let mtime_stamp = Self::cc_switch_db_mtime(cc_switch_db_path);
         let conn = self.connect()?;
         let attach_path = cc_switch_db_path.to_string_lossy().replace('\\', "/");
 
@@ -427,14 +429,63 @@ impl UsageDb {
             )
             .unwrap_or(0);
 
-        let _ = conn.execute("INSERT OR REPLACE INTO main.session_log_sync SELECT * FROM src.session_log_sync;", []);
+        // Use INSERT OR IGNORE so CC-Switch's 10-digit second cursors never overwrite
+        // aitoolplus's 13-digit millisecond cursors and trigger full session re-scans.
+        let _ = conn.execute("INSERT OR IGNORE INTO main.session_log_sync SELECT * FROM src.session_log_sync;", []);
         let _ = conn.execute("DETACH DATABASE src;", []);
+
+        if mtime_stamp > 0 {
+            if let Ok(mut guard) = Self::cc_switch_mtime_cache().lock() {
+                guard.insert(cc_switch_db_path.to_path_buf(), mtime_stamp);
+            }
+        }
 
         Ok(CcSwitchUsageImportReport {
             logs_imported: logs_count,
             pricing_imported: pricing_count,
             rollups_imported: rollups_count,
         })
+    }
+
+    /// Incrementally import from CC-Switch database only if its file (or WAL) mtime has changed
+    /// since the last import in this process.
+    pub fn import_from_cc_switch_if_changed(
+        &self,
+        cc_switch_db_path: &Path,
+    ) -> Result<Option<CcSwitchUsageImportReport>, String> {
+        if !cc_switch_db_path.is_file() {
+            return Ok(None);
+        }
+        let current_mtime = Self::cc_switch_db_mtime(cc_switch_db_path);
+        if current_mtime > 0 {
+            if let Ok(guard) = Self::cc_switch_mtime_cache().lock() {
+                if guard.get(cc_switch_db_path).copied() == Some(current_mtime) {
+                    return Ok(None);
+                }
+            }
+        }
+        self.import_from_cc_switch(cc_switch_db_path).map(Some)
+    }
+
+    fn cc_switch_mtime_cache() -> &'static std::sync::Mutex<HashMap<PathBuf, u128>> {
+        static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<PathBuf, u128>>> =
+            std::sync::OnceLock::new();
+        CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+    }
+
+    fn cc_switch_db_mtime(cc_switch_db_path: &Path) -> u128 {
+        let file_mtime = |p: &Path| -> u128 {
+            p.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        };
+        let main_mtime = file_mtime(cc_switch_db_path);
+        let wal_path = PathBuf::from(format!("{}-wal", cc_switch_db_path.display()));
+        let wal_mtime = file_mtime(&wal_path);
+        main_mtime.max(wal_mtime)
     }
 
     // -----------------------------------------------------------------------
@@ -937,6 +988,7 @@ impl UsageDb {
             let readable_name = match provider_id.as_str() {
                 "_session" => "Claude (Session)".to_string(),
                 "_codex_session" => "Codex (Session)".to_string(),
+                "_agy_session" | "_antigravity_session" => "Antigravity (Session)".to_string(),
                 "_gemini_session" => "Gemini (Session)".to_string(),
                 "_grok_session" => "Grok Build (Session)".to_string(),
                 "_opencode_session" => "OpenCode (Session)".to_string(),
@@ -1128,6 +1180,7 @@ impl UsageDb {
             let readable_name = match provider_id.as_str() {
                 "_session" => "Claude (Session)".to_string(),
                 "_codex_session" => "Codex (Session)".to_string(),
+                "_agy_session" | "_antigravity_session" => "Antigravity (Session)".to_string(),
                 "_gemini_session" => "Gemini (Session)".to_string(),
                 "_grok_session" => "Grok Build (Session)".to_string(),
                 "_opencode_session" => "OpenCode (Session)".to_string(),
@@ -1258,7 +1311,7 @@ impl UsageDb {
         }
         // Ensure core apps are present
         let existing: std::collections::HashSet<String> = list.iter().map(|c| c.app_type.clone()).collect();
-        for expected in ["claude", "codex", "gemini", "grok"] {
+        for expected in ["claude", "codex", "agy", "grok"] {
             if !existing.contains(expected) {
                 list.push(AppPricingConfig {
                     app_type: expected.to_string(),
@@ -1335,6 +1388,8 @@ impl UsageDb {
             }
         }
 
+        let mut in_transaction = false;
+
         let mut sync_file = |p: &Path, ingest_fn: &dyn Fn(&Connection, &Path, &dyn Fn(&str, u32, u32, u32, u32) -> String, &mut SessionSyncResult)| {
             report.files_scanned += 1;
             let mtime = p.metadata()
@@ -1343,10 +1398,17 @@ impl UsageDb {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
+            let mtime_secs = mtime / 1000;
             let path_str = p.to_string_lossy().to_string();
             if let Some(&last_mod) = cursors.get(&path_str) {
-                if last_mod == mtime && mtime > 0 {
+                // Match both 13-digit millisecond cursors and 10-digit second cursors imported from cc-switch
+                if mtime > 0 && (last_mod == mtime || (mtime_secs > 0 && last_mod == mtime_secs)) {
                     return;
+                }
+            }
+            if !in_transaction {
+                if conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;").is_ok() {
+                    in_transaction = true;
                 }
             }
             ingest_fn(&conn, p, &calc_cost, &mut report);
@@ -1414,16 +1476,30 @@ impl UsageDb {
             }
         }
 
-        // 4. Gemini CLI (~/.gemini/tmp/*/chats/session-*.json)
-        let gemini_tmp = paths.home.join(".gemini").join("tmp");
-        if gemini_tmp.is_dir() {
-            let mut gemini_files = Vec::new();
-            Self::collect_files_recursive(&gemini_tmp, "json", 0, 4, &mut gemini_files);
-            for p in gemini_files {
-                if p.file_name().map_or(false, |n| n.to_string_lossy().starts_with("session-")) {
-                    sync_file(&p, &Self::ingest_gemini_json);
+        // 4. Antigravity (~/.gemini/{antigravity-cli,antigravity-ide,antigravity}/brain/*/.system_generated/logs/transcript.jsonl)
+        let default_agy_model = Self::read_default_agy_model(&paths.home);
+        for sub in ["antigravity-cli", "antigravity-ide", "antigravity"] {
+            let brain_dir = paths.home.join(".gemini").join(sub).join("brain");
+            if brain_dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(&brain_dir) {
+                    for entry in entries.flatten() {
+                        let transcript = entry
+                            .path()
+                            .join(".system_generated")
+                            .join("logs")
+                            .join("transcript.jsonl");
+                        if transcript.is_file() {
+                            sync_file(&transcript, &|conn, p, calc_cost, report| {
+                                Self::ingest_antigravity_jsonl(conn, p, &default_agy_model, calc_cost, report);
+                            });
+                        }
+                    }
                 }
             }
+        }
+
+        if in_transaction {
+            let _ = conn.execute_batch("COMMIT;");
         }
 
         Ok(report)
@@ -1445,65 +1521,144 @@ impl UsageDb {
         }
     }
 
-    fn ingest_gemini_json(
+    fn read_default_agy_model(home: &Path) -> String {
+        for sub in ["antigravity-cli", "antigravity-ide", "antigravity"] {
+            let settings_path = home.join(".gemini").join(sub).join("settings.json");
+            if let Ok(content) = fs::read_to_string(&settings_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(m) = val.get("model").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                        return m.trim().to_string();
+                    }
+                }
+            }
+        }
+        "Gemini 4 Argon (Medium)".to_string()
+    }
+
+    fn normalize_agy_model_slug(display_model: &str) -> String {
+        display_model
+            .trim()
+            .to_lowercase()
+            .replace(['(', ')'], "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("-")
+    }
+
+    fn ingest_antigravity_jsonl(
         conn: &Connection,
         path: &Path,
+        default_display_model: &str,
         calc_cost: &dyn Fn(&str, u32, u32, u32, u32) -> String,
         report: &mut SessionSyncResult,
     ) {
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
+        let file = match fs::File::open(path) {
+            Ok(f) => f,
             Err(_) => return,
         };
-        let val: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => return,
-        };
+        let reader = std::io::BufReader::new(file);
 
-        if let Some(messages) = val.get("messages").and_then(|m| m.as_array()) {
-            for msg in messages {
-                if let Some(tokens) = msg.get("tokens") {
-                    let inp = tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let out = tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let cr = tokens.get("cached").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let thoughts = tokens.get("thoughts").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let total_out = out.saturating_add(thoughts);
+        // Extract <conversation_id> from .../brain/<cid>/.system_generated/logs/transcript.jsonl
+        let cid = path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
-                    if inp == 0 && total_out == 0 && cr == 0 {
-                        continue;
-                    }
+        let mut current_request_model = default_display_model.to_string();
+        let mut current_model_slug = Self::normalize_agy_model_slug(&current_request_model);
 
-                    let model = msg.get("model").and_then(|v| v.as_str()).unwrap_or("gemini-2.5-pro");
-                    let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    let req_id = if !msg_id.is_empty() {
-                        format!("gemini:{msg_id}")
-                    } else {
-                        format!("gemini:{:x}", md5_hash(&serde_json::to_string(msg).unwrap_or_default()))
-                    };
+        for line_res in reader.lines() {
+            let line = match line_res {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            if line.is_empty() {
+                continue;
+            }
 
-                    let created_at = msg.get("timestamp")
-                        .and_then(|v| v.as_str())
-                        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-                        .map(|dt| dt.timestamp())
-                        .unwrap_or_else(|| Local::now().timestamp());
+            let has_model_change = line.contains("Model Selection");
+            let has_tokens = line.contains("\"input_tokens\"") || line.contains("\"output_tokens\"");
+            if !has_model_change && !has_tokens {
+                continue;
+            }
 
-                    let total_cost = calc_cost(model, inp, total_out, cr, 0);
+            let val: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
 
-                    let inserted = conn.execute(
-                        "INSERT OR IGNORE INTO proxy_request_logs (
-                            request_id, provider_id, app_type, model, input_tokens, output_tokens,
-                            cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
-                            status_code, created_at, data_source
-                        ) VALUES (?1, '_gemini_session', 'gemini', ?2, ?3, ?4, ?5, 0, ?6, 0, 200, ?7, 'gemini_session')",
-                        params![req_id, model, inp, total_out, cr, total_cost, created_at],
-                    );
-
-                    if let Ok(n) = inserted {
-                        if n > 0 {
-                            report.imported += 1;
-                        } else {
-                            report.skipped += 1;
+            if has_model_change {
+                if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
+                    if let Some(idx) = content.find("Model Selection` from ") {
+                        let after = &content[idx + "Model Selection` from ".len()..];
+                        if let Some(to_idx) = after.find(" to ") {
+                            let rest = &after[to_idx + 4..];
+                            let new_model = rest
+                                .split(". No need to comment")
+                                .next()
+                                .unwrap_or(rest)
+                                .trim_end_matches('.')
+                                .trim();
+                            if !new_model.is_empty() {
+                                current_request_model = new_model.to_string();
+                                current_model_slug = Self::normalize_agy_model_slug(&current_request_model);
+                            }
                         }
+                    }
+                }
+            }
+
+            if has_tokens {
+                let inp = val.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let out = val.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let cr = val.get("cache_read_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                if inp == 0 && out == 0 && cr == 0 {
+                    continue;
+                }
+
+                let step_idx = val.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0);
+                let req_id = if step_idx > 0 {
+                    format!("agy:{cid}:{step_idx}")
+                } else {
+                    format!("agy:{cid}:{:x}", md5_hash(&line))
+                };
+
+                let created_at = val
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                    .map(|dt| dt.timestamp())
+                    .unwrap_or_else(|| Local::now().timestamp());
+
+                let total_cost = calc_cost(&current_model_slug, inp, out, cr, 0);
+
+                let inserted = conn.execute(
+                    "INSERT OR IGNORE INTO proxy_request_logs (
+                        request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
+                        status_code, session_id, provider_type, is_streaming, cost_multiplier, created_at, data_source
+                    ) VALUES (?1, '_agy_session', 'agy', ?2, ?3, ?4, ?5, ?6, 0, ?7, 0, 200, ?8, 'agy_session', 1, '1.0', ?9, 'agy_session')",
+                    params![
+                        req_id,
+                        current_model_slug,
+                        current_request_model,
+                        inp,
+                        out,
+                        cr,
+                        total_cost,
+                        cid,
+                        created_at
+                    ],
+                );
+
+                if let Ok(n) = inserted {
+                    if n > 0 {
+                        report.imported += 1;
+                    } else {
+                        report.skipped += 1;
                     }
                 }
             }
@@ -1891,24 +2046,22 @@ mod tests {
 "#;
         std::fs::write(&codex_file, codex_content).unwrap();
 
-        // 2. Setup gemini session
-        let gemini_chats = home.join(".gemini").join("tmp").join("proj-1").join("chats");
-        std::fs::create_dir_all(&gemini_chats).unwrap();
-        let gemini_file = gemini_chats.join("session-2026-01-01.json");
-        let gemini_content = r#"{
-            "sessionId": "gem-1",
-            "messages": [
-                {
-                    "id": "msg-1",
-                    "timestamp": "2026-01-01T10:00:00Z",
-                    "model": "gemini-2.5-flash",
-                    "tokens": {"input": 200, "output": 80, "cached": 50, "thoughts": 10}
-                }
-            ]
-        }"#;
-        std::fs::write(&gemini_file, gemini_content).unwrap();
+        // 2. Setup Antigravity session transcript
+        let agy_logs = home
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("brain")
+            .join("conv-123")
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&agy_logs).unwrap();
+        let agy_file = agy_logs.join("transcript.jsonl");
+        let agy_content = r#"{"step_index":1,"type":"USER_INPUT","content":"The user changed setting `Model Selection` from Gemini 4 Argon (Medium) to Gemini 3.8 Flash (High). No need to comment","created_at":"2026-01-01T09:59:59Z"}
+{"step_index":2,"type":"PLANNER_RESPONSE","input_tokens":200,"output_tokens":90,"cache_read_tokens":50,"created_at":"2026-01-01T10:00:00Z"}
+"#;
+        std::fs::write(&agy_file, agy_content).unwrap();
 
-        // First sync: should discover nested codex and gemini
+        // First sync: should discover nested codex and antigravity
         let rep1 = db.sync_session_usage(&paths).unwrap();
         assert_eq!(rep1.files_scanned, 2, "Should scan both files");
         assert_eq!(rep1.imported, 2, "Should import both records");
@@ -1917,6 +2070,21 @@ mod tests {
         let rep2 = db.sync_session_usage(&paths).unwrap();
         assert_eq!(rep2.files_scanned, 2, "Should check both files");
         assert_eq!(rep2.imported, 0, "Unchanged files should not be re-imported");
+
+        // Downgrade cursor in DB to 10-digit Unix seconds (simulating cc-switch legacy cursor)
+        {
+            let conn = db.connect().unwrap();
+            conn.execute(
+                "UPDATE session_log_sync SET last_modified = last_modified / 1000 WHERE last_modified > 1000000000000",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Third sync: should still recognize 10-digit second cursor as matching file mtime
+        let rep3 = db.sync_session_usage(&paths).unwrap();
+        assert_eq!(rep3.files_scanned, 2);
+        assert_eq!(rep3.imported, 0, "10-digit second cursor from cc-switch should match without re-parsing");
     }
 }
 

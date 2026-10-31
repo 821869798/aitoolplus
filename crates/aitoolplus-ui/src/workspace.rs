@@ -679,6 +679,9 @@ impl Workspace {
             .detach();
         }
 
+        // Pre-warm usage dashboard data in background so opening the Usage page is instant
+        ws.refresh_usage_data(cx);
+
         // Session log usage sync background worker (parity with cc-switch periodic 60s sync)
         let weak_sync = cx.entity().downgrade();
         cx.spawn(async move |_this, cx| {
@@ -1775,11 +1778,27 @@ impl Workspace {
             let snap = cx
                 .background_spawn(async move {
                     if cc_switch_db.is_file() {
-                        let _ = db.import_from_cc_switch(&cc_switch_db);
+                        let _ = db.import_from_cc_switch_if_changed(&cc_switch_db);
                     }
                     let app = app_type.as_deref();
                     let provider = provider_name.as_deref();
                     let model_filter = model.as_deref();
+                    let providers = db
+                        .get_provider_stats(start_ts, end_ts, app, provider, model_filter)
+                        .ok();
+                    let provider_options = if provider.is_none() && model_filter.is_none() {
+                        providers.clone()
+                    } else {
+                        db.get_provider_stats(start_ts, end_ts, app, None, None).ok()
+                    };
+                    let models = db
+                        .get_model_stats(start_ts, end_ts, app, provider, model_filter)
+                        .ok();
+                    let model_options = if model_filter.is_none() {
+                        models.clone()
+                    } else {
+                        db.get_model_stats(start_ts, end_ts, app, provider, None).ok()
+                    };
                     UsageSnapshot {
                         summary: db
                             .get_usage_summary(start_ts, end_ts, app, provider, model_filter)
@@ -1790,18 +1809,10 @@ impl Workspace {
                         trends: db
                             .get_daily_trends(start_ts, end_ts, app, provider, model_filter)
                             .ok(),
-                        providers: db
-                            .get_provider_stats(start_ts, end_ts, app, provider, model_filter)
-                            .ok(),
-                        provider_options: db
-                            .get_provider_stats(start_ts, end_ts, app, None, None)
-                            .ok(),
-                        models: db
-                            .get_model_stats(start_ts, end_ts, app, provider, model_filter)
-                            .ok(),
-                        model_options: db
-                            .get_model_stats(start_ts, end_ts, app, provider, None)
-                            .ok(),
+                        providers,
+                        provider_options,
+                        models,
+                        model_options,
                         logs: db
                             .get_request_logs(
                                 &aitoolplus_core::usage::LogFilters {
@@ -1908,7 +1919,9 @@ impl Workspace {
                 ws.ui.usage_syncing = false;
                 match res {
                     Ok(rep) => {
-                        ws.refresh_usage_data(cx);
+                        if notify_toast || rep.imported > 0 || ws.ui.usage_summary.is_none() {
+                            ws.refresh_usage_data(cx);
+                        }
                         if notify_toast || rep.imported > 0 {
                             let msg = format!(
                                 "会话用量同步完成：扫描 {} 个文件，新增入库 {} 条记录",
