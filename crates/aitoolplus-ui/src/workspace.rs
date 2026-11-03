@@ -416,11 +416,19 @@ impl Workspace {
 
         if std::env::var("AITOOLPLUS_OPEN_ANTIGRAVITY_DIALOG").ok().as_deref() == Some("1") {
             let refresh_token = cx.new(|cx| {
-                TextInput::new(
-                    "在此处粘贴您的 Refresh Token (支持批量)\n\n支持格式:\n1. 单个 Token (1//...)\n2. JSON 数组 (含 refresh_token 字段)\n3. 任意包含 Token 的文本 (自动提取)",
+                let mut ta = crate::text_area::TextArea::new(
+                    "在此处粘贴您的 Refresh Token 或凭证 JSON (支持批量)\n\n支持格式:\n1. 单个 Token (1//...)\n2. RT JSON 凭证文件内容 (含 refresh_token 字段)\n3. JSON 数组 (含 refresh_token 字段)\n4. 任意包含 Token 的文本 (自动提取)",
                     cx,
-                )
+                );
+                ta.set_syntax_mode(crate::text_area::SyntaxMode::Json, cx);
+                ta.set_max_lines(12, cx);
+                ta
             });
+            if let Ok(prefill) = std::env::var("AITOOLPLUS_TEST_ANTIGRAVITY_TOKEN") {
+                refresh_token.update(cx, |ta, cx| {
+                    ta.set_text_silent(prefill, cx);
+                });
+            }
             let custom_label = cx.new(|cx| TextInput::new("自定义备注（可选）…", cx));
             let active_tab = match std::env::var("AITOOLPLUS_ANTIGRAVITY_TAB").ok().as_deref() {
                 Some("token") => pages::antigravity_page::AntigravityDialogTab::Token,

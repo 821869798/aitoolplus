@@ -951,7 +951,7 @@ pub fn render_mcp_detail_drawer(
         .inset_0()
         .occlude()
         .bg(gpui::rgba(0x00000038))
-        .on_scroll_wheel(|_, _, cx| {
+        .on_scroll(|_, _, cx| {
             cx.stop_propagation();
         })
         .on_click(cx.listener(|ws, _, _, cx| {
@@ -1725,7 +1725,7 @@ pub fn render_mcp_detail_drawer(
         .flex()
         .flex_col()
         .overflow_hidden()
-        .on_scroll_wheel(|_, _, cx| {
+        .on_scroll(|_, _, cx| {
             cx.stop_propagation();
         })
         .child(

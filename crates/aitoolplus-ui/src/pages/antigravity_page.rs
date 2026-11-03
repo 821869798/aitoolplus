@@ -20,7 +20,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use crate::components::{
     ButtonVariant, Tooltip, button_l, button_with_icon_l, button_with_icon_loading_l, empty_state_svg,
     error_action_link_button, error_banner, error_strip, error_strip_action,
-    icon_button_svg, input_container, parse_generic_error, toggle,
+    icon_button_svg, input_container, parse_generic_error, textarea_container, toggle,
 };
 use crate::icons::{
     ALERT_SVG, ARROW_RIGHT_LEFT_SVG, CHECK_SVG, CODE_SVG, COPY_SVG, DATABASE_SVG,
@@ -28,6 +28,7 @@ use crate::icons::{
     REFRESH_SVG, TAG_SVG, TERMINAL_SVG, TOGGLE_LEFT_SVG, TOGGLE_RIGHT_SVG, TRASH_SVG,
     USER_SVG, WAND_SVG, X_SVG, svg_icon,
 };
+use crate::text_area::TextArea;
 use crate::text_input::TextInput;
 use crate::theme::Theme;
 use crate::workspace::Workspace;
@@ -52,7 +53,7 @@ pub struct AntigravityDialogState {
     pub redirect_uri: Option<String>,
     pub oauth_url_copied: bool,
     pub manual_code: gpui::Entity<TextInput>,
-    pub refresh_token: gpui::Entity<TextInput>,
+    pub refresh_token: gpui::Entity<TextArea>,
     pub custom_label: gpui::Entity<TextInput>,
     pub auth_status: Option<String>,
     pub is_authorizing: bool,
@@ -2954,10 +2955,13 @@ pub fn open_add_account_dialog(
 ) {
     let manual_code = cx.new(|cx| TextInput::new("粘贴回调链接或 Code…", cx));
     let refresh_token = cx.new(|cx| {
-        TextInput::new(
-            "在此处粘贴您的 Refresh Token (支持批量)\n\n支持格式:\n1. 单个 Token (1//...)\n2. JSON 数组 (含 refresh_token 字段)\n3. 任意包含 Token 的文本 (自动提取)",
+        let mut ta = TextArea::new(
+            "在此处粘贴您的 Refresh Token 或凭证 JSON (支持批量)\n\n支持格式:\n1. 单个 Token (1//...)\n2. RT JSON 凭证文件内容 (含 refresh_token 字段)\n3. JSON 数组 (含 refresh_token 字段)\n4. 任意包含 Token 的文本 (自动提取)",
             cx,
-        )
+        );
+        ta.set_syntax_mode(crate::text_area::SyntaxMode::Json, cx);
+        ta.set_max_lines(12, cx);
+        ta
     });
     let custom_label = cx.new(|cx| TextInput::new("自定义备注（可选）…", cx));
 
@@ -3347,7 +3351,54 @@ pub fn render_add_account_dialog(
                 )
         }
         AntigravityDialogTab::Token => {
-            // Tab 2: Refresh Token (Multi-line batch input)
+            // Tab 2: Token / JSON (Multi-line input with syntax highlighting & live JSON syntax validation)
+            let raw_text = state.refresh_token.read(cx).text().trim().to_string();
+            let json_err_banner = if raw_text.starts_with('{') || raw_text.starts_with('[') {
+                match serde_json::from_str::<serde_json::Value>(&raw_text) {
+                    Err(err) => {
+                        state.refresh_token.update(cx, |ed, _| {
+                            ed.error_location = Some((err.line(), err.column()));
+                        });
+                        Some(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .p(px(6.0))
+                                .rounded(px(6.0))
+                                .bg(crate::rgba_const(0xef44441a))
+                                .border_1()
+                                .border_color(crate::rgba_const(0xef44444d))
+                                .child(crate::icons::svg_icon(
+                                    ALERT_SVG,
+                                    px(13.0),
+                                    crate::rgba_const(0xef4444ff),
+                                ))
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(crate::rgba_const(0xef4444ff))
+                                        .child(i.raw(
+                                            &format!("JSON 语法错误 (第 {} 行，第 {} 列): {}", err.line(), err.column(), err),
+                                            &format!("JSON syntax error (line {}, col {}): {}", err.line(), err.column(), err),
+                                        )),
+                                ),
+                        )
+                    }
+                    Ok(_) => {
+                        state.refresh_token.update(cx, |ed, _| {
+                            ed.error_location = None;
+                        });
+                        None
+                    }
+                }
+            } else {
+                state.refresh_token.update(cx, |ed, _| {
+                    ed.error_location = None;
+                });
+                None
+            };
+
             div()
                 .flex()
                 .flex_col()
@@ -3375,7 +3426,8 @@ pub fn render_add_account_dialog(
                                         .child(i.t("antigravity.refresh_token")),
                                 ),
                         )
-                        .child(input_container(&t, state.refresh_token.clone()))
+                        .child(textarea_container(&t, state.refresh_token.clone()))
+                        .when_some(json_err_banner, |s, b| s.child(b))
                         .child(
                             div()
                                 .text_size(px(10.5))

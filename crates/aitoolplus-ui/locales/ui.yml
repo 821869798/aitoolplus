@@ -86,12 +86,11 @@ antigravity:
     zh-CN: 账号备注（可选）
     en: Custom Label (Optional)
   hint_supports_pasting_multiple:
-    zh-CN: '提示: 支持一次性粘贴多个 Token 或 JSON 数组，系统将自动识别并批量导入。'
-    en: 'Hint: Supports pasting multiple tokens or JSON array, system will auto-extract
-      and batch import.'
+    zh-CN: '提示: 支持粘贴单个 Token、RT 凭证 JSON 或 JSON 数组，系统将自动识别并导入。'
+    en: 'Hint: Supports pasting single token, RT JSON object, or JSON array, system will auto-extract.'
   refresh_token:
-    zh-CN: Refresh Token
-    en: Refresh Token
+    zh-CN: Token / JSON
+    en: Token / JSON
   submit:
     zh-CN: 提交
     en: Submit

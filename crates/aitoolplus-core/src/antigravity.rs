@@ -2064,11 +2064,34 @@ pub fn get_refresh_token_from_db(target_ide: Option<&str>) -> Result<String, Str
     Err("Login state data not found in any database path".to_string())
 }
 
+fn find_refresh_token_in_map(obj: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    for key in ["refresh_token", "refreshToken", "token", "rt"] {
+        if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
+            let t = v.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Parse and extract refresh tokens from arbitrary text (supports JSON arrays, objects, or raw token streams)
 pub fn extract_tokens_from_text(input: &str) -> Vec<String> {
-    let trimmed = input.trim();
+    let mut trimmed = input.trim();
     if trimmed.is_empty() {
         return Vec::new();
+    }
+
+    // Strip markdown code fences if wrapped in ```json ... ``` or ``` ... ```
+    if trimmed.starts_with("```") {
+        if let Some(pos) = trimmed.find('\n') {
+            trimmed = &trimmed[pos + 1..];
+        }
+        if let Some(pos) = trimmed.rfind("```") {
+            trimmed = &trimmed[..pos];
+        }
+        trimmed = trimmed.trim();
     }
 
     // 1. Try parsing JSON
@@ -2077,24 +2100,26 @@ pub fn extract_tokens_from_text(input: &str) -> Vec<String> {
     {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
             let mut tokens = Vec::new();
+
             if let Some(arr) = val.as_array() {
                 for item in arr {
                     if let Some(s) = item.as_str() {
+                        let s = s.trim();
                         if s.starts_with("1//") {
                             tokens.push(s.to_string());
                         }
                     } else if let Some(obj) = item.as_object() {
-                        if let Some(rt) = obj.get("refresh_token").and_then(|v| v.as_str()) {
+                        if let Some(rt) = find_refresh_token_in_map(obj) {
                             if rt.starts_with("1//") {
-                                tokens.push(rt.to_string());
+                                tokens.push(rt);
                             }
                         }
                     }
                 }
             } else if let Some(obj) = val.as_object() {
-                if let Some(rt) = obj.get("refresh_token").and_then(|v| v.as_str()) {
+                if let Some(rt) = find_refresh_token_in_map(obj) {
                     if rt.starts_with("1//") {
-                        tokens.push(rt.to_string());
+                        tokens.push(rt);
                     }
                 }
             }
@@ -4288,6 +4313,30 @@ mod tests {
         assert_eq!(
             extract_tokens_from_text(json_objs),
             vec!["1//04abcdefghijklmnopqrstuvwxyz_1234567890", "1//04secondtoken1234567890abcdefghijklm"]
+        );
+
+        // Single RT JSON object (matching article schema)
+        let rt_json = r#"{
+            "access_token": "ya29.a0AdMD6Etest",
+            "refresh_token": "1//04abcdefghijklmnopqrstuvwxyz_1234567890",
+            "email": "your-account@gmail.com",
+            "project_id": "artful-wave-xxxxx",
+            "type": "antigravity"
+        }"#;
+        assert_eq!(
+            extract_tokens_from_text(rt_json),
+            vec!["1//04abcdefghijklmnopqrstuvwxyz_1234567890"]
+        );
+
+        // Markdown code fence wrapped JSON
+        let markdown_json = r#"```json
+{
+  "refreshToken": "1//04abcdefghijklmnopqrstuvwxyz_1234567890"
+}
+```"#;
+        assert_eq!(
+            extract_tokens_from_text(markdown_json),
+            vec!["1//04abcdefghijklmnopqrstuvwxyz_1234567890"]
         );
 
         // Mixed text with duplicates
