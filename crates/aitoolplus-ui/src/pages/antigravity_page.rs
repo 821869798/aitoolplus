@@ -3814,7 +3814,7 @@ fn start_oauth_listener_background(
     cx.spawn(async move |_this, cx| {
         let exchange_result = cx.background_spawn(async move {
             let code = session.wait_for_code(Duration::from_secs(300))?;
-            let (access_token, refresh_token, expires_in) = exchange_auth_code(&code, &session_redirect_uri)?;
+            let (access_token, refresh_token, expires_in, has_aicode) = exchange_auth_code(&code, &session_redirect_uri)?;
             let expiry_timestamp = Utc::now().timestamp() + expires_in;
 
             let user_info = fetch_user_info(&access_token)?;
@@ -3834,12 +3834,12 @@ fn start_oauth_listener_background(
             account.tier = tier;
             account.quota = quota;
 
-            Ok::<AntigravityAccount, String>(account)
+            Ok::<(AntigravityAccount, bool), String>((account, has_aicode))
         }).await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
             match exchange_result {
-                Ok(account) => {
+                Ok((account, has_aicode)) => {
                     let email = account.email.clone();
                     let mut store = ws.ui.antigravity_store.clone().unwrap_or_default();
                     if let Some(pos) = store.accounts.iter().position(|a| a.email == email) {
@@ -3851,11 +3851,18 @@ fn start_oauth_listener_background(
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
 
-                    let msg = ws.i18n.raw(
-                        &format!("已成功添加账号：{}", email),
-                        &format!("Account added: {}", email),
-                    ).to_string();
-                    ws.ui.toast(msg, false);
+                    let msg = if !has_aicode {
+                        ws.i18n.raw(
+                            &format!("已添加账号：{}（⚠ 提示：Google 授权时未勾选 AI Code 权限，可能导致 CLI 提示权限不足，建议在卡片上重新授权并勾选全选）", email),
+                            &format!("Account added: {} (⚠ Warning: AI Code scope was not granted during Google consent)", email),
+                        ).to_string()
+                    } else {
+                        ws.i18n.raw(
+                            &format!("已成功添加账号：{}（点击卡片上的【CLI】或【IDE】按钮即可切换激活）", email),
+                            &format!("Account added: {} (Click [CLI] or [IDE] on the card to activate)", email),
+                        ).to_string()
+                    };
+                    ws.ui.toast(msg, !has_aicode);
                 }
                 Err(e) => {
                     if e != "OAuth authorization cancelled." {
@@ -3900,7 +3907,7 @@ fn submit_manual_code_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
 
     cx.spawn(async move |_this, cx| {
         let exchange_result = cx.background_spawn(async move {
-            let (access_token, refresh_token, expires_in) = exchange_auth_code(&code, &redirect_uri)?;
+            let (access_token, refresh_token, expires_in, has_aicode) = exchange_auth_code(&code, &redirect_uri)?;
             let expiry_timestamp = Utc::now().timestamp() + expires_in;
 
             let user_info = fetch_user_info(&access_token)?;
@@ -3920,12 +3927,12 @@ fn submit_manual_code_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
             account.tier = tier;
             account.quota = quota;
 
-            Ok::<AntigravityAccount, String>(account)
+            Ok::<(AntigravityAccount, bool), String>((account, has_aicode))
         }).await;
 
         let _ = weak.update(cx, |ws: &mut Workspace, cx| {
             match exchange_result {
-                Ok(account) => {
+                Ok((account, has_aicode)) => {
                     let email = account.email.clone();
                     let mut store = ws.ui.antigravity_store.clone().unwrap_or_default();
                     if let Some(pos) = store.accounts.iter().position(|a| a.email == email) {
@@ -3937,11 +3944,18 @@ fn submit_manual_code_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
                     ws.ui.antigravity_store = Some(store);
                     ws.ui.antigravity_dialog = None;
 
-                    let msg = ws.i18n.raw(
-                        &format!("已成功添加账号：{}", email),
-                        &format!("Account added: {}", email),
-                    ).to_string();
-                    ws.ui.toast(msg, false);
+                    let msg = if !has_aicode {
+                        ws.i18n.raw(
+                            &format!("已添加账号：{}（⚠ 提示：Google 授权时未勾选 AI Code 权限，可能导致 CLI 提示权限不足，建议在卡片上重新授权并勾选全选）", email),
+                            &format!("Account added: {} (⚠ Warning: AI Code scope was not granted during Google consent)", email),
+                        ).to_string()
+                    } else {
+                        ws.i18n.raw(
+                            &format!("已成功添加账号：{}（点击卡片上的【CLI】或【IDE】按钮即可切换激活）", email),
+                            &format!("Account added: {} (Click [CLI] or [IDE] on the card to activate)", email),
+                        ).to_string()
+                    };
+                    ws.ui.toast(msg, !has_aicode);
                 }
                 Err(e) => {
                     if let Some(d) = ws.ui.antigravity_dialog.as_mut() {

@@ -347,6 +347,8 @@ struct TokenResponse {
     #[serde(default)]
     #[allow(dead_code)]
     id_token: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -463,8 +465,8 @@ pub fn refresh_access_token(refresh_token: &str) -> Result<(String, i64), String
     Ok((token_res.access_token, token_res.expires_in))
 }
 
-/// Exchange an authorization code for an access token and refresh token.
-pub fn exchange_auth_code(code: &str, redirect_uri: &str) -> Result<(String, String, i64), String> {
+/// Exchange an authorization code for an access token, refresh token, and aicode scope flag.
+pub fn exchange_auth_code(code: &str, redirect_uri: &str) -> Result<(String, String, i64, bool), String> {
     info!("Exchanging authorization code for Antigravity tokens...");
     let resp = AGENT.post(TOKEN_URL)
         .set("User-Agent", NATIVE_USER_AGENT)
@@ -486,7 +488,17 @@ pub fn exchange_auth_code(code: &str, redirect_uri: &str) -> Result<(String, Str
         .refresh_token
         .ok_or_else(|| "Google did not return a refresh_token. Make sure prompt=consent is used.".to_string())?;
 
-    Ok((token_res.access_token, refresh_token, token_res.expires_in))
+    let has_aicode = token_res
+        .scope
+        .as_deref()
+        .map(|s| s.contains("https://www.googleapis.com/auth/aicode"))
+        .unwrap_or(true);
+
+    if !has_aicode {
+        warn!("Google OAuth token is missing https://www.googleapis.com/auth/aicode permission!");
+    }
+
+    Ok((token_res.access_token, refresh_token, token_res.expires_in, has_aicode))
 }
 
 /// Fetch Google user profile info.
@@ -3514,7 +3526,7 @@ impl OAuthServerSession {
             ("response_type", "code"),
             ("scope", &scopes),
             ("access_type", "offline"),
-            ("prompt", "consent"),
+            ("prompt", "select_account consent"),
             ("include_granted_scopes", "true"),
             ("state", &state),
         ];
