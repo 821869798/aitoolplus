@@ -1292,7 +1292,7 @@ pub fn write_file_credentials(home_dir: &Path, account: &AntigravityAccount) -> 
         refresh_token: account.refresh_token.clone(),
         token_type: "Bearer".to_string(),
         expiry_date: expiry_ms,
-        scope: "https://www.googleapis.com/auth/userinfo.email openid https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.profile".to_string(),
+        scope: "openid https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs https://www.googleapis.com/auth/aicode".to_string(),
     };
 
     let creds_path = gemini_dir.join("oauth_creds.json");
@@ -3505,6 +3505,7 @@ impl OAuthServerSession {
             "https://www.googleapis.com/auth/userinfo.profile",
             "https://www.googleapis.com/auth/cclog",
             "https://www.googleapis.com/auth/experimentsandconfigs",
+            "https://www.googleapis.com/auth/aicode",
         ].join(" ");
 
         let params = [
@@ -4362,6 +4363,25 @@ mod tests {
     fn test_print_auth_url() {
         let session = OAuthServerSession::start().unwrap();
         println!("AUTH_URL: {}", session.auth_url);
+        assert!(
+            session.auth_url.contains("https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faicode"),
+            "OAuth URL must include https://www.googleapis.com/auth/aicode scope"
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let acc = AntigravityAccount::new(
+            "id-scope".into(),
+            "scope@example.com".into(),
+            "at-scope".into(),
+            "1//04rt_scope_account_1234567890".into(),
+            1800000000,
+        );
+        write_file_credentials(temp.path(), &acc).unwrap();
+        let creds_content = std::fs::read_to_string(temp.path().join(".gemini").join("oauth_creds.json")).unwrap();
+        assert!(
+            creds_content.contains("https://www.googleapis.com/auth/aicode"),
+            "oauth_creds.json must include https://www.googleapis.com/auth/aicode scope"
+        );
     }
 
     #[test]

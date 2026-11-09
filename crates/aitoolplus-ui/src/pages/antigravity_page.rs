@@ -226,9 +226,10 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     let cur_tier_filter = ws.ui.antigravity_tier_filter;
 
     let query = ws.ui.antigravity_search.read(cx).text().trim().to_lowercase();
-    let searched_accounts: Vec<_> = accounts
+    let searched_accounts: Vec<(usize, &AntigravityAccount)> = accounts
         .iter()
-        .filter(|a| {
+        .enumerate()
+        .filter(|(_, a)| {
             if query.is_empty() {
                 return true;
             }
@@ -239,13 +240,13 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
         .collect();
 
     let count_all = searched_accounts.len();
-    let count_pro = searched_accounts.iter().filter(|a| account_matches_tier(a, AntigravityTierFilter::Pro)).count();
-    let count_ultra = searched_accounts.iter().filter(|a| account_matches_tier(a, AntigravityTierFilter::Ultra)).count();
-    let count_free = searched_accounts.iter().filter(|a| account_matches_tier(a, AntigravityTierFilter::Free)).count();
+    let count_pro = searched_accounts.iter().filter(|(_, a)| account_matches_tier(a, AntigravityTierFilter::Pro)).count();
+    let count_ultra = searched_accounts.iter().filter(|(_, a)| account_matches_tier(a, AntigravityTierFilter::Ultra)).count();
+    let count_free = searched_accounts.iter().filter(|(_, a)| account_matches_tier(a, AntigravityTierFilter::Free)).count();
 
-    let filtered_accounts: Vec<_> = searched_accounts
+    let filtered_accounts: Vec<(usize, &AntigravityAccount)> = searched_accounts
         .into_iter()
-        .filter(|a| account_matches_tier(a, cur_tier_filter))
+        .filter(|(_, a)| account_matches_tier(a, cur_tier_filter))
         .collect();
 
     let mut section = div()
@@ -483,8 +484,59 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
         ));
     } else {
         let mut list = div().flex().flex_col().gap(px(12.0));
-        for acc in &filtered_accounts {
-            list = list.child(render_account_card(acc, &active_clients, ws, cx));
+        let total = accounts.len();
+        for &(index, acc) in &filtered_accounts {
+            if let Some(crate::pages::DragReorderState::AntigravityAccount { from_index, hover_index: Some(h_idx) }) = ws.ui.drag_reorder {
+                if h_idx == index && from_index > index {
+                    list = list.child(crate::pages::render_drop_indicator_line(&t));
+                }
+            }
+            list = list.child(render_account_card(acc, index, &active_clients, ws, cx));
+            if let Some(crate::pages::DragReorderState::AntigravityAccount { from_index, hover_index: Some(h_idx) }) = ws.ui.drag_reorder {
+                if h_idx == index && from_index < index {
+                    list = list.child(crate::pages::render_drop_indicator_line(&t));
+                }
+            }
+        }
+        if let Some(crate::pages::DragReorderState::AntigravityAccount { hover_index: Some(h_idx), .. }) = ws.ui.drag_reorder {
+            if h_idx >= total {
+                list = list.child(crate::pages::render_drop_indicator_line(&t));
+            }
+        }
+        if matches!(ws.ui.drag_reorder, Some(crate::pages::DragReorderState::AntigravityAccount { .. })) {
+            list = list.child(
+                div()
+                    .h(px(28.0))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(t.accent.opacity(0.3))
+                    .bg(t.accent.opacity(0.04))
+                    .text_xs()
+                    .text_color(t.accent)
+                    .child("移至末尾")
+                    .on_mouse_move(cx.listener(move |ws, _, _, cx| {
+                        if let Some(crate::pages::DragReorderState::AntigravityAccount { from_index, hover_index }) = ws.ui.drag_reorder {
+                            if hover_index != Some(total) {
+                                ws.ui.drag_reorder = Some(crate::pages::DragReorderState::AntigravityAccount {
+                                    from_index,
+                                    hover_index: Some(total),
+                                });
+                                cx.notify();
+                            }
+                        }
+                    }))
+                    .on_mouse_up(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+                        if let Some(crate::pages::DragReorderState::AntigravityAccount { from_index, .. }) = ws.ui.drag_reorder.take() {
+                            ws.reorder_antigravity_account(from_index, total, cx);
+                            cx.notify();
+                        }
+                    }))
+            );
         }
         section = section.child(list);
     }
@@ -1843,6 +1895,7 @@ pub fn render_tier_badge(theme: &Theme, tier_str: &str) -> gpui::AnyElement {
 /// quota meters (`Gemini`, `Claude / GPT`, `Gemini 4 Argon`), and action buttons.
 fn render_account_card(
     account: &AntigravityAccount,
+    index: usize,
     active_clients: &ActiveClientsStatus,
     ws: &mut Workspace,
     cx: &mut Context<Workspace>,
@@ -1857,7 +1910,58 @@ fn render_account_card(
     let is_active = is_classic_active || is_ide_active || is_agy_active;
     let is_disabled = account.disabled;
 
-    // 1. Header row: Email + Tier Badge + Multi-client Active Badges (APP / IDE / CLI) + Project ID
+    let rank_num = index + 1;
+    let is_this_being_dragged = matches!(
+        ws.ui.drag_reorder,
+        Some(crate::pages::DragReorderState::AntigravityAccount { from_index, .. }) if from_index == index
+    );
+
+    let drag_handle = div()
+        .id(SharedString::from(format!("ag-drag-handle-{}", acc_id)))
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .px(px(6.0))
+        .py(px(2.5))
+        .rounded(px(5.0))
+        .bg(if is_this_being_dragged {
+            t.accent.opacity(0.2)
+        } else if is_active {
+            t.accent.opacity(0.12)
+        } else {
+            t.card_border.opacity(0.35)
+        })
+        .border_1()
+        .border_color(if is_this_being_dragged || is_active { t.accent.opacity(0.3) } else { t.card_border })
+        .cursor_grab()
+        .hover(|s| s.bg(t.card_hover).border_color(t.accent))
+        .active(|s| s.cursor_grabbing())
+        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+            ws.ui.drag_reorder = Some(crate::pages::DragReorderState::AntigravityAccount {
+                from_index: index,
+                hover_index: Some(index),
+            });
+            cx.notify();
+        }))
+        .tooltip(move |_win, cx| {
+            cx.new(|_| Tooltip::new(format!("第 {} 顺位 · 拖拽调整顺序", rank_num))).into()
+        })
+        .child(
+            gpui::svg()
+                .data(crate::icons::GRIP_VERTICAL_SVG)
+                .size(px(12.0))
+                .text_color(if is_active || is_this_being_dragged { t.accent } else { t.text_muted })
+                .hover(|s| s.text_color(t.accent)),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(if is_active || is_this_being_dragged { t.accent } else { t.text_secondary })
+                .child(format!("#{}", rank_num)),
+        );
+
+    // 1. Header row: Drag Handle + Email + Tier Badge + Multi-client Active Badges (APP / IDE / CLI) + Project ID
     let header_row = div()
         .flex()
         .items_center()
@@ -1869,6 +1973,7 @@ fn render_account_card(
                 .items_center()
                 .gap(px(6.0))
                 .flex_wrap()
+                .child(drag_handle)
                 .child(
                     div()
                         .text_size(px(13.0))
@@ -2318,10 +2423,31 @@ fn render_account_card(
         .gap(px(8.0))
         .p(px(10.0))
         .rounded(px(8.0))
-        .bg(t.card_bg)
+        .bg(if is_this_being_dragged { t.card_bg.opacity(0.55) } else { t.card_bg })
         .border_1()
-        .border_color(if is_active { t.accent } else { t.card_border })
+        .border_color(if is_this_being_dragged || is_active { t.accent } else { t.card_border })
         .shadow_xs()
+        .when(is_this_being_dragged, |el| el.opacity(0.65))
+        .on_mouse_move(cx.listener(move |ws, _, _, cx| {
+            if let Some(crate::pages::DragReorderState::AntigravityAccount { from_index, hover_index }) = ws.ui.drag_reorder {
+                if hover_index != Some(index) {
+                    ws.ui.drag_reorder = Some(crate::pages::DragReorderState::AntigravityAccount {
+                        from_index,
+                        hover_index: Some(index),
+                    });
+                    cx.notify();
+                }
+            }
+        }))
+        .on_mouse_up(gpui::MouseButton::Left, cx.listener(move |ws, _, _, cx| {
+            if let Some(crate::pages::DragReorderState::AntigravityAccount { from_index, hover_index }) = ws.ui.drag_reorder.take() {
+                let to = hover_index.unwrap_or(index);
+                if from_index != to {
+                    ws.reorder_antigravity_account(from_index, to, cx);
+                }
+                cx.notify();
+            }
+        }))
         .child(header_row)
         .child(lower_row)
         .into_any_element()

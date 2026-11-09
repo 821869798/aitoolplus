@@ -1575,6 +1575,11 @@ impl Render for Workspace {
                                     ws.reorder_gateway_failover_candidate(cli, from_pos, to, cx);
                                 }
                             }
+                            crate::pages::DragReorderState::AntigravityAccount { from_index, hover_index } => {
+                                if let Some(to) = hover_index {
+                                    ws.reorder_antigravity_account(from_index, to, cx);
+                                }
+                            }
                         }
                         cx.notify();
                     }
@@ -2180,6 +2185,33 @@ impl Workspace {
             if !moved_name.is_empty() {
                 self.ui.toast(format!("已调整「{}」的顺序", moved_name), false);
             }
+            self.refresh_gateway_data(cx);
+            cx.notify();
+        }
+    }
+
+    pub fn reorder_antigravity_account(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to {
+            return;
+        }
+        let mut moved_email = String::new();
+        if let Some(store) = &mut self.ui.antigravity_store {
+            let accounts = &mut store.accounts;
+            if from < accounts.len() && to <= accounts.len() {
+                moved_email = accounts[from].email.clone();
+                let item = accounts.remove(from);
+                let insert_idx = to.min(accounts.len());
+                accounts.insert(insert_idx, item);
+                let _ = aitoolplus_core::antigravity::save_store(&self.paths.app_data, store);
+            }
+        }
+        if !moved_email.is_empty() {
+            let display = if self.settings.antigravity_mask_email {
+                crate::pages::antigravity_page::mask_email(&moved_email)
+            } else {
+                moved_email
+            };
+            self.ui.toast(format!("已调整「{}」的顺序", display), false);
             self.refresh_gateway_data(cx);
             cx.notify();
         }

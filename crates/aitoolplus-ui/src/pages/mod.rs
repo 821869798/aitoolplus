@@ -94,6 +94,10 @@ pub enum DragReorderState {
         from_pos: usize,
         hover_pos: Option<usize>,
     },
+    AntigravityAccount {
+        from_index: usize,
+        hover_index: Option<usize>,
+    },
 }
 
 /// Renders a modern drop insertion indicator line between list items.
