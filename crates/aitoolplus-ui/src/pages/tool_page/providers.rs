@@ -1204,7 +1204,40 @@ pub(super) fn fetch_models_action(
         .find(|p| p.id == provider_id)
         .cloned();
     let settings = provider.as_ref().map(|p| p.settings()).unwrap_or_default();
-    let api_format = provider.as_ref().and_then(|p| p.parsed_meta().api_format);
+    let api_format = provider
+        .as_ref()
+        .and_then(|p| p.parsed_meta().api_format)
+        .or_else(|| {
+            match tool {
+                ToolId::Pi | ToolId::OhMyPi => {
+                    settings.get("api").and_then(Value::as_str).map(|fmt| {
+                        match fmt {
+                            "anyrouter-claude" | "anthropic-messages" => "anthropic".to_string(),
+                            "anyrouter-codex" | "openai-responses" => "openai_responses".to_string(),
+                            "openai-completions" => "openai".to_string(),
+                            "google-generative-ai" => "gemini".to_string(),
+                            other => other.to_string(),
+                        }
+                    })
+                }
+                ToolId::Codex => {
+                    let toml_str = settings.get("config").or_else(|| settings.get("toml")).and_then(Value::as_str);
+                    if let Some(t) = toml_str {
+                        if t.contains("wire_api = \"anthropic\"") {
+                            Some("anthropic".to_string())
+                        } else {
+                            Some("openai_responses".to_string())
+                        }
+                    } else {
+                        Some("openai_responses".to_string())
+                    }
+                }
+                ToolId::ClaudeCode | ToolId::ClaudeDesktop => Some("anthropic".to_string()),
+                ToolId::GeminiCli => Some("gemini".to_string()),
+                ToolId::OpenCode => Some("openai".to_string()),
+                _ => None,
+            }
+        });
     let custom_headers = provider.as_ref().and_then(|p| {
         p.parsed_meta().custom_headers.map(|list| {
             let mut map = std::collections::BTreeMap::new();

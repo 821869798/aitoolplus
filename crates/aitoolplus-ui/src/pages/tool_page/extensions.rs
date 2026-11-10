@@ -137,6 +137,181 @@ pub(super) fn extensions_section(
         ws.ui.omp_extension_input.clone()
     };
 
+    if is_pi {
+        let builtin_list = aitoolplus_core::pi_runtime::builtin_pi_extensions_status(
+            &ws.paths,
+            &ws.settings.enabled_builtin_extensions,
+        );
+        if !builtin_list.is_empty() {
+            let mut builtin_col = div().flex().flex_col().gap(px(8.0));
+            for item in builtin_list {
+                let ext_id = item.id;
+                let setting_key = item.setting_key;
+                let bundled_ver = item.bundled_version;
+                let is_enabled = item.enabled;
+                let ver_text = match (item.installed_version.as_deref(), item.update_available) {
+                    (Some(cur), true) => format!("v{cur} → v{bundled_ver}"),
+                    (Some(cur), false) => format!("v{cur}"),
+                    (None, _) => format!("v{bundled_ver}"),
+                };
+                let ver_badge = badge(
+                    &t,
+                    ver_text,
+                    if item.update_available {
+                        BadgeKind::Warning
+                    } else {
+                        BadgeKind::Accent
+                    },
+                );
+                let status_badge = if is_enabled {
+                    badge(&t, i.raw("已开启", "Enabled"), BadgeKind::Success)
+                } else {
+                    badge(&t, i.raw("已关闭", "Disabled"), BadgeKind::Neutral)
+                };
+
+                let mut right_controls = div().flex().items_center().gap(px(8.0));
+                if is_enabled || item.update_available {
+                    right_controls = right_controls.child(button_l(
+                        gpui::SharedString::from(format!("pi-builtin-resync-{ext_id}")),
+                        if item.update_available {
+                            i.raw("升级脚本", "Upgrade Script")
+                        } else {
+                            i.raw("重新同步", "Re-sync")
+                        },
+                        if item.update_available {
+                            ButtonVariant::Primary
+                        } else {
+                            ButtonVariant::Secondary
+                        },
+                        &t,
+                        cx,
+                        move |ws, _, _, cx| {
+                            match aitoolplus_core::pi_runtime::set_builtin_pi_extension_enabled(
+                                &ws.paths, ext_id, true,
+                            ) {
+                                Ok(path) => {
+                                    ws.settings.set_builtin_extension_enabled(setting_key, true);
+                                    (ws.callbacks.save_settings)(&ws.settings);
+                                    ws.ui.pi_extensions = None;
+                                    load_pi_extensions(ws, cx);
+                                    ws.ui.toast(
+                                        ws.i18n
+                                            .raw(
+                                                &format!(
+                                                    "已同步内置扩展 {ext_id} 至 v{bundled_ver} ({})",
+                                                    path.display()
+                                                ),
+                                                &format!(
+                                                    "Synced built-in extension {ext_id} to v{bundled_ver}"
+                                                ),
+                                            )
+                                            .to_string(),
+                                        false,
+                                    );
+                                }
+                                Err(e) => ws.ui.toast(format!("同步内置扩展失败: {e}"), true),
+                            }
+                            cx.notify();
+                        },
+                    ));
+                }
+                right_controls = right_controls.child(crate::components::toggle(
+                    gpui::SharedString::from(format!("pi-builtin-toggle-{ext_id}")),
+                    is_enabled,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let target = !is_enabled;
+                        match aitoolplus_core::pi_runtime::set_builtin_pi_extension_enabled(
+                            &ws.paths, ext_id, target,
+                        ) {
+                            Ok(_) => {
+                                ws.settings.set_builtin_extension_enabled(setting_key, target);
+                                (ws.callbacks.save_settings)(&ws.settings);
+                                ws.ui.pi_extensions = None;
+                                load_pi_extensions(ws, cx);
+                                let msg = if target {
+                                    ws.i18n
+                                        .raw(
+                                            &format!("已开启内置扩展 {ext_id} (v{bundled_ver})"),
+                                            &format!("Enabled built-in extension {ext_id}"),
+                                        )
+                                        .to_string()
+                                } else {
+                                    ws.i18n
+                                        .raw(
+                                            &format!("已关闭内置扩展 {ext_id}"),
+                                            &format!("Disabled built-in extension {ext_id}"),
+                                        )
+                                        .to_string()
+                                };
+                                ws.ui.toast(msg, false);
+                            }
+                            Err(e) => ws.ui.toast(format!("操作失败: {e}"), true),
+                        }
+                        cx.notify();
+                    },
+                ));
+
+                let badge_row = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(t.text_primary)
+                            .child(i.raw(item.title_zh, item.title_en)),
+                    )
+                    .child(badge(&t, i.raw("内置扩展", "Built-in"), BadgeKind::Accent))
+                    .child(ver_badge)
+                    .child(status_badge);
+
+                builtin_col = builtin_col.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(12.0))
+                        .p(px(12.0))
+                        .rounded(px(8.0))
+                        .bg(t.card_bg)
+                        .border_1()
+                        .border_color(if item.update_available {
+                            t.warning
+                        } else {
+                            t.card_border
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(badge_row)
+                                .child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .text_color(t.text_secondary)
+                                        .child(i.raw(item.description_zh, item.description_en)),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .font_family("Consolas")
+                                        .text_color(t.text_muted)
+                                        .child(item.path.display().to_string()),
+                                ),
+                        )
+                        .child(right_controls),
+                );
+            }
+            section = section.child(builtin_col);
+        }
+    }
+
     let Some(list) = cached_list else {
         return section
             .child(
@@ -181,7 +356,17 @@ pub(super) fn extensions_section(
                     .child(meta),
             );
 
-            if result.extensions.is_empty() {
+            let external_extensions: Vec<_> = result
+                .extensions
+                .iter()
+                .filter(|ext| {
+                    !(is_pi
+                        && aitoolplus_core::pi_runtime::find_builtin_pi_extension(&ext.source)
+                            .is_some())
+                })
+                .collect();
+
+            if external_extensions.is_empty() {
                 section = section.child(crate::components::empty_state_svg(
                     &t,
                     crate::icons::PACKAGE_SVG,
@@ -190,7 +375,7 @@ pub(super) fn extensions_section(
                 ));
             } else {
                 let mut list_el = div().flex().flex_col().gap(px(6.0));
-                for ext in &result.extensions {
+                for ext in external_extensions {
                     let kind_badge = match ext.kind {
                         PiExtensionKind::Package => badge(&t, "pkg", BadgeKind::Accent),
                         PiExtensionKind::LocalFile => badge(&t, ".ts", BadgeKind::Neutral),

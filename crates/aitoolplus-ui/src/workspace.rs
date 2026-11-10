@@ -165,6 +165,10 @@ impl Workspace {
             }
         });
         let _ = store.save();
+        let _ = aitoolplus_core::pi_runtime::sync_builtin_pi_extensions(
+            &paths,
+            &settings.enabled_builtin_extensions,
+        );
         let requested_theme = std::env::var("AITOOLPLUS_THEME_MODE")
             .ok()
             .and_then(|v| match v.to_lowercase().as_str() {
@@ -1031,6 +1035,7 @@ impl Workspace {
                     }
                 });
                 self.persist_store();
+                self.ui.pi_extensions = None;
                 let msg = if enabled {
                     i.t("workspace.provider_enabled").to_string()
                 } else {

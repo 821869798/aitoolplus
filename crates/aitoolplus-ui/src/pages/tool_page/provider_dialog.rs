@@ -83,10 +83,12 @@ pub fn infer_pi_thinking_profile(
     }
     let is_anthropic = api_format.is_empty()
         || api_format == "anthropic-messages"
+        || api_format == "anyrouter-claude"
         || api_format == "bedrock-converse-stream";
     let is_openai = api_format.is_empty()
         || api_format == "openai-completions"
-        || api_format == "openai-responses";
+        || api_format == "openai-responses"
+        || api_format == "anyrouter-codex";
     let is_gemini = api_format.is_empty() || api_format == "google-generative-ai";
 
     let mut map = serde_json::Map::new();
@@ -837,6 +839,54 @@ pub fn open_provider_dialog(
         }
     }).detach();
 
+    let weak_ws_name = cx.entity().downgrade();
+    cx.subscribe(&name, move |_this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+        if let crate::text_input::TextInputEvent::Change(val) = event {
+            let lower = val.to_ascii_lowercase();
+            if lower.contains("anyrouter") {
+                let _ = weak_ws_name.update(cx, |ws: &mut Workspace, cx| {
+                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                        let is_codex = d.tool == ToolId::Codex || lower.contains("codex") || d.pi_api_format == "anyrouter-codex";
+                        let target_base_url = if is_codex { "https://anyrouter.top/v1" } else { "https://anyrouter.top" };
+                        let cur_b = d.base_url.read(cx).text().trim().to_string();
+                        if cur_b.is_empty() {
+                            d.base_url.update(cx, |inp, cx| inp.set_text_silent(target_base_url, cx));
+                        }
+                        let cur_w = d.website.read(cx).text().trim().to_string();
+                        if cur_w.is_empty() {
+                            d.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
+                        }
+                    }
+                    cx.notify();
+                });
+            }
+        }
+    }).detach();
+
+    let weak_ws_pk = cx.entity().downgrade();
+    cx.subscribe(&pi_provider_key, move |_this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+        if let crate::text_input::TextInputEvent::Change(val) = event {
+            let lower = val.to_ascii_lowercase();
+            if lower.contains("anyrouter") {
+                let _ = weak_ws_pk.update(cx, |ws: &mut Workspace, cx| {
+                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                        let is_codex = lower.contains("codex") || d.pi_api_format == "anyrouter-codex";
+                        let target_base_url = if is_codex { "https://anyrouter.top/v1" } else { "https://anyrouter.top" };
+                        let cur_b = d.base_url.read(cx).text().trim().to_string();
+                        if cur_b.is_empty() {
+                            d.base_url.update(cx, |inp, cx| inp.set_text_silent(target_base_url, cx));
+                        }
+                        let cur_w = d.website.read(cx).text().trim().to_string();
+                        if cur_w.is_empty() {
+                            d.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
+                        }
+                    }
+                    cx.notify();
+                });
+            }
+        }
+    }).detach();
+
     let meta = existing.as_ref().map(|p| p.parsed_meta()).unwrap_or_default();
 
     let custom_user_agent = cx.new(|cx| {
@@ -1014,7 +1064,26 @@ pub fn fetch_upstream_models_for_dialog(ws: &mut Workspace, cx: &mut Context<Wor
     let Some(dialog) = ws.ui.provider_dialog.as_mut() else { return; };
     let base_url = dialog.base_url.read(cx).text().trim().to_string();
     let api_key = dialog.api_key.read(cx).text().trim().to_string();
-    let api_format = dialog.api_format.clone();
+    let api_format = match dialog.tool {
+        ToolId::Pi | ToolId::OhMyPi => {
+            match dialog.pi_api_format.as_str() {
+                "anyrouter-claude" | "anthropic-messages" => "anthropic".to_string(),
+                "anyrouter-codex" | "openai-responses" => "openai_responses".to_string(),
+                "openai-completions" => "openai".to_string(),
+                "google-generative-ai" => "gemini".to_string(),
+                _ => dialog.pi_api_format.clone(),
+            }
+        }
+        ToolId::Codex => {
+            match dialog.codex_wire_api.as_str() {
+                "responses" => "openai_responses".to_string(),
+                "anthropic" => "anthropic".to_string(),
+                _ => "openai".to_string(),
+            }
+        }
+        ToolId::ClaudeCode | ToolId::ClaudeDesktop => "anthropic".to_string(),
+        _ => dialog.api_format.clone(),
+    };
     let custom_headers_raw = dialog.custom_headers.read(cx).text().trim().to_string();
 
     if base_url.is_empty() {
@@ -1198,7 +1267,18 @@ pub fn render_provider_dialog(
             )
     };
 
-    let presets = aitoolplus_core::presets::presets_for(tool);
+    let enabled_builtin_exts = ws.settings.enabled_builtin_extensions.clone();
+    let presets: Vec<aitoolplus_core::presets::ProviderPreset> =
+        aitoolplus_core::presets::presets_for(tool)
+            .into_iter()
+            .filter(|p| {
+                tool != ToolId::Pi
+                    || aitoolplus_core::pi_runtime::is_pi_preset_allowed(
+                        p.name,
+                        &enabled_builtin_exts,
+                    )
+            })
+            .collect();
     let preset_names: Vec<gpui::SharedString> =
         std::iter::once(i.t("tool_dialog.blank_custom"))
             .chain(presets.iter().map(|p| gpui::SharedString::from(p.name)))
@@ -1227,11 +1307,22 @@ pub fn render_provider_dialog(
                         &t,
                         cx,
                         move |ws, _ev, _w, cx| {
+                            let enabled_exts = ws.settings.enabled_builtin_extensions.clone();
                             if let Some(dialog) = ws.ui.provider_dialog.as_mut() {
                                 let p_idx = if idx == 0 { None } else { Some(idx - 1) };
                                 dialog.preset_index = p_idx;
                                 if let Some(p_idx) = p_idx {
-                                    let presets = aitoolplus_core::presets::presets_for(dialog.tool);
+                                    let presets: Vec<aitoolplus_core::presets::ProviderPreset> =
+                                        aitoolplus_core::presets::presets_for(dialog.tool)
+                                            .into_iter()
+                                            .filter(|p| {
+                                                dialog.tool != ToolId::Pi
+                                                    || aitoolplus_core::pi_runtime::is_pi_preset_allowed(
+                                                        p.name,
+                                                        &enabled_exts,
+                                                    )
+                                            })
+                                            .collect();
                                     if let Some(preset) = presets.get(p_idx) {
                                         dialog.name.update(cx, |inp, cx| {
                                             inp.set_text_silent(preset.name, cx)
@@ -1288,8 +1379,20 @@ pub fn render_provider_dialog(
                                             }
                                         }
 
+                                        let is_anyrouter = preset.name.to_ascii_lowercase().contains("anyrouter");
+                                        let effective_base_url = if is_anyrouter {
+                                            dialog.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
+                                            if dialog.tool == ToolId::Codex || preset.name.contains("Codex") {
+                                                "https://anyrouter.top/v1".to_string()
+                                            } else {
+                                                "https://anyrouter.top".to_string()
+                                            }
+                                        } else {
+                                            extracted.base_url
+                                        };
+
                                         dialog.base_url.update(cx, |inp, cx| {
-                                            inp.set_text_silent(extracted.base_url, cx)
+                                            inp.set_text_silent(effective_base_url, cx)
                                         });
                                         dialog.model.update(cx, |inp, cx| {
                                             inp.set_text_silent(extracted.model, cx)
@@ -1362,7 +1465,7 @@ pub fn render_provider_dialog(
                                                     let mt_str = item.get("maxTokens").map(|v| v.to_string()).unwrap_or_default();
                                                     let raw_compat = item.get("compat").and_then(Value::as_object).cloned();
                                                     let raw_thinking_level_map = item.get("thinkingLevelMap").and_then(Value::as_object).cloned();
-                                                    let is_anthropic = dialog.pi_api_format == "anthropic-messages" || dialog.pi_api_format == "bedrock-converse-stream";
+                                                    let is_anthropic = dialog.pi_api_format == "anthropic-messages" || dialog.pi_api_format == "anyrouter-claude" || dialog.pi_api_format == "bedrock-converse-stream";
                                                     let force_adaptive_thinking = raw_compat
                                                         .as_ref()
                                                         .and_then(|c| c.get("forceAdaptiveThinking"))
@@ -1405,6 +1508,36 @@ pub fn render_provider_dialog(
                                                         context_window: cw_ent,
                                                         max_tokens: mt_ent,
                                                         is_expanded: false,
+                                                    });
+                                                }
+                                                if dialog.pi_models.is_empty() {
+                                                    let id_ent = cx.new(|cx| TextInput::new("模型 ID", cx));
+                                                    let name_ent = cx.new(|cx| TextInput::new("显示名称", cx));
+                                                    let cw_ent = cx.new(|cx| {
+                                                        let mut inp = TextInput::new("上下文窗口", cx);
+                                                        inp.set_text_silent("1000000", cx);
+                                                        inp
+                                                    });
+                                                    let mt_ent = cx.new(|cx| {
+                                                        let mut inp = TextInput::new("最大输出", cx);
+                                                        inp.set_text_silent("128000", cx);
+                                                        inp
+                                                    });
+                                                    let thinking_level_inputs = build_pi_thinking_level_inputs(None, cx);
+                                                    dialog.pi_models.push(crate::pages::PiModelDraft {
+                                                        key: "pi_model_0".to_string(),
+                                                        id: id_ent,
+                                                        name: name_ent,
+                                                        reasoning: true,
+                                                        image_input: true,
+                                                        force_adaptive_thinking: false,
+                                                        raw_compat: None,
+                                                        raw_thinking_level_map: None,
+                                                        thinking_level_inputs,
+                                                        is_thinking_map_expanded: false,
+                                                        context_window: cw_ent,
+                                                        max_tokens: mt_ent,
+                                                        is_expanded: true,
                                                     });
                                                 }
                                             }
@@ -1686,6 +1819,8 @@ pub fn render_provider_dialog(
 
         // API Format (for Pi / Oh My Pi)
         if matches!(tool, ToolId::Pi | ToolId::OhMyPi) {
+            let is_anyrouter_claude = pi_api_format == "anyrouter-claude";
+            let is_anyrouter_codex = pi_api_format == "anyrouter-codex";
             connection_section = connection_section.child(
                 div()
                     .flex()
@@ -1697,12 +1832,25 @@ pub fn render_provider_dialog(
                             ("openai-completions", "OpenAI Chat Completions"),
                             ("openai-responses", "OpenAI Responses"),
                             ("anthropic-messages", "Anthropic Messages"),
+                            ("anyrouter-claude", "AnyRouter Claude Code"),
+                            ("anyrouter-codex", "AnyRouter Codex"),
                             ("google-generative-ai", "Google Generative AI"),
                             ("bedrock-converse-stream", "Amazon Bedrock"),
                         ];
                         let mut fmt_row = div().flex().gap(px(6.0)).flex_wrap();
                         for (f_val, f_lbl) in formats {
                             let is_curr = pi_api_format == f_val;
+                            let allowed = if tool == ToolId::Pi {
+                                aitoolplus_core::pi_runtime::is_pi_api_format_allowed(
+                                    f_val,
+                                    &enabled_builtin_exts,
+                                )
+                            } else {
+                                aitoolplus_core::pi_runtime::is_pi_api_format_allowed(f_val, &[])
+                            };
+                            if !is_curr && !allowed {
+                                continue;
+                            }
                             let f_val2 = f_val.to_string();
                             fmt_row = fmt_row.child(button_l(
                                 gpui::SharedString::from(format!("pi-api-fmt-{f_val}")),
@@ -1717,12 +1865,63 @@ pub fn render_provider_dialog(
                                 move |ws, _ev, _w, cx| {
                                     if let Some(dialog) = ws.ui.provider_dialog.as_mut() {
                                         dialog.pi_api_format = f_val2.clone();
+                                        dialog.api_format = match f_val2.as_str() {
+                                            "anyrouter-claude" | "anthropic-messages" => "anthropic".to_string(),
+                                            "anyrouter-codex" | "openai-responses" => "openai_responses".to_string(),
+                                            "openai-completions" => "openai".to_string(),
+                                            "google-generative-ai" => "gemini".to_string(),
+                                            _ => f_val2.clone(),
+                                        };
+                                        if f_val2 == "anyrouter-claude" {
+                                            let cur_b = dialog.base_url.read(cx).text().trim().to_string();
+                                            if cur_b.is_empty() || cur_b == "https://anyrouter.top/v1" {
+                                                dialog.base_url.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
+                                            }
+                                            let cur_w = dialog.website.read(cx).text().trim().to_string();
+                                            if cur_w.is_empty() {
+                                                dialog.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
+                                            }
+                                        } else if f_val2 == "anyrouter-codex" {
+                                            let cur_b = dialog.base_url.read(cx).text().trim().to_string();
+                                            if cur_b.is_empty() || cur_b == "https://anyrouter.top" {
+                                                dialog.base_url.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top/v1", cx));
+                                            }
+                                            let cur_w = dialog.website.read(cx).text().trim().to_string();
+                                            if cur_w.is_empty() {
+                                                dialog.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
+                                            }
+                                        }
                                     }
                                     cx.notify();
                                 },
                             ));
                         }
                         fmt_row
+                    })
+                    .when(is_anyrouter_claude || is_anyrouter_codex, |col| {
+                        col.child(
+                            div()
+                                .mt(px(2.0))
+                                .px(px(8.0))
+                                .py(px(5.0))
+                                .rounded(px(5.0))
+                                .bg(t.accent_subtle)
+                                .border_1()
+                                .border_color(t.accent.opacity(0.4))
+                                .text_size(px(11.0))
+                                .text_color(t.text_primary)
+                                .child(if is_anyrouter_claude {
+                                    i.raw(
+                                        "✓ 已选 AnyRouter Claude Code 协议（请求路径 /v1/messages?beta=true，自动注入 Claude Code 2.1.x 指纹与 PascalCase 工具名映射；模型可在下方手动填写或点击「获取模型」选择）",
+                                        "✓ AnyRouter Claude Code protocol selected (/v1/messages?beta=true with Claude Code 2.1.x fingerprint & PascalCase tool mapping; enter models manually or click Fetch Models)",
+                                    )
+                                } else {
+                                    i.raw(
+                                        "✓ 已选 AnyRouter Codex 协议（请求路径 /v1/responses，自动注入 Codex 0.144.1 请求指纹；模型可在下方手动填写或点击「获取模型」选择）",
+                                        "✓ AnyRouter Codex protocol selected (/v1/responses with Codex 0.144.1 fingerprint; enter models manually or click Fetch Models)",
+                                    )
+                                }),
+                        )
                     }),
             );
         }
@@ -2472,7 +2671,7 @@ pub fn render_provider_dialog(
                     let is_reasoning = draft.reasoning;
                     let has_image = draft.image_input;
                     let is_adaptive = draft.force_adaptive_thinking;
-                    let is_anthropic_api = pi_api_format == "anthropic-messages" || pi_api_format == "bedrock-converse-stream";
+                    let is_anthropic_api = pi_api_format == "anthropic-messages" || pi_api_format == "anyrouter-claude" || pi_api_format == "bedrock-converse-stream";
                     let show_adaptive_toggle = is_anthropic_api || draft.force_adaptive_thinking;
                     let t2 = t.clone();
 
@@ -5471,6 +5670,7 @@ pub(super) fn save_provider(
 
         if let Some(saved) = ws.store.store().tool(tool).providers.iter().find(|p| p.id == pi_target_id).cloned() {
             let _ = aitoolplus_core::pi_runtime::apply_provider(&ws.paths, &saved);
+            ws.ui.pi_extensions = None;
         }
     } else if tool == ToolId::OhMyPi {
         let omp_target_id = editing_id.clone().unwrap_or_else(|| {

@@ -300,7 +300,17 @@ pub fn scan_local_extensions(extensions_path: &Path) -> Result<Vec<PiExtensionSu
         } else {
             continue;
         };
-        let built_in = is_protected_local_extension(&source);
+        let (built_in, current_version, latest_version, update_available) =
+            if let Some(spec) = crate::pi_runtime::find_builtin_pi_extension(&source) {
+                let ver = std::fs::read_to_string(path.join("index.ts"))
+                    .ok()
+                    .and_then(|c| crate::pi_runtime::parse_extension_version(&c));
+                let bundled = spec.version.to_string();
+                let has_upd = ver.as_deref() != Some(spec.version);
+                (true, ver, Some(bundled), has_upd)
+            } else {
+                (is_protected_local_extension(&source), None, None, false)
+            };
         result.push(PiExtensionSummary {
             id: format!("local:{source}"),
             source,
@@ -308,9 +318,9 @@ pub fn scan_local_extensions(extensions_path: &Path) -> Result<Vec<PiExtensionSu
             kind,
             path: Some(path.to_string_lossy().to_string()),
             built_in,
-            current_version: None,
-            latest_version: None,
-            update_available: false,
+            current_version,
+            latest_version,
+            update_available,
         });
     }
     result.sort_by(|a, b| a.source.cmp(&b.source));

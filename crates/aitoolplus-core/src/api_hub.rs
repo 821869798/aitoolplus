@@ -185,7 +185,7 @@ pub fn build_auth_headers(
         // In addition, supply protocol-specific headers (e.g. Anthropic, Gemini) so native
         // or protocol-strict endpoints also succeed.
         match api_format {
-            Some("anthropic-messages") | Some("anthropic") => {
+            Some("anthropic-messages") | Some("anthropic") | Some("anyrouter-claude") => {
                 headers.push(("x-api-key".to_string(), key.to_string()));
                 headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
             }
@@ -420,8 +420,16 @@ pub fn fetch_models_advanced(
     let mut last_err = String::new();
 
     let has_custom_ua = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
-    let default_ua = if !has_custom_ua && (base_url.contains("agentrouter") || api_format.map_or(false, |f| f.contains("anthropic"))) {
-        "claude-cli/2.1.219 (external, sdk-cli)"
+    let is_anthropic_format = api_format.map_or(false, |f| {
+        f.contains("anthropic") || f.contains("claude")
+    });
+    let is_codex_format = api_format.map_or(false, |f| {
+        f.contains("codex") || f.contains("responses")
+    });
+    let default_ua = if !has_custom_ua && (base_url.contains("agentrouter") || is_anthropic_format) {
+        "claude-cli/2.1.226 (external, sdk-cli)"
+    } else if !has_custom_ua && is_codex_format {
+        "codex_exec/0.144.1 (Linux; x86_64) (codex_exec; 0.144.1)"
     } else {
         "aitoolplus/1.0"
     };

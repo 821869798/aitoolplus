@@ -159,7 +159,12 @@ pub(super) fn apply_restored(
         ws.store = store;
         ws.settings = settings;
         ws.ui.common_editors.clear();
+        ws.ui.pi_extensions = None;
         ws.sync_all_tools_to_live();
+        let _ = aitoolplus_core::pi_runtime::sync_builtin_pi_extensions(
+            &ws.paths,
+            &ws.settings.enabled_builtin_extensions,
+        );
         ws.persist_store();
         ws.ui.skills_discovered = true;
     }

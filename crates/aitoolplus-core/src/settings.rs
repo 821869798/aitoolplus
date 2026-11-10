@@ -410,6 +410,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub usage_auto_scan_sessions: bool,
     #[serde(default)]
+    pub enabled_builtin_extensions: Vec<String>,
+    #[serde(default)]
     pub last_page: String,
 }
 
@@ -476,12 +478,23 @@ impl Default for AppSettings {
             last_antigravity_refresh_time: None,
             window_bounds: None,
             usage_auto_scan_sessions: true,
+            enabled_builtin_extensions: Vec::new(),
             last_page: String::new(),
         }
     }
 }
 
 impl AppSettings {
+    pub fn is_builtin_extension_enabled(&self, key: &str) -> bool {
+        self.enabled_builtin_extensions.iter().any(|k| k == key)
+    }
+
+    pub fn set_builtin_extension_enabled(&mut self, key: &str, enabled: bool) {
+        self.enabled_builtin_extensions.retain(|k| k != key);
+        if enabled {
+            self.enabled_builtin_extensions.push(key.to_string());
+        }
+    }
     /// Compute the effective proxy URL from proxy_type, proxy_host, and proxy_port
     pub fn effective_proxy_url(&self) -> String {
         if !self.proxy_type.is_custom() {

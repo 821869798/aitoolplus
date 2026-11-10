@@ -2013,6 +2013,7 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                     if let Err(e) = aitoolplus_core::pi_runtime::remove_provider(&paths, &id) {
                         tracing::warn!("failed to remove provider from Pi runtime: {e}");
                     }
+                    ws.ui.pi_extensions = None;
                 }
                 aitoolplus_core::ToolId::OhMyPi => {
                     let omp_paths = aitoolplus_core::oh_my_pi::OmpRuntimePaths::from_paths(&ws.paths);
