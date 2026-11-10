@@ -124,6 +124,14 @@ pub fn claude_code_presets() -> Vec<ProviderPreset> {
             extra_env: &[],
         },
         ProviderPreset {
+            name: "AgentRouter",
+            category: "custom",
+            website_url: "https://agentrouter.org",
+            api_key_field: "ANTHROPIC_AUTH_TOKEN",
+            settings: s(&[("ANTHROPIC_BASE_URL", "https://agentrouter.org")]),
+            extra_env: &[],
+        },
+        ProviderPreset {
             name: "DeepSeek",
             category: "official",
             website_url: "https://platform.deepseek.com",
@@ -362,6 +370,16 @@ pub fn codex_presets() -> Vec<ProviderPreset> {
             extra_env: &[],
         },
         ProviderPreset {
+            name: "AgentRouter",
+            category: "custom",
+            website_url: "https://agentrouter.org",
+            api_key_field: "OPENAI_API_KEY",
+            settings: serde_json::json!({
+                "toml": "model_provider = \"agentrouter\"\n\n[model_providers.agentrouter]\nname = \"AgentRouter\"\nbase_url = \"https://agentrouter.org/v1\"\nwire_api = \"responses\"\napi_key = \"\"\n"
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
             name: "PackyCode",
             category: "custom",
             website_url: "https://www.packyapi.ai",
@@ -471,6 +489,44 @@ pub fn pi_presets() -> Vec<ProviderPreset> {
                 "baseUrl": "https://anyrouter.top/v1",
                 "api": "anyrouter-codex",
                 "apiKey": "",
+                "models": []
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
+            name: "AgentRouter (Claude Code)",
+            category: "custom",
+            website_url: "https://agentrouter.org",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "_providerKey": "agentrouter-claude",
+                "name": "AgentRouter (Claude Code)",
+                "baseUrl": "https://agentrouter.org",
+                "api": "anthropic-messages",
+                "apiKey": "",
+                "headers": {
+                    "User-Agent": "claude-cli/2.1.226 (external, cli)",
+                    "anthropic-version": "2023-06-01"
+                },
+                "models": []
+            }),
+            extra_env: &[],
+        },
+        ProviderPreset {
+            name: "AgentRouter (Codex)",
+            category: "custom",
+            website_url: "https://agentrouter.org",
+            api_key_field: "",
+            settings: serde_json::json!({
+                "_providerKey": "agentrouter-codex",
+                "name": "AgentRouter (Codex)",
+                "baseUrl": "https://agentrouter.org/v1",
+                "api": "openai-responses",
+                "apiKey": "",
+                "headers": {
+                    "User-Agent": "codex_exec/0.144.1 (Linux; x86_64) (codex_exec; 0.144.1)",
+                    "originator": "codex_exec"
+                },
                 "models": []
             }),
             extra_env: &[],

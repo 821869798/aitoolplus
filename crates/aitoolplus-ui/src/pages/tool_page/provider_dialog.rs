@@ -889,32 +889,58 @@ pub fn open_provider_dialog(
 
     let meta = existing.as_ref().map(|p| p.parsed_meta()).unwrap_or_default();
 
+    let mut initial_custom_ua = meta.custom_user_agent.clone();
+    let mut initial_headers = meta.custom_headers.clone().unwrap_or_default();
+
+    // If meta did not store custom User-Agent or custom headers, inspect raw_val.headers (e.g. from models.json or raw config)
+    if let Some(headers_obj) = raw_val.get("headers").and_then(Value::as_object) {
+        if initial_custom_ua.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            if let Some(ua) = headers_obj.get("User-Agent").or_else(|| headers_obj.get("user-agent")).and_then(Value::as_str) {
+                if !ua.trim().is_empty() {
+                    initial_custom_ua = Some(ua.to_string());
+                }
+            }
+        }
+        if initial_headers.is_empty() {
+            for (hk, hv) in headers_obj {
+                if !hk.eq_ignore_ascii_case("user-agent") {
+                    if let Some(hv_str) = hv.as_str() {
+                        if !hk.trim().is_empty() && !hv_str.trim().is_empty() {
+                            initial_headers.push(aitoolplus_core::providers::CustomHeaderItem {
+                                name: hk.clone(),
+                                value: hv_str.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let custom_user_agent = cx.new(|cx| {
         let mut input = TextInput::new(
             i.t("tool_dialog.e_g_claude_cli"),
             cx,
         );
-        if let Some(ua) = &meta.custom_user_agent {
+        if let Some(ua) = &initial_custom_ua {
             input.set_text_silent(ua.clone(), cx);
         }
         input
     });
 
     let mut custom_headers_list = Vec::new();
-    if let Some(headers) = &meta.custom_headers {
-        for h in headers {
-            let key = cx.new(|cx| {
-                let mut input = TextInput::new(i.t("tool_dialog.header_name"), cx);
-                input.set_text_silent(h.name.clone(), cx);
-                input
-            });
-            let value = cx.new(|cx| {
-                let mut input = TextInput::new(i.t("tool_dialog.header_value"), cx);
-                input.set_text_silent(h.value.clone(), cx);
-                input
-            });
-            custom_headers_list.push(crate::pages::CustomHeaderDraft { key, value });
-        }
+    for h in &initial_headers {
+        let key = cx.new(|cx| {
+            let mut input = TextInput::new(i.t("tool_dialog.header_name"), cx);
+            input.set_text_silent(h.name.clone(), cx);
+            input
+        });
+        let value = cx.new(|cx| {
+            let mut input = TextInput::new(i.t("tool_dialog.header_value"), cx);
+            input.set_text_silent(h.value.clone(), cx);
+            input
+        });
+        custom_headers_list.push(crate::pages::CustomHeaderDraft { key, value });
     }
 
     let billing_enabled = meta.billing_enabled.unwrap_or_else(|| {
@@ -1005,6 +1031,13 @@ pub fn open_provider_dialog(
         }
     }
 
+    let has_advanced = !custom_headers_list.is_empty()
+        || initial_custom_ua.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || billing_enabled
+        || !model_rewrites.is_empty()
+        || meta.cost_multiplier.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || (pricing_model_source != "inherit");
+
     ws.ui.provider_dialog = Some(ProviderDialogState {
         editing_id,
         tool,
@@ -1039,7 +1072,7 @@ pub fn open_provider_dialog(
         notes,
         website,
         preset_index: None,
-        advanced_expanded: false,
+        advanced_expanded: has_advanced,
         custom_user_agent,
         custom_headers_list,
         billing_enabled,
@@ -1541,6 +1574,38 @@ pub fn render_provider_dialog(
                                                     });
                                                 }
                                             }
+                                        }
+
+                                        if let Some(headers_obj) = preset.settings.get("headers").and_then(Value::as_object) {
+                                            dialog.custom_headers_list.clear();
+                                            let mut found_ua = false;
+                                            for (hk, hv) in headers_obj {
+                                                if let Some(hv_str) = hv.as_str() {
+                                                    if hk.eq_ignore_ascii_case("user-agent") {
+                                                        dialog.custom_user_agent.update(cx, |inp, cx| inp.set_text_silent(hv_str, cx));
+                                                        found_ua = true;
+                                                    } else {
+                                                        let key = cx.new(|cx| {
+                                                            let mut inp = TextInput::new("Header 名称", cx);
+                                                            inp.set_text_silent(hk.clone(), cx);
+                                                            inp
+                                                        });
+                                                        let value = cx.new(|cx| {
+                                                            let mut inp = TextInput::new("Header 对应值", cx);
+                                                            inp.set_text_silent(hv_str.to_string(), cx);
+                                                            inp
+                                                        });
+                                                        dialog.custom_headers_list.push(crate::pages::CustomHeaderDraft { key, value });
+                                                    }
+                                                }
+                                            }
+                                            if !found_ua {
+                                                dialog.custom_user_agent.update(cx, |inp, cx| inp.set_text_silent("", cx));
+                                            }
+                                            dialog.advanced_expanded = true;
+                                        } else {
+                                            dialog.custom_user_agent.update(cx, |inp, cx| inp.set_text_silent("", cx));
+                                            dialog.custom_headers_list.clear();
                                         }
                                     }
                                 }
@@ -4151,8 +4216,55 @@ pub fn render_provider_dialog(
                             |ws, _ev, _w, cx| {
                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                     d.custom_user_agent.update(cx, |inp, cx| {
-                                        inp.set_text_silent("claude-cli/2.1.237 (external, cli)", cx);
+                                        inp.set_text_silent("claude-cli/2.1.226 (external, cli)", cx);
                                     });
+                                    let has_ver = d.custom_headers_list.iter().any(|h| {
+                                        h.key.read(cx).text().trim().eq_ignore_ascii_case("anthropic-version")
+                                    });
+                                    if !has_ver {
+                                        let key = cx.new(|cx| {
+                                            let mut inp = TextInput::new("Header 名称", cx);
+                                            inp.set_text_silent("anthropic-version", cx);
+                                            inp
+                                        });
+                                        let value = cx.new(|cx| {
+                                            let mut inp = TextInput::new("Header 对应值", cx);
+                                            inp.set_text_silent("2023-06-01", cx);
+                                            inp
+                                        });
+                                        d.custom_headers_list.push(crate::pages::CustomHeaderDraft { key, value });
+                                    }
+                                }
+                                cx.notify();
+                            },
+                        ))
+                        .child(button_l(
+                            "ua-pill-codex",
+                            i.t("tool_dialog.codex_official"),
+                            ButtonVariant::Secondary,
+                            &t,
+                            cx,
+                            |ws, _ev, _w, cx| {
+                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                                    d.custom_user_agent.update(cx, |inp, cx| {
+                                        inp.set_text_silent("codex_exec/0.144.1 (Linux; x86_64) (codex_exec; 0.144.1)", cx);
+                                    });
+                                    let has_orig = d.custom_headers_list.iter().any(|h| {
+                                        h.key.read(cx).text().trim().eq_ignore_ascii_case("originator")
+                                    });
+                                    if !has_orig {
+                                        let key = cx.new(|cx| {
+                                            let mut inp = TextInput::new("Header 名称", cx);
+                                            inp.set_text_silent("originator", cx);
+                                            inp
+                                        });
+                                        let value = cx.new(|cx| {
+                                            let mut inp = TextInput::new("Header 对应值", cx);
+                                            inp.set_text_silent("codex_exec", cx);
+                                            inp
+                                        });
+                                        d.custom_headers_list.push(crate::pages::CustomHeaderDraft { key, value });
+                                    }
                                 }
                                 cx.notify();
                             },
@@ -4167,21 +4279,6 @@ pub fn render_provider_dialog(
                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                     d.custom_user_agent.update(cx, |inp, cx| {
                                         inp.set_text_silent("Kilo-Code/1.0", cx);
-                                    });
-                                }
-                                cx.notify();
-                            },
-                        ))
-                        .child(button_l(
-                            "ua-pill-codex",
-                            "Codex TUI",
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _ev, _w, cx| {
-                                if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                                    d.custom_user_agent.update(cx, |inp, cx| {
-                                        inp.set_text_silent("codex-tui/0.1", cx);
                                     });
                                 }
                                 cx.notify();
@@ -4389,6 +4486,29 @@ pub fn render_provider_dialog(
                         let value = cx.new(|cx| {
                             let mut inp = TextInput::new("Header 对应值", cx);
                             inp.set_text_silent("AIToolPlus", cx);
+                            inp
+                        });
+                        d.custom_headers_list.push(crate::pages::CustomHeaderDraft { key, value });
+                    }
+                    cx.notify();
+                },
+            ))
+            .child(button_l(
+                "hdr-pill-originator",
+                "+ originator: codex_exec",
+                ButtonVariant::Secondary,
+                &t2,
+                cx,
+                |ws, _ev, _w, cx| {
+                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
+                        let key = cx.new(|cx| {
+                            let mut inp = TextInput::new("Header 名称", cx);
+                            inp.set_text_silent("originator", cx);
+                            inp
+                        });
+                        let value = cx.new(|cx| {
+                            let mut inp = TextInput::new("Header 对应值", cx);
+                            inp.set_text_silent("codex_exec", cx);
                             inp
                         });
                         d.custom_headers_list.push(crate::pages::CustomHeaderDraft { key, value });
@@ -5208,21 +5328,19 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
                     obj.insert("_providerKey".into(), Value::String(pi_provider_key.trim().into()));
                 }
                 obj.insert("models".into(), Value::Array(pi_models.to_vec()));
-                if !headers_map.is_empty() || !custom_user_agent.trim().is_empty() {
-                    let mut h_obj = serde_json::Map::new();
-                    if !custom_user_agent.trim().is_empty() {
-                        h_obj.insert("User-Agent".into(), Value::String(custom_user_agent.trim().into()));
+                let mut h_obj = serde_json::Map::new();
+                if !custom_user_agent.trim().is_empty() {
+                    h_obj.insert("User-Agent".into(), Value::String(custom_user_agent.trim().into()));
+                }
+                for (k, v) in headers_map {
+                    if !k.trim().is_empty() && !v.trim().is_empty() {
+                        h_obj.insert(k.trim().into(), Value::String(v.trim().into()));
                     }
-                    for (k, v) in headers_map {
-                        if !k.trim().is_empty() && !v.trim().is_empty() {
-                            h_obj.insert(k.trim().into(), Value::String(v.trim().into()));
-                        }
-                    }
-                    if !h_obj.is_empty() {
-                        obj.insert("headers".into(), Value::Object(h_obj));
-                    } else {
-                        obj.remove("headers");
-                    }
+                }
+                if !h_obj.is_empty() {
+                    obj.insert("headers".into(), Value::Object(h_obj));
+                } else {
+                    obj.remove("headers");
                 }
             }
             Ok(serde_json::to_string_pretty(&val).unwrap_or_default())

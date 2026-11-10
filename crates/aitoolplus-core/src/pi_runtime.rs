@@ -420,6 +420,27 @@ pub fn set_provider_enabled(
     if let Some(obj) = model_provider.as_object_mut() {
         obj.remove("_auth");
         obj.remove("_providerKey");
+
+        // Ensure custom headers/User-Agent from provider metadata are included in models.json if missing
+        let meta = provider.parsed_meta();
+        if !obj.contains_key("headers") {
+            let mut h_map = Map::new();
+            if let Some(ua) = &meta.custom_user_agent {
+                if !ua.trim().is_empty() {
+                    h_map.insert("User-Agent".into(), Value::String(ua.trim().to_string()));
+                }
+            }
+            if let Some(headers) = &meta.custom_headers {
+                for h in headers {
+                    if !h.name.trim().is_empty() && !h.value.trim().is_empty() {
+                        h_map.insert(h.name.trim().to_string(), Value::String(h.value.trim().to_string()));
+                    }
+                }
+            }
+            if !h_map.is_empty() {
+                obj.insert("headers".into(), Value::Object(h_map));
+            }
+        }
     }
     let uses_builtin_ext_api = model_provider
         .get("api")

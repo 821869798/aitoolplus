@@ -2088,16 +2088,17 @@ tool_dialog:
     zh-CN: 自定义 HTTP 请求头 (Custom HTTP Headers)
     en: Custom HTTP Headers
   tip_some_third_party:
-    zh-CN: '提示: 部分中转站（如 Kimi / 火山 / GLM）仅允许官方白名单 User-Agent。若请求报 403 Forbidden，请直接套用「Claude
-      Code 官方指纹」。'
-    en: 'Tip: Some third-party proxies only allow official User-Agents. If you hit
-      403 Forbidden, apply the official fingerprint above.'
+    zh-CN: '提示: 部分中转站与网关（如 AgentRouter / Kimi / 火山）仅允许白名单客户端。若请求报 401/403 错误（如 unauthorized client detected），请直接套用「Codex 官方指纹」或「Claude Code 官方指纹」。'
+    en: 'Tip: Some providers and gateways (e.g. AgentRouter) only allow whitelisted clients. If you encounter 401/403 unauthorized client errors, apply the Codex or Claude Code official fingerprint.'
   clear:
     zh-CN: 清空
     en: Clear
   claude_code_official:
     zh-CN: Claude Code 官方指纹
     en: Claude Code Official
+  codex_official:
+    zh-CN: Codex 官方指纹 (AgentRouter放行)
+    en: Codex Official (AgentRouter bypass)
   quick_presets:
     zh-CN: '常用指纹预设:'
     en: 'Quick presets:'
