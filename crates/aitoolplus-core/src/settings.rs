@@ -410,9 +410,15 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub usage_auto_scan_sessions: bool,
     #[serde(default)]
+    pub disabled_builtin_extensions: Vec<String>,
+    #[serde(default = "default_enabled_builtin_extensions")]
     pub enabled_builtin_extensions: Vec<String>,
     #[serde(default)]
     pub last_page: String,
+}
+
+pub fn default_enabled_builtin_extensions() -> Vec<String> {
+    vec!["pi:anyrouter".to_string()]
 }
 
 fn default_antigravity_refresh_interval() -> u32 {
@@ -478,7 +484,8 @@ impl Default for AppSettings {
             last_antigravity_refresh_time: None,
             window_bounds: None,
             usage_auto_scan_sessions: true,
-            enabled_builtin_extensions: Vec::new(),
+            disabled_builtin_extensions: Vec::new(),
+            enabled_builtin_extensions: default_enabled_builtin_extensions(),
             last_page: String::new(),
         }
     }
@@ -486,13 +493,23 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub fn is_builtin_extension_enabled(&self, key: &str) -> bool {
+        if self.disabled_builtin_extensions.iter().any(|k| k == key) {
+            return false;
+        }
         self.enabled_builtin_extensions.iter().any(|k| k == key)
     }
 
     pub fn set_builtin_extension_enabled(&mut self, key: &str, enabled: bool) {
-        self.enabled_builtin_extensions.retain(|k| k != key);
         if enabled {
-            self.enabled_builtin_extensions.push(key.to_string());
+            self.disabled_builtin_extensions.retain(|k| k != key);
+            if !self.enabled_builtin_extensions.iter().any(|k| k == key) {
+                self.enabled_builtin_extensions.push(key.to_string());
+            }
+        } else {
+            self.enabled_builtin_extensions.retain(|k| k != key);
+            if !self.disabled_builtin_extensions.iter().any(|k| k == key) {
+                self.disabled_builtin_extensions.push(key.to_string());
+            }
         }
     }
     /// Compute the effective proxy URL from proxy_type, proxy_host, and proxy_port
@@ -689,6 +706,16 @@ impl AppSettings {
         }
         settings.normalize_proxy();
 
+        // Ensure default built-in extensions (like pi:anyrouter) are enabled
+        // unless the user has explicitly disabled them.
+        for default_ext in default_enabled_builtin_extensions() {
+            if !settings.disabled_builtin_extensions.contains(&default_ext)
+                && !settings.enabled_builtin_extensions.contains(&default_ext)
+            {
+                settings.enabled_builtin_extensions.push(default_ext);
+            }
+        }
+
         let sync_path = path.with_file_name("sync.json");
         let sync = SyncSettings::load(&sync_path);
         settings.backup_type = sync.backup_type;
@@ -823,5 +850,44 @@ mod tests {
         // Direct test should either succeed or fail gracefully without panicking
         let res = test_proxy_connectivity("direct");
         println!("Direct connectivity test result: {:?}", res);
+    }
+
+    #[test]
+    fn builtin_extensions_default_and_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("settings.json");
+
+        // 1. Fresh settings has pi:anyrouter enabled by default
+        let s = AppSettings::default();
+        assert!(s.is_builtin_extension_enabled("pi:anyrouter"));
+        assert_eq!(s.enabled_builtin_extensions, vec!["pi:anyrouter"]);
+        assert!(s.disabled_builtin_extensions.is_empty());
+
+        // 2. Loading from a legacy JSON file (no enabled/disabled fields) defaults to enabled
+        std::fs::write(&p, r#"{"language":"System"}"#).unwrap();
+        let mut loaded = AppSettings::load(&p);
+        assert!(loaded.is_builtin_extension_enabled("pi:anyrouter"));
+        assert!(loaded.enabled_builtin_extensions.contains(&"pi:anyrouter".to_string()));
+
+        // 3. Explicitly disabling pi:anyrouter
+        loaded.set_builtin_extension_enabled("pi:anyrouter", false);
+        assert!(!loaded.is_builtin_extension_enabled("pi:anyrouter"));
+        assert!(loaded.disabled_builtin_extensions.contains(&"pi:anyrouter".to_string()));
+        assert!(!loaded.enabled_builtin_extensions.contains(&"pi:anyrouter".to_string()));
+        loaded.save(&p).unwrap();
+
+        // 4. Reloading respects the user's explicit disable
+        let mut reloaded = AppSettings::load(&p);
+        assert!(!reloaded.is_builtin_extension_enabled("pi:anyrouter"));
+        assert!(reloaded.disabled_builtin_extensions.contains(&"pi:anyrouter".to_string()));
+
+        // 5. Explicitly re-enabling clears disabled and sets enabled
+        reloaded.set_builtin_extension_enabled("pi:anyrouter", true);
+        assert!(reloaded.is_builtin_extension_enabled("pi:anyrouter"));
+        assert!(!reloaded.disabled_builtin_extensions.contains(&"pi:anyrouter".to_string()));
+        reloaded.save(&p).unwrap();
+
+        let final_loaded = AppSettings::load(&p);
+        assert!(final_loaded.is_builtin_extension_enabled("pi:anyrouter"));
     }
 }
