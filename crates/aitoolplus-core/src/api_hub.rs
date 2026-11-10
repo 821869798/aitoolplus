@@ -427,9 +427,9 @@ pub fn fetch_models_advanced(
         f.contains("codex") || f.contains("responses")
     });
     let default_ua = if !has_custom_ua && (base_url.contains("agentrouter") || is_anthropic_format) {
-        "claude-cli/2.1.226 (external, sdk-cli)"
+        "claude-cli/2.1.322 (external, cli)"
     } else if !has_custom_ua && is_codex_format {
-        "codex_exec/0.144.1 (Linux; x86_64) (codex_exec; 0.144.1)"
+        "codex_exec/0.167.0 (Linux; x86_64) (codex_exec; 0.167.0)"
     } else {
         "aitoolplus/1.0"
     };

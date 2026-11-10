@@ -1982,8 +1982,8 @@ pub fn render_provider_dialog(
                                     )
                                 } else {
                                     i.raw(
-                                        "✓ 已选 AnyRouter Codex 协议（请求路径 /v1/responses，自动注入 Codex 0.144.1 请求指纹；模型可在下方手动填写或点击「获取模型」选择）",
-                                        "✓ AnyRouter Codex protocol selected (/v1/responses with Codex 0.144.1 fingerprint; enter models manually or click Fetch Models)",
+                                        "✓ 已选 AnyRouter Codex 协议（请求路径 /v1/responses，自动注入 Codex 最新版请求指纹；模型可在下方手动填写或点击「获取模型」选择）",
+                                        "✓ AnyRouter Codex protocol selected (/v1/responses with latest Codex fingerprint; enter models manually or click Fetch Models)",
                                     )
                                 }),
                         )
@@ -4216,7 +4216,7 @@ pub fn render_provider_dialog(
                             |ws, _ev, _w, cx| {
                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                     d.custom_user_agent.update(cx, |inp, cx| {
-                                        inp.set_text_silent("claude-cli/2.1.226 (external, cli)", cx);
+                                        inp.set_text_silent("claude-cli/2.1.322 (external, cli)", cx);
                                     });
                                     let has_ver = d.custom_headers_list.iter().any(|h| {
                                         h.key.read(cx).text().trim().eq_ignore_ascii_case("anthropic-version")
@@ -4247,7 +4247,7 @@ pub fn render_provider_dialog(
                             |ws, _ev, _w, cx| {
                                 if let Some(d) = ws.ui.provider_dialog.as_mut() {
                                     d.custom_user_agent.update(cx, |inp, cx| {
-                                        inp.set_text_silent("codex_exec/0.144.1 (Linux; x86_64) (codex_exec; 0.144.1)", cx);
+                                        inp.set_text_silent("codex_exec/0.167.0 (Linux; x86_64) (codex_exec; 0.167.0)", cx);
                                     });
                                     let has_orig = d.custom_headers_list.iter().any(|h| {
                                         h.key.read(cx).text().trim().eq_ignore_ascii_case("originator")

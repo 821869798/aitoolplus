@@ -2407,8 +2407,8 @@ tool_dialog:
     zh-CN: Header 名称 (如 X-Title)
     en: Header Name
   e_g_claude_cli:
-    zh-CN: 例如 claude-cli/2.1.237 (external, cli)
-    en: e.g. claude-cli/2.1.237
+    zh-CN: 例如 claude-cli/2.1.322 (external, cli)
+    en: e.g. claude-cli/2.1.322
   search_models_by_id:
     zh-CN: 搜索模型名称或厂商 (模糊过滤)...
     en: Search models by ID or provider...

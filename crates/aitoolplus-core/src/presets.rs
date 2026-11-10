@@ -505,7 +505,7 @@ pub fn pi_presets() -> Vec<ProviderPreset> {
                 "api": "anthropic-messages",
                 "apiKey": "",
                 "headers": {
-                    "User-Agent": "claude-cli/2.1.226 (external, cli)",
+                    "User-Agent": "claude-cli/2.1.322 (external, cli)",
                     "anthropic-version": "2023-06-01"
                 },
                 "models": []
@@ -524,7 +524,7 @@ pub fn pi_presets() -> Vec<ProviderPreset> {
                 "api": "openai-responses",
                 "apiKey": "",
                 "headers": {
-                    "User-Agent": "codex_exec/0.144.1 (Linux; x86_64) (codex_exec; 0.144.1)",
+                    "User-Agent": "codex_exec/0.167.0 (Linux; x86_64) (codex_exec; 0.167.0)",
                     "originator": "codex_exec"
                 },
                 "models": []

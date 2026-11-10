@@ -84,8 +84,8 @@ export const API_CLAUDE_ID = "anyrouter-claude" as Api;
 export const API_CODEX_ID = "anyrouter-codex" as Api;
 export const DEFAULT_BASE_URL = "https://anyrouter.top";
 
-export const CLAUDE_CODE_VERSION = "2.1.226";
-export const CLAUDE_CODE_VERSION_BUILD = "2.1.226.b94";
+export const CLAUDE_CODE_VERSION = "2.1.322";
+export const CLAUDE_CODE_VERSION_BUILD = "2.1.322.b94";
 export const STAINLESS_PACKAGE_VERSION = "0.94.0";
 export const STAINLESS_OS = "Linux";
 export const STAINLESS_ARCH = "x64";
@@ -94,7 +94,7 @@ export const STAINLESS_RUNTIME_VERSION = "v26.3.0";
 export const ANTHROPIC_BETA =
   "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24";
 
-export const CODEX_VERSION = "0.144.1";
+export const CODEX_VERSION = "0.167.0";
 export const DEFAULT_MAX_RETRIES = 3;
 
 // =============================================================================

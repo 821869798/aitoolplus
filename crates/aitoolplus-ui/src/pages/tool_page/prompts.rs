@@ -777,7 +777,7 @@ mod tests {
             codex_wire_api: "",
             codex_reasoning_effort: "",
             codex_catalog_models: &[],
-            custom_user_agent: "claude-cli/2.1.237 (external, cli)",
+            custom_user_agent: "claude-cli/2.1.322 (external, cli)",
             custom_headers: "X-Krill-Custom: 123",
             headers_map: &[],
             raw_settings_json: "{}",
@@ -789,7 +789,7 @@ mod tests {
 
         assert_eq!(
             env.get("USER_AGENT").and_then(Value::as_str),
-            Some("claude-cli/2.1.237 (external, cli)")
+            Some("claude-cli/2.1.322 (external, cli)")
         );
         assert_eq!(
             env.get("CUSTOM_HEADERS").and_then(Value::as_str),

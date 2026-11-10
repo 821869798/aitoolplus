@@ -1297,7 +1297,7 @@ mod tests {
         assert_eq!(record.parsed_meta(), ProviderMeta::default());
 
         let meta = ProviderMeta {
-            custom_user_agent: Some("claude-cli/2.1.237 (external, cli)".into()),
+            custom_user_agent: Some("claude-cli/2.1.322 (external, cli)".into()),
             custom_headers: Some(vec![
                 CustomHeaderItem {
                     name: "X-Title".into(),

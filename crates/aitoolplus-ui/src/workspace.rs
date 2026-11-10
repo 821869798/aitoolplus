@@ -572,7 +572,7 @@ impl Workspace {
                 if std::env::var("AITOOLPLUS_SEED_ADVANCED").ok().as_deref() == Some("1") {
                     if let Some(d) = ws.ui.provider_dialog.as_mut() {
                         d.custom_user_agent.update(cx, |inp, cx| {
-                            inp.set_text_silent("claude-cli/2.1.237 (external, cli)", cx);
+                            inp.set_text_silent("claude-cli/2.1.322 (external, cli)", cx);
                         });
                         let k1 = cx.new(|cx| {
                             let mut inp = TextInput::new("Header 名称", cx);
