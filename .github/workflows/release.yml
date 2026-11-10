@@ -22,15 +22,21 @@ jobs:
   build-windows:
     name: Build & Package Windows Installer
     runs-on: windows-2022
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+
+      - name: Setup Sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Install NSIS
         shell: pwsh
