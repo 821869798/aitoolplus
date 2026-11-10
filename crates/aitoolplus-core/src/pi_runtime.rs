@@ -47,7 +47,7 @@ pub const BUILTIN_PI_EXTENSIONS: &[BuiltinPiExtensionSpec] = &[BuiltinPiExtensio
     title_en: "AnyRouter Protocol Adapter (anyrouter)",
     description_zh: "AIToolPlus 自维护内置脚本 · 提供独立的 AnyRouter Claude Code (/v1/messages?beta=true) 与 AnyRouter Codex (/v1/responses) 双协议格式支持",
     description_en: "AIToolPlus self-maintained built-in extension · Separate AnyRouter Claude Code & Codex protocol adapters",
-    version: "1.0.0",
+    version: "1.1.0",
     source_ts: include_str!("../assets/pi_anyrouter_extension.ts"),
     preset_names: &["AnyRouter (Claude Code)", "AnyRouter (Codex)"],
     api_formats: &["anyrouter-claude", "anyrouter-codex"],
@@ -684,7 +684,7 @@ mod tests {
         assert!(!is_pi_api_format_allowed("anyrouter-codex", &empty_enabled));
         assert!(is_pi_preset_allowed("DeepSeek", &empty_enabled));
 
-        // 2. Simulate an older version (0.9.0) on disk, then sync with enabled list -> auto-upgrades to 1.0.0
+        // 2. Simulate an older version (0.9.0) on disk, then sync with enabled list -> auto-upgrades to 1.1.0
         let ext_dir = root.join("extensions").join("anyrouter");
         std::fs::create_dir_all(&ext_dir).unwrap();
         std::fs::write(
@@ -704,7 +704,7 @@ mod tests {
         let statuses_after = builtin_pi_extensions_status(&paths, &enabled);
         assert!(statuses_after[0].installed);
         assert!(statuses_after[0].enabled);
-        assert_eq!(statuses_after[0].installed_version.as_deref(), Some("1.0.0"));
+        assert_eq!(statuses_after[0].installed_version.as_deref(), Some("1.1.0"));
         assert!(!statuses_after[0].update_available);
         assert!(is_pi_preset_allowed("AnyRouter (Claude Code)", &enabled));
         assert!(is_pi_preset_allowed("AnyRouter (Codex)", &enabled));

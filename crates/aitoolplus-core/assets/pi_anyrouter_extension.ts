@@ -1,5 +1,5 @@
 // @aitoolplus-extension: anyrouter
-// @aitoolplus-version: 1.0.0
+// @aitoolplus-version: 1.1.0
 /**
  * AIToolPlus Self-Maintained AnyRouter Provider Extension for Pi Coding Agent
  *
@@ -12,7 +12,7 @@
  * 2. Codex Responses Lite protocol (/v1/responses) for OpenAI/GPT/Codex models.
  */
 
-export const AITOOLPLUS_ANYROUTER_EXT_VERSION = "1.0.0";
+export const AITOOLPLUS_ANYROUTER_EXT_VERSION = "1.1.0";
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, randomUUID } from "node:crypto";
