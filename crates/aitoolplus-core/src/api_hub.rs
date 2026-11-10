@@ -697,16 +697,16 @@ mod tests {
     #[ignore]
     fn test_anyrouter_claude_and_codex_fetch() {
         let base_url = "https://anyrouter.top";
-        let api_key = "sk-test-dummy-key-placeholder";
+        let api_key = std::env::var("ANYROUTER_API_KEY").unwrap_or_else(|_| "sk-test-dummy-key-placeholder".to_string());
         // Claude Code fetch simulation (with api_format: "anthropic")
-        let claude_res = fetch_models_advanced(base_url, api_key, Some("anthropic"), None, None);
+        let claude_res = fetch_models_advanced(base_url, &api_key, Some("anthropic"), None, None);
         assert!(claude_res.is_ok(), "Claude AnyRouter fetch failed: {:?}", claude_res.err());
         let claude_models = claude_res.unwrap().models;
         assert!(!claude_models.is_empty());
         assert!(claude_models.iter().any(|m| m.id.starts_with("claude-")));
 
         // Codex fetch simulation (base_url: "https://anyrouter.top/v1", api_format: "openai_responses")
-        let codex_res = fetch_models_advanced("https://anyrouter.top/v1", api_key, Some("openai_responses"), None, None);
+        let codex_res = fetch_models_advanced("https://anyrouter.top/v1", &api_key, Some("openai_responses"), None, None);
         assert!(codex_res.is_ok(), "Codex AnyRouter fetch failed: {:?}", codex_res.err());
         let codex_models = codex_res.unwrap().models;
         assert!(!codex_models.is_empty());
@@ -716,8 +716,8 @@ mod tests {
     #[ignore]
     fn test_agentrouter_fetch() {
         let base_url = "https://agentrouter.org";
-        let api_key = "sk-test-dummy-key-placeholder";
-        let res = fetch_models_advanced(base_url, api_key, Some("anthropic-messages"), None, None);
+        let api_key = std::env::var("AGENTROUTER_API_KEY").unwrap_or_else(|_| "sk-test-dummy-key-placeholder".to_string());
+        let res = fetch_models_advanced(base_url, &api_key, Some("anthropic-messages"), None, None);
         assert!(res.is_ok(), "AgentRouter fetch failed: {:?}", res.err());
         let models = res.unwrap().models;
         assert!(!models.is_empty(), "Models should not be empty");
