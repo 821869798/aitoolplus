@@ -15,6 +15,7 @@
 export const AITOOLPLUS_ANYROUTER_EXT_VERSION = "1.1.1";
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { execSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -287,21 +288,72 @@ function hostMatchesNoProxy(hostname: string, pattern: string): boolean {
   return host === item || host.endsWith(`.${item}`);
 }
 
+let cachedWinProxy: string | null | undefined = undefined;
+
+function getWindowsSystemProxy(): string | undefined {
+  if (cachedWinProxy !== undefined) {
+    return cachedWinProxy || undefined;
+  }
+  if (process.platform !== "win32") {
+    cachedWinProxy = null;
+    return undefined;
+  }
+  try {
+    const out = execSync('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"', {
+      encoding: "utf-8",
+      timeout: 1000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (/ProxyEnable\s+REG_DWORD\s+0x1/i.test(out)) {
+      const match = out.match(/ProxyServer\s+REG_SZ\s+([^\r\n]+)/i);
+      if (match && match[1]) {
+        let server = match[1].trim();
+        if (server.includes("https=")) {
+          const m = server.match(/https=([^;]+)/);
+          if (m) server = m[1];
+        } else if (server.includes("http=")) {
+          const m = server.match(/http=([^;]+)/);
+          if (m) server = m[1];
+        }
+        if (server) {
+          if (!server.startsWith("http://") && !server.startsWith("https://") && !server.startsWith("socks5://")) {
+            server = `http://${server}`;
+          }
+          cachedWinProxy = server;
+          return server;
+        }
+      }
+    }
+  } catch {}
+  cachedWinProxy = null;
+  return undefined;
+}
+
 function getProxyUrl(url: string): string | undefined {
   const parsed = new URL(url);
   const noProxy = process.env.NO_PROXY || process.env.no_proxy || "";
   if (noProxy.split(",").some((item) => hostMatchesNoProxy(parsed.hostname, item))) {
     return undefined;
   }
-  if (parsed.protocol === "https:") {
-    return (
-      process.env.HTTPS_PROXY ||
-      process.env.https_proxy ||
-      process.env.HTTP_PROXY ||
-      process.env.http_proxy
-    );
+  // 1. Check terminal environment variables
+  const envProxy =
+    parsed.protocol === "https:"
+      ? process.env.HTTPS_PROXY ||
+        process.env.https_proxy ||
+        process.env.HTTP_PROXY ||
+        process.env.http_proxy ||
+        process.env.ALL_PROXY ||
+        process.env.all_proxy
+      : process.env.HTTP_PROXY ||
+        process.env.http_proxy ||
+        process.env.ALL_PROXY ||
+        process.env.all_proxy;
+  if (envProxy) {
+    return envProxy;
   }
-  return process.env.HTTP_PROXY || process.env.http_proxy;
+
+  // 2. Check Windows OS system proxy (Internet Settings registry)
+  return getWindowsSystemProxy();
 }
 
 async function fetchWithProxy(url: string, init: RequestInit): Promise<Response> {
