@@ -1364,20 +1364,8 @@ pub fn render_provider_dialog(
                                             }
                                         }
 
-                                        let is_anyrouter = preset.name.to_ascii_lowercase().contains("anyrouter");
-                                        let effective_base_url = if is_anyrouter {
-                                            dialog.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
-                                            if dialog.tool == ToolId::Codex || preset.name.contains("Codex") {
-                                                "https://anyrouter.top/v1".to_string()
-                                            } else {
-                                                "https://anyrouter.top".to_string()
-                                            }
-                                        } else {
-                                            extracted.base_url
-                                        };
-
                                         dialog.base_url.update(cx, |inp, cx| {
-                                            inp.set_text_silent(effective_base_url, cx)
+                                            inp.set_text_silent(extracted.base_url, cx)
                                         });
                                         dialog.model.update(cx, |inp, cx| {
                                             inp.set_text_silent(extracted.model, cx)
