@@ -209,7 +209,9 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
                                 ws.settings.proxy_type = pt;
                                 ws.ui.proxy_protocol_dropdown_open = false;
                                 let host = ws.ui.proxy_host_input.read(cx).text().trim().to_string();
-                                let port = ws.ui.proxy_port_input.read(cx).text().trim().to_string();
+                                let port_raw = ws.ui.proxy_port_input.read(cx).text().trim().to_string();
+                                let port: String = port_raw.chars().filter(|c| c.is_ascii_digit()).collect();
+                                let port = if port.is_empty() { "7890".to_string() } else { port };
                                 ws.settings.proxy_host = host;
                                 ws.settings.proxy_port = port;
                                 ws.settings.sync_proxy();
@@ -384,7 +386,9 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
             let current_pt = ws.settings.proxy_type;
             let test_url = if current_pt.is_custom() {
                 let host = ws.ui.proxy_host_input.read(cx).text().trim().to_string();
-                let port = ws.ui.proxy_port_input.read(cx).text().trim().to_string();
+                let port_raw = ws.ui.proxy_port_input.read(cx).text().trim().to_string();
+                let port: String = port_raw.chars().filter(|c| c.is_ascii_digit()).collect();
+                let port = if port.is_empty() { "7890".to_string() } else { port };
                 if host.is_empty() {
                     ws.ui.toast(
                         ws.i18n.t("settings_general.please_enter_proxy_server").to_string(),
@@ -461,7 +465,9 @@ pub(super) fn general_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gp
         cx,
         move |ws, _, _, cx| {
             let host = ws.ui.proxy_host_input.read(cx).text().trim().to_string();
-            let port = ws.ui.proxy_port_input.read(cx).text().trim().to_string();
+            let port_raw = ws.ui.proxy_port_input.read(cx).text().trim().to_string();
+            let port: String = port_raw.chars().filter(|c| c.is_ascii_digit()).collect();
+            let port = if port.is_empty() { "7890".to_string() } else { port };
             ws.settings.proxy_host = host;
             ws.settings.proxy_port = port;
             ws.settings.sync_proxy();

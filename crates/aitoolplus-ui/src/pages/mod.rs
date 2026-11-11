@@ -888,18 +888,6 @@ impl WorkspaceState {
 
         let proxy_host_input = cx.new(|cx| TextInput::new("127.0.0.1", cx));
         let proxy_port_input = cx.new(|cx| TextInput::new("7890", cx));
-        let port_entity = proxy_port_input.clone();
-        cx.subscribe(&proxy_port_input, move |_this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
-            if let crate::text_input::TextInputEvent::Change(text) = event {
-                let filtered: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
-                if filtered != *text {
-                    port_entity.update(cx, |input, cx| {
-                        input.set_text_silent(filtered, cx);
-                    });
-                    cx.notify();
-                }
-            }
-        }).detach();
 
         let drag_reorder = match std::env::var("AITOOLPLUS_TEST_DRAG_HOVER").as_deref() {
             Ok("provider") => Some(DragReorderState::Provider {
