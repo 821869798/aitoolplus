@@ -839,54 +839,6 @@ pub fn open_provider_dialog(
         }
     }).detach();
 
-    let weak_ws_name = cx.entity().downgrade();
-    cx.subscribe(&name, move |_this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
-        if let crate::text_input::TextInputEvent::Change(val) = event {
-            let lower = val.to_ascii_lowercase();
-            if lower.contains("anyrouter") {
-                let _ = weak_ws_name.update(cx, |ws: &mut Workspace, cx| {
-                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                        let is_codex = d.tool == ToolId::Codex || lower.contains("codex") || d.pi_api_format == "anyrouter-codex";
-                        let target_base_url = if is_codex { "https://anyrouter.top/v1" } else { "https://anyrouter.top" };
-                        let cur_b = d.base_url.read(cx).text().trim().to_string();
-                        if cur_b.is_empty() {
-                            d.base_url.update(cx, |inp, cx| inp.set_text_silent(target_base_url, cx));
-                        }
-                        let cur_w = d.website.read(cx).text().trim().to_string();
-                        if cur_w.is_empty() {
-                            d.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
-                        }
-                    }
-                    cx.notify();
-                });
-            }
-        }
-    }).detach();
-
-    let weak_ws_pk = cx.entity().downgrade();
-    cx.subscribe(&pi_provider_key, move |_this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
-        if let crate::text_input::TextInputEvent::Change(val) = event {
-            let lower = val.to_ascii_lowercase();
-            if lower.contains("anyrouter") {
-                let _ = weak_ws_pk.update(cx, |ws: &mut Workspace, cx| {
-                    if let Some(d) = ws.ui.provider_dialog.as_mut() {
-                        let is_codex = lower.contains("codex") || d.pi_api_format == "anyrouter-codex";
-                        let target_base_url = if is_codex { "https://anyrouter.top/v1" } else { "https://anyrouter.top" };
-                        let cur_b = d.base_url.read(cx).text().trim().to_string();
-                        if cur_b.is_empty() {
-                            d.base_url.update(cx, |inp, cx| inp.set_text_silent(target_base_url, cx));
-                        }
-                        let cur_w = d.website.read(cx).text().trim().to_string();
-                        if cur_w.is_empty() {
-                            d.website.update(cx, |inp, cx| inp.set_text_silent("https://anyrouter.top", cx));
-                        }
-                    }
-                    cx.notify();
-                });
-            }
-        }
-    }).detach();
-
     let meta = existing.as_ref().map(|p| p.parsed_meta()).unwrap_or_default();
 
     let mut initial_custom_ua = meta.custom_user_agent.clone();
