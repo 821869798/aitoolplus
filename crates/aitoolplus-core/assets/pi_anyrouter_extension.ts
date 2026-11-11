@@ -1,5 +1,5 @@
 // @aitoolplus-extension: anyrouter
-// @aitoolplus-version: 1.1.0
+// @aitoolplus-version: 1.1.1
 /**
  * AIToolPlus Self-Maintained AnyRouter Provider Extension for Pi Coding Agent
  *
@@ -12,14 +12,13 @@
  * 2. Codex Responses Lite protocol (/v1/responses) for OpenAI/GPT/Codex models.
  */
 
-export const AITOOLPLUS_ANYROUTER_EXT_VERSION = "1.1.0";
+export const AITOOLPLUS_ANYROUTER_EXT_VERSION = "1.1.1";
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
 import * as piAi from "@earendil-works/pi-ai";
 import {
   calculateCost,
@@ -277,7 +276,7 @@ async function* iterateSseEvents(stream: ReadableStream<Uint8Array>): AsyncGener
 // Proxy & Retry HTTP Client
 // =============================================================================
 
-const PROXY_AGENTS = new Map<string, ProxyAgent>();
+const PROXY_AGENTS = new Map<string, any>();
 
 function hostMatchesNoProxy(hostname: string, pattern: string): boolean {
   const item = pattern.trim().toLowerCase();
@@ -305,24 +304,41 @@ function getProxyUrl(url: string): string | undefined {
   return process.env.HTTP_PROXY || process.env.http_proxy;
 }
 
-function getProxyAgent(proxyUrl: string): ProxyAgent {
-  let agent = PROXY_AGENTS.get(proxyUrl);
-  if (!agent) {
-    agent = new ProxyAgent(proxyUrl);
-    PROXY_AGENTS.set(proxyUrl, agent);
-  }
-  return agent;
-}
-
 async function fetchWithProxy(url: string, init: RequestInit): Promise<Response> {
   const proxyUrl = getProxyUrl(url);
   if (!proxyUrl) {
     return fetch(url, init);
   }
-  return undiciFetch(url, {
-    ...init,
-    dispatcher: getProxyAgent(proxyUrl),
-  } as any) as unknown as Promise<Response>;
+
+  // 1. In Bun runtime (e.g. Pi standalone executable), fetch natively supports the `proxy` option.
+  if (typeof (globalThis as any).Bun !== "undefined") {
+    try {
+      return await fetch(url, {
+        ...init,
+        proxy: proxyUrl,
+      } as any);
+    } catch {
+      return fetch(url, init);
+    }
+  }
+
+  // 2. In Node.js runtime, attempt optional dynamic import of undici if present in node_modules.
+  try {
+    const undiciMod = await import("undici");
+    let agent = PROXY_AGENTS.get(proxyUrl);
+    if (!agent && undiciMod.ProxyAgent) {
+      agent = new undiciMod.ProxyAgent(proxyUrl);
+      PROXY_AGENTS.set(proxyUrl, agent);
+    }
+    const uFetch = undiciMod.fetch || fetch;
+    return await (uFetch(url, {
+      ...init,
+      dispatcher: agent,
+    } as any) as unknown as Promise<Response>);
+  } catch {
+    // If undici is not installed in the environment, fallback gracefully to native fetch.
+    return fetch(url, init);
+  }
 }
 
 function delay(ms: number): Promise<void> {
