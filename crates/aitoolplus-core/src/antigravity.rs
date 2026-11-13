@@ -2032,7 +2032,7 @@ pub fn get_all_candidate_db_paths(target_ide: Option<&str>) -> Vec<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::paths::home_dir() {
             for folder_name in folder_names {
                 paths.push(home.join(format!(
                     "Library/Application Support/{}/User/globalStorage/state.vscdb",
