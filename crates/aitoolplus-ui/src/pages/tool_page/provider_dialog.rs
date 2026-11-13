@@ -5186,13 +5186,42 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
             } else {
                 "responses"
             };
-            doc.insert("wire_api", toml_edit::value(wire));
+
+            let target_provider_key = doc
+                .get("model_provider")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != "openai")
+                .map(String::from)
+                .or_else(|| {
+                    doc.get("model_providers")
+                        .and_then(|v| v.as_table())
+                        .and_then(|tbl| {
+                            tbl.iter()
+                                .map(|(k, _)| k.to_string())
+                                .find(|k| k != "openai")
+                        })
+                })
+                .unwrap_or_else(|| "custom".to_string());
+
+            let display_name = if !name.trim().is_empty() {
+                name.trim().to_string()
+            } else {
+                target_provider_key.clone()
+            };
 
             if !base_url.trim().is_empty() || !api_key.trim().is_empty() {
                 let mp = doc.entry("model_providers").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
                 if let Some(mp_tbl) = mp.as_table_mut() {
-                    let custom_p = mp_tbl.entry("custom").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                    let custom_p = mp_tbl.entry(&target_provider_key).or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
                     if let Some(cp_tbl) = custom_p.as_table_mut() {
+                        if cp_tbl
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .is_none_or(|s| s.trim().is_empty())
+                        {
+                            cp_tbl.insert("name", toml_edit::value(display_name));
+                        }
                         if !base_url.trim().is_empty() {
                             cp_tbl.insert("base_url", toml_edit::value(base_url.trim()));
                         }
@@ -5202,7 +5231,25 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
                         cp_tbl.insert("wire_api", toml_edit::value(wire));
                     }
                 }
-                doc.insert("model_provider", toml_edit::value("custom"));
+                doc.insert("model_provider", toml_edit::value(target_provider_key));
+            } else if let Some(mp_tbl) = doc.get_mut("model_providers").and_then(|v| v.as_table_mut()) {
+                for (k, item) in mp_tbl.iter_mut() {
+                    let key_name = k.to_string();
+                    if let Some(tbl) = item.as_table_mut() {
+                        if tbl
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .is_none_or(|s| s.trim().is_empty())
+                        {
+                            let fallback = if !name.trim().is_empty() {
+                                name.trim()
+                            } else {
+                                key_name.as_str()
+                            };
+                            tbl.insert("name", toml_edit::value(fallback));
+                        }
+                    }
+                }
             }
             let toml_str = doc.to_string();
 

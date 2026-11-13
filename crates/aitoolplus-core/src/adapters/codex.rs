@@ -157,6 +157,22 @@ pub fn build_written_config_toml(
     next_managed: &str,
     sweep_stale_providers: bool,
 ) -> Result<String, String> {
+    build_written_config_toml_with_provider_name(
+        existing,
+        previous_managed,
+        next_managed,
+        sweep_stale_providers,
+        None,
+    )
+}
+
+pub fn build_written_config_toml_with_provider_name(
+    existing: &str,
+    previous_managed: Option<&str>,
+    next_managed: &str,
+    sweep_stale_providers: bool,
+    preferred_provider_name: Option<&str>,
+) -> Result<String, String> {
     let mut current = parse_toml_document(existing, "existing config.toml")?;
     let mut next = parse_toml_document(next_managed, "new config.toml")?;
     strip_protected_top_level(&mut next);
@@ -179,6 +195,8 @@ pub fn build_written_config_toml(
     if sweep_stale_providers {
         sweep_stale_model_providers(&mut current, next.as_table());
     }
+
+    ensure_model_provider_names(&mut current, preferred_provider_name);
 
     let content = current.to_string();
     if content.trim_start().starts_with("#:schema") {
@@ -227,6 +245,48 @@ fn remove_fields_absent_from(
     }
     for key in to_remove {
         current.remove(&key);
+    }
+}
+
+/// Ensure every `[model_providers.<id>]` table declares a non-empty `name`.
+/// Codex CLI rejects `config.toml` when any `model_providers.*` entry omits `name`.
+pub fn ensure_model_provider_names(doc: &mut toml_edit::DocumentMut, preferred_name: Option<&str>) {
+    let active_selector = doc
+        .get("model_provider")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let Some(providers) = doc
+        .get_mut("model_providers")
+        .and_then(|t| t.as_table_mut())
+    else {
+        return;
+    };
+
+    let total_providers = providers.len();
+    let trimmed_preferred = preferred_name.map(str::trim).filter(|s| !s.is_empty());
+
+    for (key, item) in providers.iter_mut() {
+        let key_name = key.to_string();
+        let Some(tbl) = item.as_table_mut() else {
+            continue;
+        };
+        let has_name = tbl
+            .get("name")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty());
+        if !has_name {
+            let resolved = if active_selector.as_deref() == Some(key_name.as_str())
+                || total_providers == 1
+            {
+                trimmed_preferred.unwrap_or(key_name.as_str())
+            } else {
+                key_name.as_str()
+            };
+            tbl.insert("name", toml_edit::value(resolved));
+        }
     }
 }
 
@@ -409,9 +469,14 @@ impl ToolAdapter for CodexAdapter {
 
         // Remove the previous provider's footprint: any root `model_provider`
         // + `[model_providers.*]` tables the new layer does not declare.
-        let mut final_toml =
-            build_written_config_toml(&existing_cfg, Some(&provider_toml), &next_managed, true)
-                .map_err(ApplyError::Message)?;
+        let mut final_toml = build_written_config_toml_with_provider_name(
+            &existing_cfg,
+            Some(&provider_toml),
+            &next_managed,
+            true,
+            Some(&ctx.provider.name),
+        )
+        .map_err(ApplyError::Message)?;
 
         if let Some(cat_path) = catalog_file_opt {
             let cat_str = cat_path.to_string_lossy().replace('\\', "/");
@@ -633,5 +698,25 @@ mod tests {
         unsafe {
             std::env::remove_var("AITOOLPLUS_CODEX_UNIFY_HISTORY");
         }
+    }
+
+    #[test]
+    fn heals_missing_model_provider_name_on_apply() {
+        let (_dir, paths) = setup();
+        let cfg = paths.home.join(".codex").join("config.toml");
+
+        let mut p = ProviderRecord::new("My Relay", "custom");
+        p.settings_config = serde_json::json!({
+            "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nbase_url = \"https://relay.example.com/v1\"\nwire_api = \"responses\"\napi_key = \"sk-1\"\n"
+        })
+        .to_string();
+
+        CodexAdapter.apply(&ctx(&paths, &p)).unwrap();
+        let written = std::fs::read_to_string(&cfg).unwrap();
+        let doc = parse_toml_document(&written, "written").unwrap();
+        assert_eq!(
+            doc["model_providers"]["custom"]["name"].as_str(),
+            Some("My Relay")
+        );
     }
 }

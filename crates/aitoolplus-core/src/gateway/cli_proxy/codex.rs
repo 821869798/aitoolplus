@@ -255,6 +255,7 @@ pub fn patch_codex_config(
         .and_then(Item::as_table_mut)
         .ok_or_else(|| format!("Codex [model_providers.{GATEWAY_PROVIDER_ID}] must be a table"))?;
 
+    provider_table["name"] = value("AIToolPlus Gateway");
     provider_table["base_url"] = value(gateway_endpoint);
     provider_table["wire_api"] = value("responses");
     provider_table["requires_openai_auth"] = value(true);
@@ -387,5 +388,20 @@ mod tests {
         // Test cleanup
         cleanup_codex_aggregate_catalog(&codex_root);
         assert!(!cat_path.exists());
+    }
+
+    #[test]
+    fn test_patch_codex_config_includes_non_empty_provider_name() {
+        let temp = tempdir().unwrap();
+        let cfg = temp.path().join("config.toml");
+        let auth = temp.path().join("auth.json");
+        patch_codex_config(&cfg, &auth, "http://127.0.0.1:8080/v1", false).unwrap();
+
+        let text = fs::read_to_string(&cfg).unwrap();
+        let doc = text.parse::<DocumentMut>().unwrap();
+        let name = doc["model_providers"][GATEWAY_PROVIDER_ID]["name"]
+            .as_str()
+            .unwrap_or("");
+        assert!(!name.trim().is_empty(), "gateway provider name must not be empty");
     }
 }

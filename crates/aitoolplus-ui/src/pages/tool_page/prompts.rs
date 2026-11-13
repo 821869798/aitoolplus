@@ -1058,8 +1058,22 @@ mod tests {
         let parsed: Value = serde_json::from_str(&settings_str).expect("must be valid JSON");
         assert_eq!(parsed["auth"]["OPENAI_API_KEY"], "sk-test-codex");
         let toml_str = parsed["config"].as_str().unwrap();
-        assert!(toml_str.contains("model = \"deepseek-chat\""));
-        assert!(toml_str.contains("base_url = \"https://api.deepseek.com/v1\""));
+        let doc = toml_str.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+        assert_eq!(doc["model"].as_str(), Some("deepseek-chat"));
+        assert_eq!(doc["model_provider"].as_str(), Some("custom"));
+        assert_eq!(
+            doc["model_providers"]["custom"]["name"].as_str(),
+            Some("DeepSeek Codex")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom"]["base_url"].as_str(),
+            Some("https://api.deepseek.com/v1")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom"]["wire_api"].as_str(),
+            Some("responses")
+        );
+        assert!(doc.get("wire_api").is_none());
         assert_eq!(parsed["modelCatalog"]["models"][0]["displayName"], "DeepSeek V3");
     }
 
