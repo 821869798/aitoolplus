@@ -22,25 +22,17 @@ jobs:
   build-windows:
     name: Build Windows (x86_64)
     runs-on: windows-2022
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           key: windows-x86_64
-
-      - name: Setup Sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Install NSIS
         shell: pwsh
@@ -54,16 +46,11 @@ jobs:
 
       - name: Compile Release Binary
         shell: pwsh
-        run: cargo build --release -p aitoolplus --target x86_64-pc-windows-msvc
+        run: cargo build --release -p aitoolplus
 
       - name: Package NSIS Installer and Portable Archive
         shell: pwsh
         run: |
-          Copy-Item target/x86_64-pc-windows-msvc/release/aitoolplus.exe target/release/aitoolplus.exe -Force -ErrorAction SilentlyContinue
-          if (-not (Test-Path target/release/aitoolplus.exe)) {
-            New-Item -ItemType Directory -Path target/release -Force | Out-Null
-            Copy-Item target/x86_64-pc-windows-msvc/release/aitoolplus.exe target/release/aitoolplus.exe -Force
-          }
           powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1 -SkipBuild
           Compress-Archive -Path target/release/aitoolplus.exe -DestinationPath target/dist/aitoolplus-windows-x86_64.zip -Force
 
