@@ -346,7 +346,7 @@ impl Workspace {
 
         if std::env::var("AITOOLPLUS_TEST_UPDATE_CONFIRM_MODAL").is_ok() {
             ws.ui.update_install_confirm_dialog =
-                Some(ws.paths.app_data.join("updates").join("aitoolplus-setup.exe"));
+                Some(ws.paths.app_data.join("updates").join("aitoolplus-windows-x64-setup.exe"));
         }
 
         if let Ok(mcp_name_or_id) = std::env::var("AITOOLPLUS_OPEN_MCP") {

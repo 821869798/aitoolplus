@@ -54,7 +54,7 @@ jobs:
           powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1 -SkipBuild
           Compress-Archive -Path target/release/aitoolplus.exe -DestinationPath target/dist/aitoolplus-windows-x86_64.zip -Force
 
-          foreach ($file in @("target/dist/aitoolplus-setup.exe", "target/dist/aitoolplus-windows-x86_64.zip")) {
+          foreach ($file in @("target/dist/aitoolplus-windows-x64-setup.exe", "target/dist/aitoolplus-windows-x86_64.zip")) {
             if (-not (Test-Path $file)) { throw "Expected artifact not found: $file" }
             $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
             $hash | Out-File -FilePath "$file.sha256" -Encoding ascii
@@ -65,8 +65,8 @@ jobs:
         with:
           name: dist-windows
           path: |
-            target/dist/aitoolplus-setup.exe
-            target/dist/aitoolplus-setup.exe.sha256
+            target/dist/aitoolplus-windows-x64-setup.exe
+            target/dist/aitoolplus-windows-x64-setup.exe.sha256
             target/dist/aitoolplus-windows-x86_64.zip
             target/dist/aitoolplus-windows-x86_64.zip.sha256
 
@@ -195,7 +195,7 @@ jobs:
 
           platforms = {}
           mapping = {
-              "windows-x86_64": "aitoolplus-setup.exe",
+              "windows-x86_64": "aitoolplus-windows-x64-setup.exe",
               "darwin-aarch64": "aitoolplus-macos-arm64.dmg",
               "linux-x86_64": "aitoolplus-linux-x86_64.tar.gz",
               "linux-aarch64": "aitoolplus-linux-aarch64.tar.gz",

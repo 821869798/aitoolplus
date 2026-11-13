@@ -8,7 +8,7 @@ Unicode true
 !include "LogicLib.nsh"
 
 Name "AI ToolPlus"
-OutFile "..\target\dist\aitoolplus-setup.exe"
+OutFile "..\target\dist\aitoolplus-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\AIToolPlus"
 InstallDirRegKey HKCU "Software\AIToolPlus" "InstallDir"
 RequestExecutionLevel user

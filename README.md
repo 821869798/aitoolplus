@@ -57,11 +57,11 @@ Built with **pure Rust** and powered by the **GPUI Kit** framework (the same eng
 > [!IMPORTANT]
 > **Official Distribution Security Notice**: Please only download installers from official GitHub Releases. Never run modified binaries from untrusted third-party sources to ensure your API keys and credentials remain secure.
 
-### Windows Official Installer & Portable Archive
+### Windows (`x64 / x86_64`) Official Installer & Portable Archive
 
 Download directly from the [GitHub Releases Page](https://github.com/821869798/aitoolplus/releases/latest):
-- **Installer**: `aitoolplus-setup.exe` (NSIS setup, supports clean upgrades and uninstallation)
-- **Portable**: `aitoolplus-windows-x86_64.zip`
+- **Installer (`x64`)**: `aitoolplus-windows-x64-setup.exe` (NSIS setup, supports clean upgrades and uninstallation)
+- **Portable (`x64`)**: `aitoolplus-windows-x86_64.zip`
 - **In-App Auto Update**: Features one-click update checks, real-time download progress with EMA smoothing, and domestic CDN mirror acceleration.
 
 ### macOS (Apple Silicon / arm64)
@@ -179,7 +179,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 ### 3. Production Release & Multi-Platform Packaging
 
 ```powershell
-# Windows: compile release binary and package NSIS installer (target/dist/aitoolplus-setup.exe)
+# Windows: compile release binary and package NSIS installer (target/dist/aitoolplus-windows-x64-setup.exe)
 cargo build --release
 powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
 ```

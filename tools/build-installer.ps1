@@ -68,7 +68,7 @@ if ($Inno) {
     $IssFile = Join-Path $RootDir "tools\installer.iss"
     & $Iscc $IssFile
     if ($LASTEXITCODE -eq 0) {
-        $SetupExe = Join-Path $DistDir "aitoolplus-setup.exe"
+        $SetupExe = Join-Path $DistDir "aitoolplus-windows-x64-setup.exe"
         $ExeSizeMB = [math]::Round((Get-Item $SetupExe).Length / 1MB, 2)
         Write-Host "Inno Setup Installer created: $SetupExe ($ExeSizeMB MB)" -ForegroundColor Green
     } else {
@@ -98,7 +98,7 @@ if ($Inno) {
     $NsiFile = Join-Path $RootDir "tools\installer.nsi"
     & $Makensis /INPUTCHARSET UTF8 $NsiFile
     if ($LASTEXITCODE -eq 0) {
-        $SetupExe = Join-Path $DistDir "aitoolplus-setup.exe"
+        $SetupExe = Join-Path $DistDir "aitoolplus-windows-x64-setup.exe"
         $ExeSizeMB = [math]::Round((Get-Item $SetupExe).Length / 1MB, 2)
         Write-Host "NSIS Setup Installer created: $SetupExe ($ExeSizeMB MB)" -ForegroundColor Green
     } else {

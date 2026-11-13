@@ -18,12 +18,12 @@ fn main() {
     println!("============================================================");
 
     // 1. Locate or create actual installer payload
-    let dist_installer = Path::new("target/dist/aitoolplus-setup.exe");
+    let dist_installer = Path::new("target/dist/aitoolplus-windows-x64-setup.exe");
     let payload_bytes = if dist_installer.is_file() {
-        println!("[SETUP] Reading official release installer from target/dist/aitoolplus-setup.exe...");
+        println!("[SETUP] Reading official release installer from target/dist/aitoolplus-windows-x64-setup.exe...");
         std::fs::read(dist_installer).expect("read installer")
     } else {
-        println!("[SETUP] target/dist/aitoolplus-setup.exe not found, generating 3 MB dummy payload...");
+        println!("[SETUP] target/dist/aitoolplus-windows-x64-setup.exe not found, generating 3 MB dummy payload...");
         vec![0x42u8; 3 * 1024 * 1024]
     };
 
@@ -73,8 +73,8 @@ fn main() {
                             "published_at": "2026-09-22T20:00:00Z",
                             "assets": [
                                 {
-                                    "name": "aitoolplus-setup.exe",
-                                    "browser_download_url": format!("http://{server_addr}/downloads/aitoolplus-setup.exe"),
+                                    "name": "aitoolplus-windows-x64-setup.exe",
+                                    "browser_download_url": format!("http://{server_addr}/downloads/aitoolplus-windows-x64-setup.exe"),
                                     "size": payload_for_server.len() as u64
                                 }
                             ]
@@ -85,7 +85,7 @@ fn main() {
                             body.len()
                         );
                         let _ = stream.write_all(resp.as_bytes());
-                    } else if request_line.contains("/downloads/aitoolplus-setup.exe") {
+                    } else if request_line.contains("/downloads/aitoolplus-windows-x64-setup.exe") {
                         let header = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             payload_for_server.len()
@@ -198,7 +198,7 @@ fn main() {
 
     // 8. Test 6: Verify Mirror Rewriting Rules
     println!("\n[TEST 6] Verifying CDN mirror transformations...");
-    let orig = "https://github.com/821869798/aitoolplus/releases/download/v0.2.0/aitoolplus-setup.exe";
+    let orig = "https://github.com/821869798/aitoolplus/releases/download/v0.2.0/aitoolplus-windows-x64-setup.exe";
     assert_eq!(UpdateMirror::Official.apply_url(orig, ""), orig);
     assert_eq!(
         UpdateMirror::GhProxy.apply_url(orig, ""),

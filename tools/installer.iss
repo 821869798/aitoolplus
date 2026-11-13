@@ -32,7 +32,7 @@
 #endif
 
 #ifndef MyOutputFilename
-#define MyOutputFilename "aitoolplus-setup"
+#define MyOutputFilename "aitoolplus-windows-x64-setup"
 #endif
 
 [Setup]

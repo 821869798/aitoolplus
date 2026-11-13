@@ -352,15 +352,25 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                 Ok(inf) => {
                                     let message = if inf.update_available {
                                         if !aitoolplus_core::updater::is_installer_installed() {
+                                            let zh_hint = if cfg!(target_os = "windows") {
+                                                "免安装版请前往 Release 页面下载"
+                                            } else {
+                                                "请前往 Release 页面下载更新"
+                                            };
+                                            let en_hint = if cfg!(target_os = "windows") {
+                                                "Portable: download from Releases"
+                                            } else {
+                                                "Download update from Releases"
+                                            };
                                             ws.i18n
                                                 .raw(
                                                     &format!(
-                                                        "发现新版本 v{}（免安装版请前往 Release 页面下载）",
-                                                        inf.latest_version
+                                                        "发现新版本 v{}（{}）",
+                                                        inf.latest_version, zh_hint
                                                     ),
                                                     &format!(
-                                                        "New version v{} available (Portable: download from Releases)",
-                                                        inf.latest_version
+                                                        "New version v{} available ({})",
+                                                        inf.latest_version, en_hint
                                                     ),
                                                 )
                                                 .to_string()
@@ -523,6 +533,38 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 let rel_url_copy = info.release_url.clone();
                 let target_ver = info.latest_version.clone();
 
+                let (manual_badge, manual_title, manual_body) = if cfg!(target_os = "windows") {
+                    (
+                        i.t("settings_about.portable"),
+                        i.t("settings_about.detected_portable_standalone_v"),
+                        i.t("settings_about.portable_edition_does_not"),
+                    )
+                } else if cfg!(target_os = "macos") {
+                    (
+                        i.raw("手动更新", "Manual Update"),
+                        i.raw(
+                            "macOS 请前往 Release 页面下载更新",
+                            "Download macOS update from Releases",
+                        ),
+                        i.raw(
+                            "为避免签名与权限替身问题，macOS 版本请点击下方按钮前往 GitHub Release 下载最新的 macOS 安装镜像 (aitoolplus-macos-arm64.dmg)，拖入应用程序目录覆盖即可；覆盖后若被拦截可执行 xattr -cr /Applications/AIToolPlus.app。所有用户配置与规则统一保存在 ~/.aitoolplus 目录，更新不会影响您的任何数据。",
+                            "To avoid code-signing replacement issues, click below to visit GitHub Releases, download aitoolplus-macos-arm64.dmg, and drag AIToolPlus.app into Applications. User data in ~/.aitoolplus remains safe.",
+                        ),
+                    )
+                } else {
+                    (
+                        i.raw("手动更新", "Manual Update"),
+                        i.raw(
+                            "Linux 请前往 Release 页面下载更新",
+                            "Download Linux update from Releases",
+                        ),
+                        i.raw(
+                            "由于不同 Linux 发行版安装路径与权限不同，请点击下方按钮前往 GitHub Release 页面下载对应架构的最新安装包（.deb 或 .tar.gz）完成更新。所有用户配置与规则统一保存在 ~/.aitoolplus 目录，更新不会影响您的任何数据。",
+                            "Because Linux installation paths and permissions vary by distro, click below to visit GitHub Releases and download the matching package (.deb or .tar.gz). User data in ~/.aitoolplus remains safe.",
+                        ),
+                    )
+                };
+
                 let portable_tip = div()
                     .flex_col()
                     .gap(px(8.0))
@@ -538,7 +580,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             .gap(px(8.0))
                             .child(crate::components::badge(
                                 &t,
-                                i.t("settings_about.portable"),
+                                manual_badge,
                                 crate::components::BadgeKind::Accent,
                             ))
                             .child(
@@ -546,7 +588,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                                     .text_size(px(13.0))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(t.text_primary)
-                                    .child(i.t("settings_about.detected_portable_standalone_v")),
+                                    .child(manual_title),
                             ),
                     )
                     .child(
@@ -554,7 +596,7 @@ pub(super) fn about_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             .text_size(px(12.0))
                             .line_height(gpui::relative(1.5))
                             .text_color(t.text_secondary)
-                            .child(i.t("settings_about.portable_edition_does_not")),
+                            .child(manual_body),
                     );
 
                 let portable_action_row = div()

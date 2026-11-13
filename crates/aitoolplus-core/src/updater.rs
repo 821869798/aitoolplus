@@ -296,7 +296,18 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
                 if let Some(download_url) = info.url {
                     if platform_key.contains("windows") {
                         let setup_url = download_url.clone();
-                        let zip_url = download_url.replace("aitoolplus-setup.exe", "aitoolplus-windows-x86_64.zip");
+                        let setup_name = download_url
+                            .rsplit('/')
+                            .next()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("aitoolplus-windows-x64-setup.exe")
+                            .to_string();
+                        let zip_url = if let Some(prefix) = setup_url.strip_suffix(&setup_name) {
+                            format!("{prefix}aitoolplus-windows-x86_64.zip")
+                        } else {
+                            setup_url.replace("aitoolplus-setup.exe", "aitoolplus-windows-x86_64.zip")
+                        };
                         let setup_sha_url = format!("{setup_url}.sha256");
                         let zip_sha_url = format!("{zip_url}.sha256");
 
@@ -311,12 +322,12 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
                             size: 0,
                         });
                         assets.push(UpdateAsset {
-                            name: "aitoolplus-setup.exe".to_string(),
+                            name: setup_name.clone(),
                             download_url: setup_url,
                             size: 0,
                         });
                         assets.push(UpdateAsset {
-                            name: "aitoolplus-setup.exe.sha256".to_string(),
+                            name: format!("{setup_name}.sha256"),
                             download_url: setup_sha_url,
                             size: 0,
                         });
@@ -444,6 +455,14 @@ pub fn best_asset_for_target<'a>(
 
     if target_os == "windows" {
         if is_installer {
+            if let Some(asset) = valid_assets.iter().find(|a| {
+                let name = a.name.to_ascii_lowercase();
+                (name.contains("setup") || name.contains("installer") || name.ends_with(".msi"))
+                    && name.ends_with(".exe")
+                    && matches_arch(&name, target_arch)
+            }) {
+                return Some(*asset);
+            }
             if let Some(asset) = valid_assets.iter().find(|a| {
                 let name = a.name.to_ascii_lowercase();
                 (name.contains("setup") || name.contains("installer") || name.ends_with(".msi"))
@@ -1507,8 +1526,13 @@ mod tests {
         // Installer mode check
         let installer_asset =
             best_asset_for_target(&info, true, "windows", "x86_64").expect("installer asset found");
-        assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
-        assert!(installer_asset.download_url.contains("aitoolplus-setup.exe"));
+        assert!(
+            installer_asset.name == "aitoolplus-windows-x64-setup.exe"
+                || installer_asset.name == "aitoolplus-setup.exe",
+            "unexpected installer asset name: {}",
+            installer_asset.name
+        );
+        assert!(installer_asset.download_url.contains(&installer_asset.name));
     }
 
     #[test]
@@ -1590,7 +1614,12 @@ mod tests {
         }
         let installer_asset = best_asset(&info).expect("installer asset found");
         if cfg!(windows) {
-            assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
+            assert!(
+                installer_asset.name == "aitoolplus-windows-x64-setup.exe"
+                    || installer_asset.name == "aitoolplus-setup.exe",
+                "unexpected installer asset name: {}",
+                installer_asset.name
+            );
         }
 
         // Clean up environment variables
@@ -1667,6 +1696,26 @@ mod tests {
         assert_eq!(
             best_asset_for_target(&info, false, "windows", "x86_64").unwrap().name,
             "aitoolplus-windows-x86_64.zip"
+        );
+
+        let x64_setup_info = UpdateInfo {
+            assets: vec![
+                UpdateAsset {
+                    name: "aitoolplus-windows-x64-setup.exe".to_string(),
+                    download_url: "https://example.com/aitoolplus-windows-x64-setup.exe".to_string(),
+                    size: 100,
+                },
+                UpdateAsset {
+                    name: "aitoolplus-windows-x86_64.zip".to_string(),
+                    download_url: "https://example.com/aitoolplus-windows-x86_64.zip".to_string(),
+                    size: 100,
+                },
+            ],
+            ..info
+        };
+        assert_eq!(
+            best_asset_for_target(&x64_setup_info, true, "windows", "x86_64").unwrap().name,
+            "aitoolplus-windows-x64-setup.exe"
         );
     }
 }
