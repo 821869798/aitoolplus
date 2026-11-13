@@ -57,12 +57,38 @@
 > [!IMPORTANT]
 > **官方渠道安全提示**：请务必通过官方 GitHub Releases 下载安装包。切勿运行任何来自第三方不可信来源的修改包，以确保您的 API 密钥与账号数据绝对安全。
 
-### Windows 官方安装程序
+### Windows 安装包与便携版
 
-前往 [GitHub Releases 最新发布页](https://github.com/821869798/aitoolplus/releases/latest) 下载官方安装程序：
-- 文件名：`aitoolplus-setup.exe`
-- 采用标准 NSIS 打包，内置安全静默升级与卸载支持。
+前往 [GitHub Releases 最新发布页](https://github.com/821869798/aitoolplus/releases/latest) 下载：
+- **官方安装程序**：`aitoolplus-setup.exe`（标准 NSIS 打包，内置安全静默升级与卸载支持）
+- **免安装便携版**：`aitoolplus-windows-x86_64.zip`
 - **支持应用内自动更新**：支持一键检查新版本，并内置国内高速 CDN 镜像加速下载。
+
+### macOS (Apple Silicon / arm64)
+
+前往 [GitHub Releases 最新发布页](https://github.com/821869798/aitoolplus/releases/latest) 下载 **`aitoolplus-macos-arm64.dmg`**，双击打开后将 **`AIToolPlus.app`** 拖入 **`Applications`（应用程序）** 文件夹。
+
+> [!NOTE]
+> **首次启动说明（解除隔离属性）**：由于当前 macOS 安装包暂未使用 Apple 开发者证书公证，首次打开时系统可能会提示 *“AIToolPlus.app 已损坏，无法打开”*。在终端执行一次以下命令清除隔离属性即可正常打开：
+> ```bash
+> xattr -cr /Applications/AIToolPlus.app
+> ```
+
+### Linux (`x86_64` & `ARM64`)
+
+前往 [GitHub Releases 最新发布页](https://github.com/821869798/aitoolplus/releases/latest) 下载对应架构的安装包：
+- **Debian / Ubuntu 系（`.deb`）**：
+  ```bash
+  # x86_64
+  sudo apt install ./aitoolplus-linux-amd64.deb
+
+  # ARM64
+  sudo apt install ./aitoolplus-linux-arm64.deb
+  ```
+- **通用压缩包（`.tar.gz`）** *（适用于 Arch、Fedora、openSUSE 等所有发行版）*：
+  - `aitoolplus-linux-x86_64.tar.gz`（x64） / `aitoolplus-linux-aarch64.tar.gz`（ARM64）
+  - 解压后可直接运行 `./aitoolplus`，也可执行解压目录内的 `./install.sh` 一键安装到 `~/.local/bin` 并创建桌面快捷方式。
+  - 运行依赖 Vulkan 驱动及常见桌面系统库（`libgtk-3-0`、`libayatana-appindicator3-1`、`libxkbcommon0`、`libxkbcommon-x11-0`、`libwayland-client0`、`libfontconfig1`）。
 
 ---
 
@@ -150,14 +176,22 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-### 3. 发布版本编译与打包
+### 3. 发布版本编译与多平台打包
 
 ```powershell
-# 编译 Release 高度优化二进制
+# Windows：编译 Release 二进制并打包 NSIS 安装包（输出至 target/dist/aitoolplus-setup.exe）
 cargo build --release
-
-# 一键打包官方 Windows NSIS 安装程序（产物输出至 target/dist/aitoolplus-setup.exe）
 powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
+```
+
+```bash
+# macOS (arm64)：编译并打包 AIToolPlus.app 与 target/dist/aitoolplus-macos-arm64.dmg
+cargo build --release --target aarch64-apple-darwin
+bash tools/package-macos.sh
+
+# Linux (x86_64 / aarch64)：编译并打包 .tar.gz 与 .deb 安装包至 target/dist/
+cargo build --release
+bash tools/package-linux.sh
 ```
 
 ---

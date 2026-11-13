@@ -1,3 +1,8 @@
 *.rs text eol=lf
 *.toml text eol=lf
 *.md text eol=lf
+*.sh text eol=lf
+*.plist text eol=lf
+*.desktop text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

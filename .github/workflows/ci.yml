@@ -28,12 +28,12 @@ env:
 
 jobs:
   test:
-    name: Test on Windows & Linux
+    name: Test on Windows, macOS & Linux
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, macos-14, ubuntu-22.04, ubuntu-22.04-arm]
     steps:
       - uses: actions/checkout@v7
 

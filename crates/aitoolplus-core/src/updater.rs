@@ -321,15 +321,41 @@ pub fn check_latest_at(api: &str, current_version: &str) -> Result<UpdateInfo, S
                             size: 0,
                         });
                     } else if platform_key.contains("darwin") || platform_key.contains("macos") {
+                        let name = download_url
+                            .rsplit('/')
+                            .next()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("aitoolplus-macos-arm64.dmg")
+                            .to_string();
+                        let sha_url = format!("{download_url}.sha256");
                         assets.push(UpdateAsset {
-                            name: "aitoolplus.dmg".to_string(),
+                            name: name.clone(),
                             download_url,
                             size: 0,
                         });
-                    } else {
                         assets.push(UpdateAsset {
-                            name: "aitoolplus.AppImage".to_string(),
+                            name: format!("{name}.sha256"),
+                            download_url: sha_url,
+                            size: 0,
+                        });
+                    } else {
+                        let name = download_url
+                            .rsplit('/')
+                            .next()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("aitoolplus-linux-x86_64.tar.gz")
+                            .to_string();
+                        let sha_url = format!("{download_url}.sha256");
+                        assets.push(UpdateAsset {
+                            name: name.clone(),
                             download_url,
+                            size: 0,
+                        });
+                        assets.push(UpdateAsset {
+                            name: format!("{name}.sha256"),
+                            download_url: sha_url,
                             size: 0,
                         });
                     }
@@ -386,7 +412,24 @@ pub fn best_asset(info: &UpdateInfo) -> Option<&UpdateAsset> {
     best_asset_for_mode(info, is_installer_installed())
 }
 
-pub fn best_asset_for_mode(info: &UpdateInfo, #[allow(unused_variables)] is_installer: bool) -> Option<&UpdateAsset> {
+pub fn best_asset_for_mode(info: &UpdateInfo, is_installer: bool) -> Option<&UpdateAsset> {
+    best_asset_for_target(info, is_installer, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn matches_arch(name: &str, target_arch: &str) -> bool {
+    match target_arch {
+        "aarch64" => name.contains("aarch64") || name.contains("arm64"),
+        "x86_64" => name.contains("x86_64") || name.contains("amd64") || name.contains("x64"),
+        other => name.contains(other),
+    }
+}
+
+pub fn best_asset_for_target<'a>(
+    info: &'a UpdateInfo,
+    is_installer: bool,
+    target_os: &str,
+    target_arch: &str,
+) -> Option<&'a UpdateAsset> {
     let valid_assets: Vec<&UpdateAsset> = info
         .assets
         .iter()
@@ -399,10 +442,8 @@ pub fn best_asset_for_mode(info: &UpdateInfo, #[allow(unused_variables)] is_inst
         })
         .collect();
 
-    #[cfg(target_os = "windows")]
-    {
+    if target_os == "windows" {
         if is_installer {
-            // Installer mode: prefer setup.exe / installer.exe / .msi
             if let Some(asset) = valid_assets.iter().find(|a| {
                 let name = a.name.to_ascii_lowercase();
                 (name.contains("setup") || name.contains("installer") || name.ends_with(".msi"))
@@ -411,14 +452,12 @@ pub fn best_asset_for_mode(info: &UpdateInfo, #[allow(unused_variables)] is_inst
                 return Some(*asset);
             }
         } else {
-            // Portable mode: prefer .zip containing windows / x86_64
             if let Some(asset) = valid_assets.iter().find(|a| {
                 let name = a.name.to_ascii_lowercase();
                 name.ends_with(".zip") && (name.contains("win") || name.contains("x86_64"))
             }) {
                 return Some(*asset);
             }
-            // If no zip, check for standalone non-installer .exe
             if let Some(asset) = valid_assets.iter().find(|a| {
                 let name = a.name.to_ascii_lowercase();
                 name.ends_with(".exe") && !name.contains("setup") && !name.contains("installer")
@@ -427,52 +466,76 @@ pub fn best_asset_for_mode(info: &UpdateInfo, #[allow(unused_variables)] is_inst
             }
         }
 
-        // Fallback: any windows executable or archive
-        valid_assets.into_iter().find(|a| {
+        return valid_assets.into_iter().find(|a| {
             let name = a.name.to_ascii_lowercase();
             name.ends_with(".exe") || name.ends_with(".zip") || name.ends_with(".msi")
-        })
+        });
     }
-    #[cfg(target_os = "macos")]
-    {
-        valid_assets.into_iter().find(|a| {
-            let name = a.name.to_ascii_lowercase();
-            name.ends_with(".dmg") || name.ends_with(".app.tar.gz") || name.ends_with(".zip")
-        })
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
+
+    if target_os == "macos" {
+        let is_mac_ext = |name: &str| {
+            (name.ends_with(".dmg") || name.ends_with(".app.tar.gz") || name.ends_with(".zip"))
+                && !name.contains("windows")
+                && !name.contains("linux")
+        };
         if let Some(asset) = valid_assets.iter().find(|a| {
             let name = a.name.to_ascii_lowercase();
-            name.ends_with(".appimage") || name.ends_with(".deb") || name.ends_with(".tar.gz")
+            is_mac_ext(&name) && matches_arch(&name, target_arch)
         }) {
             return Some(*asset);
         }
-        // Fallback when only Windows release packages exist (testing and cross-environment)
-        if is_installer {
-            if let Some(asset) = valid_assets.iter().find(|a| {
-                let name = a.name.to_ascii_lowercase();
-                (name.contains("setup") || name.contains("installer") || name.ends_with(".msi"))
-                    && name.ends_with(".exe")
-            }) {
-                return Some(*asset);
-            }
-        } else {
-            if let Some(asset) = valid_assets.iter().find(|a| {
-                let name = a.name.to_ascii_lowercase();
-                (name.ends_with(".zip") && (name.contains("win") || name.contains("x86_64")))
-                    || (name.ends_with(".exe") && !name.contains("setup") && !name.contains("installer"))
-                    || name.ends_with(".zip")
-            }) {
-                return Some(*asset);
-            }
-        }
-        // Fallback: any available executable or archive (e.g. mock test with only setup.exe)
-        valid_assets.into_iter().find(|a| {
+        return valid_assets.into_iter().find(|a| {
             let name = a.name.to_ascii_lowercase();
-            name.ends_with(".exe") || name.ends_with(".zip") || name.ends_with(".msi")
-        })
+            is_mac_ext(&name)
+        });
     }
+
+    // Linux & other Unix-like targets
+    let is_linux_tar = |name: &str| name.ends_with(".tar.gz") && !name.ends_with(".app.tar.gz");
+    let is_linux_pkg =
+        |name: &str| is_linux_tar(name) || name.ends_with(".deb") || name.ends_with(".appimage");
+
+    if let Some(asset) = valid_assets.iter().find(|a| {
+        let name = a.name.to_ascii_lowercase();
+        is_linux_tar(&name) && matches_arch(&name, target_arch)
+    }) {
+        return Some(*asset);
+    }
+    if let Some(asset) = valid_assets.iter().find(|a| {
+        let name = a.name.to_ascii_lowercase();
+        is_linux_pkg(&name) && matches_arch(&name, target_arch)
+    }) {
+        return Some(*asset);
+    }
+    if let Some(asset) = valid_assets.iter().find(|a| {
+        let name = a.name.to_ascii_lowercase();
+        is_linux_pkg(&name)
+    }) {
+        return Some(*asset);
+    }
+
+    // Fallback when only Windows release packages exist (testing and cross-environment)
+    if is_installer {
+        if let Some(asset) = valid_assets.iter().find(|a| {
+            let name = a.name.to_ascii_lowercase();
+            (name.contains("setup") || name.contains("installer") || name.ends_with(".msi"))
+                && name.ends_with(".exe")
+        }) {
+            return Some(*asset);
+        }
+    } else if let Some(asset) = valid_assets.iter().find(|a| {
+        let name = a.name.to_ascii_lowercase();
+        (name.ends_with(".zip") && (name.contains("win") || name.contains("x86_64")))
+            || (name.ends_with(".exe") && !name.contains("setup") && !name.contains("installer"))
+            || name.ends_with(".zip")
+    }) {
+        return Some(*asset);
+    }
+
+    valid_assets.into_iter().find(|a| {
+        let name = a.name.to_ascii_lowercase();
+        name.ends_with(".exe") || name.ends_with(".zip") || name.ends_with(".msi")
+    })
 }
 
 /// Try to fetch the expected SHA-256 checksum from a matching `.sha256` asset in the release.
@@ -1526,6 +1589,76 @@ mod tests {
             std::env::remove_var("AITOOLPLUS_CURRENT_VERSION");
             std::env::remove_var("AITOOLPLUS_FORCE_INSTALLER");
         }
+    }
+
+    #[test]
+    fn test_cross_platform_arch_asset_selection() {
+        let info = UpdateInfo {
+            current_version: "0.1.0".to_string(),
+            latest_version: "0.2.0".to_string(),
+            update_available: true,
+            release_url: "https://example.com".to_string(),
+            release_notes: String::new(),
+            published_at: None,
+            assets: vec![
+                UpdateAsset {
+                    name: "aitoolplus-setup.exe".to_string(),
+                    download_url: "https://example.com/aitoolplus-setup.exe".to_string(),
+                    size: 100,
+                },
+                UpdateAsset {
+                    name: "aitoolplus-windows-x86_64.zip".to_string(),
+                    download_url: "https://example.com/aitoolplus-windows-x86_64.zip".to_string(),
+                    size: 100,
+                },
+                UpdateAsset {
+                    name: "aitoolplus-macos-arm64.dmg".to_string(),
+                    download_url: "https://example.com/aitoolplus-macos-arm64.dmg".to_string(),
+                    size: 100,
+                },
+                UpdateAsset {
+                    name: "aitoolplus-linux-amd64.deb".to_string(),
+                    download_url: "https://example.com/aitoolplus-linux-amd64.deb".to_string(),
+                    size: 100,
+                },
+                UpdateAsset {
+                    name: "aitoolplus-linux-x86_64.tar.gz".to_string(),
+                    download_url: "https://example.com/aitoolplus-linux-x86_64.tar.gz".to_string(),
+                    size: 100,
+                },
+                UpdateAsset {
+                    name: "aitoolplus-linux-arm64.deb".to_string(),
+                    download_url: "https://example.com/aitoolplus-linux-arm64.deb".to_string(),
+                    size: 100,
+                },
+                UpdateAsset {
+                    name: "aitoolplus-linux-aarch64.tar.gz".to_string(),
+                    download_url: "https://example.com/aitoolplus-linux-aarch64.tar.gz".to_string(),
+                    size: 100,
+                },
+            ],
+        };
+
+        assert_eq!(
+            best_asset_for_target(&info, false, "macos", "aarch64").unwrap().name,
+            "aitoolplus-macos-arm64.dmg"
+        );
+        assert_eq!(
+            best_asset_for_target(&info, false, "linux", "x86_64").unwrap().name,
+            "aitoolplus-linux-x86_64.tar.gz"
+        );
+        assert_eq!(
+            best_asset_for_target(&info, false, "linux", "aarch64").unwrap().name,
+            "aitoolplus-linux-aarch64.tar.gz"
+        );
+        assert_eq!(
+            best_asset_for_target(&info, true, "windows", "x86_64").unwrap().name,
+            "aitoolplus-setup.exe"
+        );
+        assert_eq!(
+            best_asset_for_target(&info, false, "windows", "x86_64").unwrap().name,
+            "aitoolplus-windows-x86_64.zip"
+        );
     }
 }
 

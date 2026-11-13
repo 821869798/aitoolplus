@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=AI ToolPlus
+GenericName=AI Coding Assistant Workbench
+Comment=Native GPU-accelerated workbench for AI coding CLI configurations
+Exec=aitoolplus %u
+Icon=aitoolplus
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
+StartupWMClass=aitoolplus
+MimeType=x-scheme-handler/aitoolplus;x-scheme-handler/aitoolbox;x-scheme-handler/ccswitch;

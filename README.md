@@ -57,12 +57,38 @@ Built with **pure Rust** and powered by the **GPUI Kit** framework (the same eng
 > [!IMPORTANT]
 > **Official Distribution Security Notice**: Please only download installers from official GitHub Releases. Never run modified binaries from untrusted third-party sources to ensure your API keys and credentials remain secure.
 
-### Windows Official Installer
+### Windows Official Installer & Portable Archive
 
-Download the official setup installer directly from the [GitHub Releases Page](https://github.com/821869798/aitoolplus/releases/latest):
-- File: `aitoolplus-setup.exe`
-- Built with standard NSIS installer packaging, featuring smooth upgrades, clean uninstallation, and zero registry bloat.
+Download directly from the [GitHub Releases Page](https://github.com/821869798/aitoolplus/releases/latest):
+- **Installer**: `aitoolplus-setup.exe` (NSIS setup, supports clean upgrades and uninstallation)
+- **Portable**: `aitoolplus-windows-x86_64.zip`
 - **In-App Auto Update**: Features one-click update checks, real-time download progress with EMA smoothing, and domestic CDN mirror acceleration.
+
+### macOS (Apple Silicon / arm64)
+
+Download `aitoolplus-macos-arm64.dmg` from the [GitHub Releases Page](https://github.com/821869798/aitoolplus/releases/latest), open the disk image, and drag **`AIToolPlus.app`** into the **`Applications`** folder.
+
+> [!NOTE]
+> **First-Launch Gatekeeper Notice**: Since the macOS build currently uses ad-hoc code signing without an Apple Developer ID notarization certificate, macOS may prompt *"AIToolPlus.app is damaged and can't be opened"*. Run the following command once in Terminal to clear the quarantine attribute, and then launch normally:
+> ```bash
+> xattr -cr /Applications/AIToolPlus.app
+> ```
+
+### Linux (`x86_64` & `ARM64`)
+
+Download the package matching your architecture from the [GitHub Releases Page](https://github.com/821869798/aitoolplus/releases/latest):
+- **Debian / Ubuntu (`.deb`)**:
+  ```bash
+  # x86_64
+  sudo apt install ./aitoolplus-linux-amd64.deb
+
+  # ARM64
+  sudo apt install ./aitoolplus-linux-arm64.deb
+  ```
+- **Universal Tarball (`.tar.gz`)** *(for Arch, Fedora, openSUSE, NixOS, etc.)*:
+  - `aitoolplus-linux-x86_64.tar.gz` (`x86_64`) / `aitoolplus-linux-aarch64.tar.gz` (`ARM64`)
+  - Extract and run `./aitoolplus` directly, or run `./install.sh` inside the extracted folder to install to `~/.local/bin` and add a desktop menu entry.
+  - Requires a Vulkan-capable GPU driver and standard desktop libraries (`libgtk-3-0`, `libayatana-appindicator3-1`, `libxkbcommon0`, `libxkbcommon-x11-0`, `libwayland-client0`, `libfontconfig1`).
 
 ---
 
@@ -150,14 +176,22 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-### 3. Production Release & Installer Packaging
+### 3. Production Release & Multi-Platform Packaging
 
 ```powershell
-# Compile optimized release binary
+# Windows: compile release binary and package NSIS installer (target/dist/aitoolplus-setup.exe)
 cargo build --release
-
-# Generate the official Windows NSIS setup package (outputs to target/dist/aitoolplus-setup.exe)
 powershell -ExecutionPolicy Bypass -File tools/build-installer.ps1
+```
+
+```bash
+# macOS (arm64): compile and package AIToolPlus.app + target/dist/aitoolplus-macos-arm64.dmg
+cargo build --release --target aarch64-apple-darwin
+bash tools/package-macos.sh
+
+# Linux (x86_64 or aarch64): compile and package .tar.gz + .deb into target/dist/
+cargo build --release
+bash tools/package-linux.sh
 ```
 
 ---
