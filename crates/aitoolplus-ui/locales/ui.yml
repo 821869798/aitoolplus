@@ -3006,6 +3006,42 @@ tool_runtime:
     zh-CN: 保存并应用通用配置
     en: Save & Apply Common Config
 tool_sessions:
+  cleanup_old_sessions:
+    zh-CN: 清理旧会话
+    en: Cleanup Old
+  cleanup_dialog_title:
+    zh-CN: 清理旧会话
+    en: Clean Up Old Sessions
+  cleanup_period_label:
+    zh-CN: 清理未活跃超过以下时间的会话
+    en: Remove sessions inactive for at least
+  cleanup_14d:
+    zh-CN: 14 天
+    en: 14 days
+  cleanup_1m:
+    zh-CN: 1 个月
+    en: 1 month
+  cleanup_3m:
+    zh-CN: 3 个月
+    en: 3 months
+  cleanup_6m:
+    zh-CN: 6 个月
+    en: 6 months
+  cleanup_preview_title:
+    zh-CN: 清理预览
+    en: Preview
+  cleanup_confirm_btn:
+    zh-CN: 确认清理
+    en: Clean Up
+  cleanup_none_matched:
+    zh-CN: 当前没有超过该时间未活跃的会话。
+    en: No sessions inactive longer than this period.
+  cleanup_scanning_hint:
+    zh-CN: 正在扫描历史会话，请稍候…
+    en: Scanning sessions, please wait…
+  cleanup_warning:
+    zh-CN: 将从本地磁盘永久删除匹配的会话文件（用量统计图表不受影响），此操作不可恢复。
+    en: Matching session files will be permanently deleted from disk (usage analytics are preserved). This cannot be undone.
   rename_session:
     zh-CN: 重命名会话
     en: Rename Session

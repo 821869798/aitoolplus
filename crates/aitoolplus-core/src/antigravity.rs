@@ -3778,7 +3778,7 @@ pub fn clean_antigravity_snippet(raw: &str) -> String {
     }
 }
 
-/// Scan Antigravity sessions from both ~/.gemini/antigravity-cli and ~/.gemini/antigravity-ide.
+/// Scan Antigravity sessions from ~/.gemini/antigravity-cli, ~/.gemini/antigravity, and ~/.gemini/antigravity-ide.
 pub fn scan_antigravity_sessions(home: &Path, limit: usize) -> Vec<AntigravitySessionMeta> {
     let mut sessions = vec![];
     let gemini_dir = home.join(".gemini");
@@ -3792,18 +3792,188 @@ pub fn scan_antigravity_sessions(home: &Path, limit: usize) -> Vec<AntigravitySe
         scan_cli_sessions(&cli_dir, &mut sessions);
     }
 
-    // 2. Scan Antigravity IDE / App sessions
+    // 2. Scan Antigravity App (~/.gemini/antigravity) and legacy IDE (~/.gemini/antigravity-ide) sessions
+    let app_dir = gemini_dir.join("antigravity");
+    if app_dir.is_dir() {
+        scan_ide_sessions(&app_dir, &mut sessions);
+    }
     let ide_dir = gemini_dir.join("antigravity-ide");
     if ide_dir.is_dir() {
         scan_ide_sessions(&ide_dir, &mut sessions);
     }
 
-    // Sort descending by last_active_at. `usize::MAX` keeps every session.
-    sessions.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
-    if limit != usize::MAX {
-        sessions.truncate(limit);
+    // Deduplicate across roots, preferring entries whose source_path points to a readable transcript.
+    let mut deduped: Vec<AntigravitySessionMeta> = Vec::with_capacity(sessions.len());
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for meta in sessions {
+        let key = format!("{}:{}", meta.source, meta.session_id);
+        match seen.get(&key).copied() {
+            None => {
+                seen.insert(key, deduped.len());
+                deduped.push(meta);
+            }
+            Some(idx) => {
+                if has_transcript_file(&meta.source_path)
+                    && !has_transcript_file(&deduped[idx].source_path)
+                {
+                    deduped[idx] = meta;
+                }
+            }
+        }
     }
-    sessions
+
+    // Sort descending by last_active_at. `usize::MAX` keeps every session.
+    deduped.sort_by_key(|s| std::cmp::Reverse(s.last_active_at));
+    if limit != usize::MAX {
+        deduped.truncate(limit);
+    }
+    deduped
+}
+
+fn has_transcript_file(source_path: &str) -> bool {
+    let p = Path::new(source_path);
+    matches!(
+        p.file_name().and_then(|n| n.to_str()),
+        Some("transcript_full.jsonl" | "transcript.jsonl")
+    ) && p.is_file()
+}
+
+fn resolve_brain_source_path(brain_session: &Path) -> Option<PathBuf> {
+    let logs = brain_session.join(".system_generated").join("logs");
+    for name in ["transcript_full.jsonl", "transcript.jsonl", "overview.txt"] {
+        let candidate = logs.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn valid_antigravity_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+#[derive(Debug, Clone)]
+struct AntigravitySummaryRow {
+    title: String,
+    preview: String,
+    project_dir: Option<String>,
+    last_active_at: Option<i64>,
+}
+
+fn parse_antigravity_timestamp_str(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Some(dt.timestamp_millis());
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%.f") {
+        return Some(dt.and_utc().timestamp_millis());
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
+        return Some(dt.and_utc().timestamp_millis());
+    }
+    None
+}
+
+fn read_antigravity_summaries(root_dir: &Path) -> std::collections::HashMap<String, AntigravitySummaryRow> {
+    let mut map = std::collections::HashMap::new();
+    let db_path = root_dir.join("conversation_summaries.db");
+    if !db_path.is_file() {
+        return map;
+    }
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return map;
+    };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT conversation_id, title, workspace_uris, preview, last_modified_time FROM conversation_summaries",
+    ) else {
+        return map;
+    };
+    let Ok(rows) = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0).unwrap_or_default(),
+            r.get::<_, String>(1).unwrap_or_default(),
+            r.get::<_, String>(2).unwrap_or_default(),
+            r.get::<_, String>(3).unwrap_or_default(),
+            r.get::<_, String>(4).unwrap_or_default(),
+        ))
+    }) else {
+        return map;
+    };
+    for (id, title, uris, preview, modified) in rows.flatten() {
+        if !valid_antigravity_session_id(&id) {
+            continue;
+        }
+        let project_dir = serde_json::from_str::<Vec<String>>(&uris)
+            .ok()
+            .and_then(|v| v.into_iter().next())
+            .and_then(|uri| url::Url::parse(&uri).ok()?.to_file_path().ok())
+            .map(|p| p.to_string_lossy().into_owned());
+        let last_active_at = parse_antigravity_timestamp_str(&modified);
+        map.insert(
+            id,
+            AntigravitySummaryRow {
+                title: title.trim().to_string(),
+                preview: preview.trim().chars().take(160).collect(),
+                project_dir,
+                last_active_at,
+            },
+        );
+    }
+    map
+}
+
+fn first_user_snippet_from_log(path: &Path) -> (String, Option<i64>, Option<String>) {
+    let mut title = String::new();
+    let mut ts = None;
+    let mut ws = None;
+    let Ok(file) = std::fs::File::open(path) else {
+        return (title, ts, ws);
+    };
+    use std::io::BufRead;
+    let reader = std::io::BufReader::new(file);
+    for (idx, line) in reader.lines().map_while(Result::ok).enumerate() {
+        if idx >= 40 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if ts.is_none() {
+            if let Some(created_at) = val.get("created_at").and_then(|c| c.as_str()) {
+                ts = parse_antigravity_timestamp_str(created_at);
+            }
+        }
+        let rec_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if let Some(content) = val.get("content").and_then(|c| c.as_str()) {
+            if ws.is_none() {
+                if let Some(pos) = content.find("Active Document:") {
+                    let doc_line = content[pos + 16..].lines().next().unwrap_or("").trim();
+                    if let Some(dir) = std::path::Path::new(doc_line).parent() {
+                        ws = Some(dir.to_string_lossy().to_string());
+                    }
+                }
+            }
+            if title.is_empty() && (idx == 0 || rec_type == "USER_INPUT") {
+                title = clean_antigravity_snippet(content);
+            }
+        }
+        if !title.is_empty() && ts.is_some() {
+            break;
+        }
+    }
+    (title, ts, ws)
 }
 
 fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
@@ -3842,6 +4012,8 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
         }
     }
 
+    let mut summaries = read_antigravity_summaries(cli_dir);
+
     // Scan brain directory
     let brain_dir = cli_dir.join("brain");
     if let Ok(entries) = std::fs::read_dir(&brain_dir) {
@@ -3851,53 +4023,60 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
                 continue;
             }
             let cid = entry.file_name().to_string_lossy().to_string();
-            // Check if valid session directory
-            let transcript_path = path.join(".system_generated").join("logs").join("transcript.jsonl");
-            let source_path = if transcript_path.is_file() {
-                transcript_path
-            } else {
-                path.clone()
-            };
+            if !valid_antigravity_session_id(&cid) {
+                continue;
+            }
+            let source_path = resolve_brain_source_path(&path).unwrap_or_else(|| path.clone());
 
-            let (mut ts, ws, prompt) = history_map
+            let (mut ts, mut ws, prompt) = history_map
                 .remove(&cid)
                 .unwrap_or_else(|| (None, None, String::new()));
+            let summary_row = summaries.remove(&cid);
 
-            let mut title = if !prompt.is_empty() {
-                clean_antigravity_snippet(&prompt)
-            } else {
-                String::new()
-            };
-
-            // If prompt was empty, inspect the first line of transcript
-            if title.is_empty() && source_path.is_file() {
-                if let Ok(file) = std::fs::File::open(&source_path) {
-                    use std::io::BufRead;
-                    let mut reader = std::io::BufReader::new(file);
-                    let mut first_line = String::new();
-                    if reader.read_line(&mut first_line).is_ok() {
-                        let line = first_line.trim();
-                        if !line.is_empty() {
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                                if let Some(content) = val.get("content").and_then(|c| c.as_str()) {
-                                    title = clean_antigravity_snippet(content);
-                                }
-                                if ts.is_none() {
-                                    if let Some(created_at) = val.get("created_at").and_then(|c| c.as_str()) {
-                                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
-                                            ts = Some(dt.timestamp_millis());
-                                        }
-                                    }
-                                }
-                            }
-                        }
+            let mut title = summary_row
+                .as_ref()
+                .map(|r| r.title.clone())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| {
+                    if !prompt.is_empty() {
+                        clean_antigravity_snippet(&prompt)
+                    } else {
+                        String::new()
                     }
+                });
+            let mut preview = summary_row
+                .as_ref()
+                .map(|r| r.preview.clone())
+                .filter(|p| !p.is_empty())
+                .unwrap_or_default();
+
+            if let Some(row) = &summary_row {
+                if ws.is_none() {
+                    ws = row.project_dir.clone();
+                }
+                if row.last_active_at.is_some() && ts.is_none() {
+                    ts = row.last_active_at;
                 }
             }
 
-            // Fallback timestamp: directory mtime
+            // If title/ts missing, inspect transcript log header
+            if (title.is_empty() || ts.is_none()) && source_path.is_file() {
+                let (log_title, log_ts, log_ws) = first_user_snippet_from_log(&source_path);
+                if title.is_empty() {
+                    title = log_title;
+                }
+                if ts.is_none() {
+                    ts = log_ts;
+                }
+                if ws.is_none() {
+                    ws = log_ws;
+                }
+            }
+
+            // Fallback timestamp: source/directory mtime
             if ts.is_none() {
-                if let Ok(meta) = entry.metadata() {
+                let meta_res = source_path.metadata().or_else(|_| entry.metadata());
+                if let Ok(meta) = meta_res {
                     if let Ok(mtime) = meta.modified() {
                         let duration = mtime
                             .duration_since(std::time::UNIX_EPOCH)
@@ -3910,8 +4089,10 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
             if title.is_empty() {
                 title = format!("CLI Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid });
             }
+            if preview.is_empty() {
+                preview = title.clone();
+            }
 
-            let preview = title.clone();
             out.push(AntigravitySessionMeta {
                 session_id: cid.clone(),
                 source: "cli".into(),
@@ -3928,19 +4109,30 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
 
     // Any remaining items in history_map without brain folder
     for (cid, (ts, ws, display)) in history_map {
-        let title = if !display.is_empty() {
-            clean_antigravity_snippet(&display)
-        } else {
-            format!("CLI Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid })
-        };
-        let preview = title.clone();
+        let summary_row = summaries.remove(&cid);
+        let title = summary_row
+            .as_ref()
+            .map(|r| r.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| {
+                if !display.is_empty() {
+                    clean_antigravity_snippet(&display)
+                } else {
+                    format!("CLI Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid })
+                }
+            });
+        let preview = summary_row
+            .as_ref()
+            .map(|r| r.preview.clone())
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| title.clone());
         let db_path = cli_dir.join("conversations").join(format!("{cid}.db"));
         out.push(AntigravitySessionMeta {
             session_id: cid.clone(),
             source: "cli".into(),
             title,
             preview,
-            project_dir: ws,
+            project_dir: ws.or_else(|| summary_row.and_then(|r| r.project_dir)),
             last_active_at: ts,
             step_count: 0,
             source_path: db_path.to_string_lossy().to_string(),
@@ -3950,26 +4142,47 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
 }
 
 fn scan_ide_sessions(ide_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
+    use std::collections::BTreeSet;
+
     let conv_dir = ide_dir.join("conversations");
     let brain_dir = ide_dir.join("brain");
+    let mut summaries = read_antigravity_summaries(ide_dir);
 
+    let mut cids = BTreeSet::new();
+    if let Ok(entries) = std::fs::read_dir(&brain_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let cid = entry.file_name().to_string_lossy().to_string();
+                if valid_antigravity_session_id(&cid) {
+                    cids.insert(cid);
+                }
+            }
+        }
+    }
     if let Ok(entries) = std::fs::read_dir(&conv_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("pb") {
-                continue;
+            if path.extension().and_then(|e| e.to_str()) == Some("pb") {
+                if let Some(cid) = path.file_stem().and_then(|s| s.to_str()) {
+                    if valid_antigravity_session_id(cid) {
+                        cids.insert(cid.to_string());
+                    }
+                }
             }
-            let cid = entry
-                .path()
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if cid.is_empty() {
-                continue;
-            }
+        }
+    }
+    for cid in summaries.keys() {
+        cids.insert(cid.clone());
+    }
 
-            let mut ts = None;
-            if let Ok(meta) = entry.metadata() {
+    for cid in cids {
+        let pb_path = conv_dir.join(format!("{cid}.pb"));
+        let brain_session = brain_dir.join(&cid);
+        let summary_row = summaries.remove(&cid);
+
+        let mut ts = summary_row.as_ref().and_then(|r| r.last_active_at);
+        if ts.is_none() {
+            if let Ok(meta) = pb_path.metadata().or_else(|_| brain_session.metadata()) {
                 if let Ok(mtime) = meta.modified() {
                     let duration = mtime
                         .duration_since(std::time::UNIX_EPOCH)
@@ -3977,83 +4190,78 @@ fn scan_ide_sessions(ide_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
                     ts = Some(duration.as_millis() as i64);
                 }
             }
-
-            // Check if there is overview or logs in brain/<cid>
-            let brain_session = brain_dir.join(&cid);
-            let overview_path = brain_session.join(".system_generated").join("logs").join("overview.txt");
-            let transcript_path = brain_session.join(".system_generated").join("logs").join("transcript.jsonl");
-            let task_path = brain_session.join("task.md");
-            let plan_path = brain_session.join("implementation_plan.md");
-
-            let mut title = String::new();
-            let mut ws = None;
-            let mut source_path = path.clone();
-
-            if overview_path.is_file() {
-                source_path = overview_path.clone();
-                if let Ok(file_content) = std::fs::read_to_string(&overview_path) {
-                    if let Some(first_line) = file_content.lines().next() {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(first_line) {
-                            if let Some(c) = val.get("content").and_then(|c| c.as_str()) {
-                                title = clean_antigravity_snippet(c);
-                                if let Some(idx) = c.find("Active Document:") {
-                                    let doc_line = c[idx + 16..].lines().next().unwrap_or("").trim();
-                                    if let Some(dir) = std::path::Path::new(doc_line).parent() {
-                                        ws = Some(dir.to_string_lossy().to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if transcript_path.is_file() {
-                source_path = transcript_path.clone();
-                if let Ok(file_content) = std::fs::read_to_string(&transcript_path) {
-                    if let Some(first_line) = file_content.lines().next() {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(first_line) {
-                            if let Some(c) = val.get("content").and_then(|c| c.as_str()) {
-                                title = clean_antigravity_snippet(c);
-                            }
-                        }
-                    }
-                }
-            } else if task_path.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&task_path) {
-                    title = content
-                        .lines()
-                        .map(str::trim)
-                        .find(|l| !l.is_empty() && !l.starts_with("<!--"))
-                        .map(|l| l.trim_start_matches('#').trim().to_string())
-                        .unwrap_or_default();
-                }
-            } else if plan_path.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&plan_path) {
-                    title = content
-                        .lines()
-                        .map(str::trim)
-                        .find(|l| !l.is_empty() && !l.starts_with("<!--"))
-                        .map(|l| l.trim_start_matches('#').trim().to_string())
-                        .unwrap_or_default();
-                }
-            }
-
-            if title.is_empty() {
-                title = format!("App Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid });
-            }
-
-            let preview = title.clone();
-            out.push(AntigravitySessionMeta {
-                session_id: cid,
-                source: "app".into(),
-                title,
-                preview,
-                project_dir: ws,
-                last_active_at: ts,
-                step_count: 0,
-                source_path: source_path.to_string_lossy().to_string(),
-                resume_command: None,
-            });
         }
+
+        let source_path = resolve_brain_source_path(&brain_session).unwrap_or_else(|| {
+            if pb_path.is_file() {
+                pb_path.clone()
+            } else {
+                brain_session.clone()
+            }
+        });
+
+        let mut title = summary_row
+            .as_ref()
+            .map(|r| r.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_default();
+        let mut preview = summary_row
+            .as_ref()
+            .map(|r| r.preview.clone())
+            .filter(|p| !p.is_empty())
+            .unwrap_or_default();
+        let mut ws = summary_row.and_then(|r| r.project_dir);
+
+        if source_path.is_file() && source_path != pb_path {
+            let (log_title, log_ts, log_ws) = first_user_snippet_from_log(&source_path);
+            if title.is_empty() {
+                title = log_title;
+            }
+            if ts.is_none() {
+                ts = log_ts;
+            }
+            if ws.is_none() {
+                ws = log_ws;
+            }
+        }
+
+        if title.is_empty() {
+            for fallback in ["task.md", "implementation_plan.md"] {
+                let fp = brain_session.join(fallback);
+                if fp.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&fp) {
+                        title = content
+                            .lines()
+                            .map(str::trim)
+                            .find(|l| !l.is_empty() && !l.starts_with("<!--"))
+                            .map(|l| l.trim_start_matches('#').trim().to_string())
+                            .unwrap_or_default();
+                        if !title.is_empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if title.is_empty() {
+            title = format!("App Session {}", if cid.len() >= 8 { &cid[..8] } else { &cid });
+        }
+        if preview.is_empty() {
+            preview = title.clone();
+        }
+
+        out.push(AntigravitySessionMeta {
+            session_id: cid,
+            source: "app".into(),
+            title,
+            preview,
+            project_dir: ws,
+            last_active_at: ts,
+            step_count: 0,
+            source_path: source_path.to_string_lossy().to_string(),
+            resume_command: None,
+        });
     }
 }
 
@@ -4071,21 +4279,56 @@ pub fn delete_antigravity_session(home: &Path, session: &AntigravitySessionMeta)
         }
         Ok(())
     } else {
-        let ide_dir = gemini_dir.join("antigravity-ide");
-        let brain_path = ide_dir.join("brain").join(&session.session_id);
-        if brain_path.exists() {
-            let _ = std::fs::remove_dir_all(&brain_path);
-        }
-        let conv_path = ide_dir.join("conversations").join(format!("{}.pb", session.session_id));
-        if conv_path.exists() {
-            let _ = std::fs::remove_file(&conv_path);
-        }
-        let annot_path = ide_dir.join("annotations").join(format!("{}.pbtxt", session.session_id));
-        if annot_path.exists() {
-            let _ = std::fs::remove_file(&annot_path);
+        for dir_name in ["antigravity", "antigravity-ide"] {
+            let ide_dir = gemini_dir.join(dir_name);
+            let brain_path = ide_dir.join("brain").join(&session.session_id);
+            if brain_path.exists() {
+                let _ = std::fs::remove_dir_all(&brain_path);
+            }
+            let conv_path = ide_dir.join("conversations").join(format!("{}.pb", session.session_id));
+            if conv_path.exists() {
+                let _ = std::fs::remove_file(&conv_path);
+            }
+            let annot_path = ide_dir.join("annotations").join(format!("{}.pbtxt", session.session_id));
+            if annot_path.exists() {
+                let _ = std::fs::remove_file(&annot_path);
+            }
         }
         Ok(())
     }
+}
+
+/// Filter Antigravity sessions whose `last_active_at` is older than
+/// `older_than_days` relative to `now_ms`.
+pub fn filter_stale_antigravity_sessions(
+    sessions: &[AntigravitySessionMeta],
+    older_than_days: u32,
+    now_ms: i64,
+) -> Vec<AntigravitySessionMeta> {
+    let cutoff_ms = now_ms - (older_than_days as i64).saturating_mul(86_400_000);
+    sessions
+        .iter()
+        .filter(|s| s.last_active_at.is_some_and(|ts| ts < cutoff_ms))
+        .cloned()
+        .collect()
+}
+
+/// Delete multiple Antigravity sessions in a batch.
+///
+/// Returns `(deleted_count, failed_count)`.
+pub fn delete_antigravity_sessions_batch(
+    home: &Path,
+    sessions: &[AntigravitySessionMeta],
+) -> (usize, usize) {
+    let mut deleted = 0usize;
+    let mut failed = 0usize;
+    for s in sessions {
+        match delete_antigravity_session(home, s) {
+            Ok(()) => deleted += 1,
+            Err(_) => failed += 1,
+        }
+    }
+    (deleted, failed)
 }
 
 #[cfg(test)]
@@ -4292,6 +4535,54 @@ mod tests {
         let ide_sess = sessions.iter().find(|s| s.source == "app").unwrap();
         assert_eq!(ide_sess.session_id, "ide-sess-1");
         assert!(ide_sess.title.contains("ide-sess"));
+    }
+
+    #[test]
+    fn test_scan_antigravity_main_app_dir_and_summaries_db() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let app_dir = home.join(".gemini").join("antigravity");
+        let logs = app_dir
+            .join("brain")
+            .join("app-conv-42")
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("transcript.jsonl"), r#"{"step_index":0,"type":"USER_INPUT","content":"truncated"}"#).unwrap();
+        std::fs::write(logs.join("transcript_full.jsonl"), r#"{"step_index":0,"type":"USER_INPUT","content":"<USER_REQUEST>\nfull prompt\n</USER_REQUEST>"}"#).unwrap();
+
+        let project = home.join("my_project");
+        let workspace_uris = serde_json::to_string(&[
+            url::Url::from_file_path(&project).unwrap().to_string(),
+        ])
+        .unwrap();
+        let db = rusqlite::Connection::open(app_dir.join("conversation_summaries.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE conversation_summaries(conversation_id TEXT, title TEXT, workspace_uris TEXT, preview TEXT, last_modified_time TEXT);",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO conversation_summaries VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "app-conv-42",
+                "Summary Title",
+                workspace_uris,
+                "Detailed preview text",
+                "2026-10-13T17:26:12Z"
+            ],
+        )
+        .unwrap();
+
+        let sessions = scan_antigravity_sessions(home, usize::MAX);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].source, "app");
+        assert_eq!(sessions[0].title, "Summary Title");
+        assert_eq!(sessions[0].preview, "Detailed preview text");
+        assert_eq!(
+            sessions[0].project_dir.as_deref(),
+            Some(project.to_string_lossy().as_ref())
+        );
+        assert!(sessions[0].source_path.ends_with("transcript_full.jsonl"));
     }
 
     #[test]
@@ -4530,5 +4821,30 @@ mod tests {
         assert_eq!(status.agy_account_id.as_deref(), Some("id-cli"));
         assert!(status.is_agy("id-cli"));
         assert!(store.get_account("id-cli").unwrap().is_active);
+    }
+
+    #[test]
+    fn filter_stale_antigravity_sessions_respects_cutoff() {
+        let now_ms = 1_700_000_000_000_i64;
+        let day_ms = 86_400_000_i64;
+        let mk = |id: &str, last_active_at: Option<i64>| AntigravitySessionMeta {
+            session_id: id.into(),
+            source: "cli".into(),
+            title: id.into(),
+            preview: String::new(),
+            project_dir: None,
+            last_active_at,
+            step_count: 1,
+            source_path: format!("/tmp/{id}"),
+            resume_command: None,
+        };
+        let list = vec![
+            mk("old", Some(now_ms - 15 * day_ms)),
+            mk("recent", Some(now_ms - 5 * day_ms)),
+            mk("none", None),
+        ];
+        let stale = filter_stale_antigravity_sessions(&list, 14, now_ms);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].session_id, "old");
     }
 }

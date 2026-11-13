@@ -3,6 +3,8 @@
 //! STRICT CONSTRAINT: Zero reverse proxy, zero proxy server, zero proxy pool.
 //! Pure client-side account management, quota inspection, and credential switching.
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use aitoolplus_core::antigravity::{
     ActiveClientsStatus, AntigravityAccount, AntigravitySessionMeta, AntigravityStore, DeviceProfile,
@@ -14,6 +16,8 @@ use aitoolplus_core::antigravity::{
     sync_store_active_flags, toggle_account_disabled, update_account_device_profile,
     update_account_label,
 };
+use aitoolplus_core::session::SessionMeta;
+use aitoolplus_core::session_search::{self, ContentHit};
 use gpui::{Context, IntoElement, SharedString, div, prelude::*, px};
 use chrono::{DateTime, NaiveDateTime, Utc};
 
@@ -544,12 +548,146 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     section.into_any_element()
 }
 
+pub fn schedule_antigravity_session_search(
+    ws: &mut Workspace,
+    raw_query: String,
+    immediate: bool,
+    cx: &mut Context<Workspace>,
+) {
+    let query = raw_query.trim().to_string();
+    ws.ui.antigravity_session_search_seq = ws.ui.antigravity_session_search_seq.wrapping_add(1);
+    let seq = ws.ui.antigravity_session_search_seq;
+
+    if query.is_empty() {
+        if !ws.ui.antigravity_session_content_hits.is_empty()
+            || !ws.ui.antigravity_session_content_query.is_empty()
+        {
+            ws.ui.antigravity_session_content_hits.clear();
+            ws.ui.antigravity_session_content_query.clear();
+        }
+        ws.ui
+            .antigravity_session_scroll_handle
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        cx.notify();
+        return;
+    }
+
+    let paths = ws.paths.clone();
+    let scope = vec!["antigravity:app".to_string(), "antigravity:cli".to_string()];
+    let weak = cx.entity().downgrade();
+    cx.spawn(async move |_this, cx| {
+        if !immediate {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+        }
+        let still_current = weak
+            .update(cx, |workspace, _| workspace.ui.antigravity_session_search_seq == seq)
+            .unwrap_or(false);
+        if !still_current {
+            return;
+        }
+        let query_bg = query.clone();
+        let hits = cx
+            .background_spawn(async move {
+                session_search::search_sessions_content(
+                    &paths,
+                    Some(&scope),
+                    &query_bg,
+                    session_search::DEFAULT_SEARCH_LIMIT,
+                )
+                .unwrap_or_default()
+            })
+            .await;
+
+        let _ = weak.update(cx, |workspace, cx| {
+            if workspace.ui.antigravity_session_search_seq != seq {
+                return;
+            }
+            workspace.ui.antigravity_session_content_hits = hits
+                .into_iter()
+                .map(|h| (h.source_path.clone(), h))
+                .collect();
+            workspace.ui.antigravity_session_content_query = query.to_lowercase();
+            workspace
+                .ui
+                .antigravity_session_scroll_handle
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+fn start_antigravity_session_index_sync(
+    sessions: Vec<AntigravitySessionMeta>,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) {
+    if sessions.is_empty() {
+        ws.ui.antigravity_session_indexing = None;
+        return;
+    }
+    let metas: Vec<SessionMeta> = sessions.into_iter().map(Into::into).collect();
+    let total = metas.len();
+    ws.ui.antigravity_session_indexing = Some((0, total));
+    let paths = ws.paths.clone();
+    let scope = vec!["antigravity:app".to_string(), "antigravity:cli".to_string()];
+    let (tx, rx) = async_channel::unbounded::<(usize, usize)>();
+    let weak = cx.entity().downgrade();
+
+    cx.spawn(async move |_this, cx| {
+        let sync_task = cx.background_spawn(async move {
+            let _ = session_search::sync_sessions_with_progress(
+                &paths,
+                &scope,
+                &metas,
+                |processed, total| {
+                    let _ = tx.try_send((processed, total));
+                },
+            );
+        });
+        while let Ok((processed, total)) = rx.recv().await {
+            let keep = weak
+                .update(cx, |workspace, cx| {
+                    workspace.ui.antigravity_session_indexing = Some((processed, total));
+                    cx.notify();
+                    true
+                })
+                .unwrap_or(false);
+            if !keep {
+                break;
+            }
+        }
+        sync_task.await;
+        let _ = weak.update(cx, |workspace, cx| {
+            workspace.ui.antigravity_session_indexing = None;
+            let cur_query = workspace
+                .ui
+                .antigravity_session_search
+                .read(cx)
+                .text()
+                .to_string();
+            if !cur_query.trim().is_empty() {
+                schedule_antigravity_session_search(workspace, cur_query, true, cx);
+            } else {
+                cx.notify();
+            }
+        });
+    })
+    .detach();
+}
+
 fn load_antigravity_sessions(ws: &mut Workspace, cx: &mut Context<Workspace>) {
     if ws.ui.antigravity_sessions_loading {
         return;
     }
     ws.ui.antigravity_sessions_loading = true;
     ws.ui.antigravity_sessions = Some(Vec::new());
+    let cur_query = ws.ui.antigravity_session_search.read(cx).text().to_string();
+    if !cur_query.trim().is_empty() {
+        schedule_antigravity_session_search(ws, cur_query, true, cx);
+    }
     let home = ws.paths.home.clone();
     let weak = cx.entity().downgrade();
     cx.spawn(async move |_this, cx| {
@@ -557,8 +695,9 @@ fn load_antigravity_sessions(ws: &mut Workspace, cx: &mut Context<Workspace>) {
             .background_spawn(async move { scan_antigravity_sessions(&home, usize::MAX) })
             .await;
         let _ = weak.update(cx, |workspace, cx| {
-            workspace.ui.antigravity_sessions = Some(sessions);
+            workspace.ui.antigravity_sessions = Some(sessions.clone());
             workspace.ui.antigravity_sessions_loading = false;
+            start_antigravity_session_index_sync(sessions, workspace, cx);
             cx.notify();
         });
     })
@@ -576,6 +715,7 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
     let sessions = ws.ui.antigravity_sessions.clone().unwrap_or_default();
     let filter = ws.ui.antigravity_session_filter;
     let query = ws.ui.antigravity_session_search.read(cx).text().trim().to_lowercase();
+    let hits_ready = !query.is_empty() && ws.ui.antigravity_session_content_query == query;
 
     let filtered: Vec<AntigravitySessionMeta> = sessions
         .into_iter()
@@ -595,6 +735,11 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
                 || s.session_id.to_lowercase().contains(&query)
                 || s.preview.to_lowercase().contains(&query)
                 || s.project_dir.as_deref().unwrap_or("").to_lowercase().contains(&query)
+                || (hits_ready
+                    && ws
+                        .ui
+                        .antigravity_session_content_hits
+                        .contains_key(&s.source_path))
         })
         .collect();
 
@@ -647,6 +792,42 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
         },
     );
 
+    let cleanup_btn = button_with_icon_l(
+        "ag-sess-cleanup-btn",
+        crate::icons::TRASH_SVG,
+        i.t("tool_sessions.cleanup_old_sessions"),
+        ButtonVariant::Secondary,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.session_cleanup_dialog = Some(crate::pages::SessionCleanupDialogState {
+                target: crate::pages::SessionCleanupTarget::Antigravity,
+                period: crate::pages::SessionCleanupPeriod::Days90,
+                deleting: false,
+            });
+            cx.notify();
+        },
+    );
+
+    let indexing_pill = ws.ui.antigravity_session_indexing.and_then(|(processed, total)| {
+        (total > 0).then(|| {
+            let label = i
+                .raw(
+                    &format!("索引正文 {processed}/{total}…"),
+                    &format!("Indexing {processed}/{total}…"),
+                )
+                .to_string();
+            div()
+                .px(px(8.0))
+                .py(px(3.0))
+                .rounded(px(6.0))
+                .bg(t.tab_bar_bg)
+                .text_size(px(11.5))
+                .text_color(t.text_muted)
+                .child(label)
+        })
+    });
+
     let toolbar = div()
         .flex()
         .items_center()
@@ -661,7 +842,9 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
                 .flex_wrap()
                 .child(filter_selector)
                 .child(div().w(px(280.0)).child(input_container(&t, search_input)))
+                .children(indexing_pill)
                 .child(refresh_btn)
+                .child(cleanup_btn)
         )
         .child(
             div()
@@ -689,11 +872,18 @@ pub fn render_antigravity_sessions_tab(ws: &mut Workspace, cx: &mut Context<Work
             },
         )
     } else {
-        let items = std::sync::Arc::new(filtered.into_iter().map(Into::into).collect::<Vec<_>>());
+        let items = Arc::new(filtered.into_iter().map(Into::into).collect::<Vec<_>>());
+        let hits_arc: Arc<HashMap<String, ContentHit>> = if hits_ready {
+            Arc::new(ws.ui.antigravity_session_content_hits.clone())
+        } else {
+            Arc::new(HashMap::new())
+        };
         crate::pages::tool_page::session_list_viewport(
             "antigravity-sessions-vlist",
             "antigravity-sessions-scrollbar",
             items,
+            hits_arc,
+            !query.is_empty(),
             aitoolplus_core::tools::ToolId::GeminiCli,
             ws.ui.antigravity_session_scroll_handle.clone(),
             cx.entity(),

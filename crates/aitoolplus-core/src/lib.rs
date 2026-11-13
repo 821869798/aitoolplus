@@ -36,6 +36,7 @@ pub mod providers;
 pub mod s3;
 pub mod security;
 pub mod session;
+pub mod session_search;
 pub mod settings;
 pub mod skill_git;
 pub mod skills;

@@ -934,6 +934,15 @@ pub fn load_messages(_paths: &Paths, meta: &SessionMeta) -> Result<Vec<SessionMe
         }
         return load_jsonl_messages(&history);
     }
+    if !source.is_file() {
+        return Ok(vec![]);
+    }
+    if matches!(
+        source.extension().and_then(|e| e.to_str()),
+        Some("pb" | "db" | "sqlite" | "sqlite3")
+    ) {
+        return Ok(vec![]);
+    }
     load_jsonl_messages(&source)
 }
 
@@ -943,17 +952,51 @@ fn load_jsonl_messages(path: &Path) -> Result<Vec<SessionMessage>, String> {
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
     let reader = std::io::BufReader::new(file);
 
+    let is_ag_transcript = matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("transcript_full.jsonl" | "transcript.jsonl")
+    );
+
+    let values: Vec<Value> = if is_ag_transcript {
+        // Antigravity transcripts can rewrite the same `step_index` as a step progresses.
+        let mut by_step: std::collections::BTreeMap<u64, Value> = std::collections::BTreeMap::new();
+        let mut unindexed: Vec<Value> = Vec::new();
+        for line in reader.lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+                continue;
+            };
+            if let Some(step_idx) = value.get("step_index").and_then(Value::as_u64) {
+                by_step.insert(step_idx, value);
+            } else {
+                unindexed.push(value);
+            }
+        }
+        let mut merged: Vec<Value> = by_step.into_values().collect();
+        merged.extend(unindexed);
+        merged
+    } else {
+        reader
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    serde_json::from_str::<Value>(trimmed).ok()
+                }
+            })
+            .collect()
+    };
+
     let mut out: Vec<SessionMessage> = vec![];
     let mut tool_use_map: HashMap<String, (usize, usize)> = HashMap::new();
 
-    for line in reader.lines().filter_map(|l| l.ok()) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
+    for value in values {
 
         // 1. Filter out internal noise / meta events
         if let Some(type_str) = value.get("type").and_then(Value::as_str) {
@@ -1583,16 +1626,61 @@ fn content_text(content: &Value) -> String {
 // Mutations: delete, rename (via title metadata file), export
 // ---------------------------------------------------------------------------
 
-/// Delete the session (file or whole directory for Grok-style sessions).
+/// Delete the session (file or whole directory for Grok-style sessions),
+/// along with any toolbox-owned title sidecar file.
 pub fn delete_session(meta: &SessionMeta) -> Result<(), String> {
     let path = PathBuf::from(&meta.source_path);
     if path.is_dir() {
         std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
     } else if path.is_file() {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        let sidecar = path.with_extension("toolbox-title.txt");
+        if sidecar.is_file() {
+            let _ = std::fs::remove_file(&sidecar);
+        }
+        Ok(())
     } else {
         Ok(())
     }
+}
+
+/// Filter sessions whose last active timestamp (falling back to creation time)
+/// is older than `older_than_days` relative to `now_ms`.
+///
+/// Sessions without any known timestamp are preserved to avoid accidental deletion.
+pub fn filter_stale_sessions(
+    sessions: &[SessionMeta],
+    older_than_days: u32,
+    now_ms: i64,
+) -> Vec<SessionMeta> {
+    let cutoff_ms = now_ms - (older_than_days as i64).saturating_mul(86_400_000);
+    sessions
+        .iter()
+        .filter(|s| {
+            s.last_active_at
+                .or(s.created_at)
+                .is_some_and(|ts| ts < cutoff_ms)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Delete multiple sessions in a batch and invalidate the session cache.
+///
+/// Returns `(deleted_count, failed_count)`.
+pub fn delete_sessions_batch(sessions: &[SessionMeta]) -> (usize, usize) {
+    let mut deleted = 0usize;
+    let mut failed = 0usize;
+    for meta in sessions {
+        match delete_session(meta) {
+            Ok(()) => deleted += 1,
+            Err(_) => failed += 1,
+        }
+    }
+    if deleted > 0 {
+        invalidate_cache();
+    }
+    (deleted, failed)
 }
 
 /// Rename: write a `title` into the sidecar `<file>.title` (toolbox-owned
@@ -2021,6 +2109,68 @@ mod tests {
         let msg1 = &messages[1];
         assert_eq!(msg1.role, "assistant");
         assert_eq!(msg1.content, "Working tree is clean.");
+    }
+
+    #[test]
+    fn filter_stale_sessions_respects_cutoff_and_unknown_timestamps() {
+        let now_ms = 1_700_000_000_000_i64;
+        let day_ms = 86_400_000_i64;
+        let mk = |id: &str, last_active_at: Option<i64>, created_at: Option<i64>| SessionMeta {
+            provider_id: "codex".into(),
+            session_id: id.into(),
+            title: Some(id.into()),
+            summary: None,
+            project_dir: None,
+            created_at,
+            last_active_at,
+            source_path: format!("/tmp/{id}.jsonl"),
+            resume_command: None,
+        };
+
+        let sessions = vec![
+            mk("old-91d", Some(now_ms - 91 * day_ms), None),
+            mk("exact-90d", Some(now_ms - 90 * day_ms), None),
+            mk("fresh-89d", Some(now_ms - 89 * day_ms), None),
+            mk("created-100d", None, Some(now_ms - 100 * day_ms)),
+            mk("unknown-ts", None, None),
+        ];
+
+        let stale = filter_stale_sessions(&sessions, 90, now_ms);
+        let ids: Vec<&str> = stale.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["old-91d", "created-100d"]);
+    }
+
+    #[test]
+    fn delete_sessions_batch_removes_files_and_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let file1 = dir.path().join("s1.jsonl");
+        let file2 = dir.path().join("s2.jsonl");
+        std::fs::write(&file1, "{}\n").unwrap();
+        std::fs::write(&file2, "{}\n").unwrap();
+
+        let mk = |id: &str, p: &std::path::Path| SessionMeta {
+            provider_id: "claude_code".into(),
+            session_id: id.into(),
+            title: None,
+            summary: None,
+            project_dir: None,
+            created_at: None,
+            last_active_at: Some(1_000),
+            source_path: p.to_string_lossy().to_string(),
+            resume_command: None,
+        };
+
+        let m1 = mk("s1", &file1);
+        rename_session(&m1, "Custom Title").unwrap();
+        let sidecar = file1.with_extension("toolbox-title.txt");
+        assert!(sidecar.exists());
+
+        let m2 = mk("s2", &file2);
+        let (deleted, failed) = delete_sessions_batch(&[m1, m2]);
+        assert_eq!((deleted, failed), (2, 0));
+        assert!(!file1.exists());
+        assert!(!sidecar.exists());
+        assert!(!file2.exists());
     }
 }
 

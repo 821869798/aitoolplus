@@ -1602,6 +1602,7 @@ impl Render for Workspace {
             let mcps = self.ui.mcp_dialog.clone();
             let confirms = self.ui.confirm.clone();
             let renames = self.ui.rename_dialog.clone();
+            let session_cleanups = self.ui.session_cleanup_dialog.clone();
             let backup_renames = self.ui.backup_rename_dialog.clone();
             let runtime_edits = self.ui.runtime_edit_dialog.clone();
             let skill_details = self.ui.skill_detail_dialog.clone();
@@ -1641,6 +1642,13 @@ impl Render for Workspace {
             if let Some((meta, input)) = renames {
                 out.push(pages::tool_page::render_rename_dialog(
                     meta, input, self, cx,
+                ));
+            }
+            if let Some(cleanup_state) = session_cleanups {
+                out.push(pages::tool_page::render_session_cleanup_dialog(
+                    cleanup_state,
+                    self,
+                    cx,
                 ));
             }
             if let Some((path, input)) = backup_renames {

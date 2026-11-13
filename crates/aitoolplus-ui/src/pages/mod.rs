@@ -158,6 +158,8 @@ pub struct WorkspaceState {
         aitoolplus_core::session::SessionMeta,
         gpui::Entity<TextInput>,
     )>,
+    /// Batch cleanup dialog for inactive sessions.
+    pub session_cleanup_dialog: Option<SessionCleanupDialogState>,
     /// Backup file rename dialog: (file_path, new_name_input).
     pub backup_rename_dialog: Option<(
         std::path::PathBuf,
@@ -290,6 +292,11 @@ pub struct WorkspaceState {
     /// Bumped when a new session scan starts, so a slower older scan stops appending.
     pub agent_session_scan: u64,
     pub agent_session_scroll: gpui::UniformListScrollHandle,
+    pub agent_session_content_hits:
+        std::collections::HashMap<String, aitoolplus_core::session_search::ContentHit>,
+    pub agent_session_content_query: String,
+    pub agent_session_search_seq: u64,
+    pub agent_session_indexing: Option<(ToolId, usize, usize)>,
     pub antigravity_store: Option<aitoolplus_core::antigravity::AntigravityStore>,
     pub antigravity_loading: bool,
     pub antigravity_dialog: Option<antigravity_page::AntigravityDialogState>,
@@ -315,6 +322,11 @@ pub struct WorkspaceState {
     pub antigravity_sessions_loading: bool,
     pub antigravity_open_session: Option<aitoolplus_core::antigravity::AntigravitySessionMeta>,
     pub antigravity_session_scroll_handle: gpui::UniformListScrollHandle,
+    pub antigravity_session_content_hits:
+        std::collections::HashMap<String, aitoolplus_core::session_search::ContentHit>,
+    pub antigravity_session_content_query: String,
+    pub antigravity_session_search_seq: u64,
+    pub antigravity_session_indexing: Option<(usize, usize)>,
     pub session_messages_cache: Option<(ToolId, String, std::sync::Arc<Vec<aitoolplus_core::session::SessionMessage>>)>,
     pub session_messages_loading: Option<(ToolId, String)>,
     pub session_actions_menu_open: bool,
@@ -734,6 +746,38 @@ pub enum CodexUnifyDialogState {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SessionCleanupPeriod {
+    Days14,
+    Days30,
+    Days90,
+    Days180,
+}
+
+impl SessionCleanupPeriod {
+    pub fn days(self) -> u32 {
+        match self {
+            Self::Days14 => 14,
+            Self::Days30 => 30,
+            Self::Days90 => 90,
+            Self::Days180 => 180,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SessionCleanupTarget {
+    Tool(ToolId),
+    Antigravity,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionCleanupDialogState {
+    pub target: SessionCleanupTarget,
+    pub period: SessionCleanupPeriod,
+    pub deleting: bool,
+}
+
 #[derive(Clone)]
 pub enum ConfirmAction {
     DeleteProvider { tool: ToolId, id: String },
@@ -883,8 +927,49 @@ impl WorkspaceState {
         let grok_installed_search = cx.new(|cx| TextInput::new("搜索已安装插件…", cx));
         let grok_market_search = cx.new(|cx| TextInput::new("搜索市场插件…", cx));
         let agent_session_search = cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
+        cx.subscribe(&agent_session_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            match event {
+                crate::text_input::TextInputEvent::Change(text) => {
+                    crate::pages::tool_page::schedule_agent_session_search(
+                        this,
+                        text.clone(),
+                        false,
+                        cx,
+                    );
+                }
+                crate::text_input::TextInputEvent::Enter => {
+                    let query = this.ui.agent_session_search.read(cx).text().to_string();
+                    crate::pages::tool_page::schedule_agent_session_search(this, query, true, cx);
+                }
+                _ => {}
+            }
+        })
+        .detach();
         let antigravity_search = cx.new(|cx| TextInput::new("搜索账号（邮箱、备注）…", cx));
         let antigravity_session_search = cx.new(|cx| TextInput::new(crate::pages::workspace_search_placeholder(), cx));
+        cx.subscribe(&antigravity_session_search, |this, _emitter, event: &crate::text_input::TextInputEvent, cx| {
+            match event {
+                crate::text_input::TextInputEvent::Change(text) => {
+                    crate::pages::antigravity_page::schedule_antigravity_session_search(
+                        this,
+                        text.clone(),
+                        false,
+                        cx,
+                    );
+                }
+                crate::text_input::TextInputEvent::Enter => {
+                    let query = this.ui.antigravity_session_search.read(cx).text().to_string();
+                    crate::pages::antigravity_page::schedule_antigravity_session_search(
+                        this,
+                        query,
+                        true,
+                        cx,
+                    );
+                }
+                _ => {}
+            }
+        })
+        .detach();
 
         let proxy_host_input = cx.new(|cx| TextInput::new("127.0.0.1", cx));
         let proxy_port_input = cx.new(|cx| TextInput::new("7890", cx));
@@ -940,6 +1025,7 @@ impl WorkspaceState {
             mcp_discovered: false,
             skills_discovered: false,
             rename_dialog: None,
+            session_cleanup_dialog: None,
             backup_rename_dialog: None,
             pi_ms_initialized: false,
             pi_ms_provider_input,
@@ -1049,6 +1135,10 @@ impl WorkspaceState {
             agent_sessions_loading: false,
             agent_session_scan: 0,
             agent_session_scroll: gpui::UniformListScrollHandle::new(),
+            agent_session_content_hits: std::collections::HashMap::new(),
+            agent_session_content_query: String::new(),
+            agent_session_search_seq: 0,
+            agent_session_indexing: None,
             antigravity_store: None,
             antigravity_loading: false,
             antigravity_dialog: None,
@@ -1082,6 +1172,10 @@ impl WorkspaceState {
             antigravity_sessions_loading: false,
             antigravity_open_session: None,
             antigravity_session_scroll_handle: gpui::UniformListScrollHandle::new(),
+            antigravity_session_content_hits: std::collections::HashMap::new(),
+            antigravity_session_content_query: String::new(),
+            antigravity_session_search_seq: 0,
+            antigravity_session_indexing: None,
             session_messages_cache: None,
             session_messages_loading: None,
             session_actions_menu_open: false,
@@ -1326,6 +1420,7 @@ impl WorkspaceState {
 
     pub fn on_page_change(&mut self, page: Page, _cx: &mut Context<Workspace>) {
         self.toast = None;
+        self.session_cleanup_dialog = None;
         self.skill_git_modal = None;
         self.skill_store_repo_manager_open = false;
         self.selected_mcp_id = None;
@@ -1354,6 +1449,7 @@ impl WorkspaceState {
             || self.mcp_dialog.is_some()
             || self.confirm.is_some()
             || self.rename_dialog.is_some()
+            || self.session_cleanup_dialog.is_some()
             || self.backup_rename_dialog.is_some()
             || self.runtime_edit_dialog.is_some()
             || self.skill_detail_dialog.is_some()
@@ -1513,6 +1609,7 @@ pub fn modal_scaffold_sized(
                         ws.ui.mcp_dialog = None;
                         ws.ui.confirm = None;
                         ws.ui.rename_dialog = None;
+                        ws.ui.session_cleanup_dialog = None;
                         ws.ui.antigravity_dialog = None;
                         ws.ui.antigravity_details_account = None;
                         ws.ui.antigravity_device_account = None;
@@ -2095,6 +2192,11 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
             if let Some(meta) = meta {
                 let _ = aitoolplus_core::session::delete_session(&meta);
                 aitoolplus_core::session::invalidate_cache();
+                aitoolplus_core::session_search::forget_indexed_sources(
+                    &ws.paths,
+                    &[(meta.provider_id.clone(), meta.source_path.clone())],
+                );
+                ws.ui.agent_session_content_hits.remove(&meta.source_path);
                 ws.ui.agent_sessions = None;
                 if ws.ui.open_session.as_ref().map(|(t, sid)| *t == tool && sid == &id).unwrap_or(false) {
                     ws.ui.open_session = None;
@@ -2146,6 +2248,12 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 ws.ui.toast(err, true);
             } else {
                 aitoolplus_core::session::invalidate_cache();
+                let meta: aitoolplus_core::session::SessionMeta = session.clone().into();
+                aitoolplus_core::session_search::forget_indexed_sources(
+                    &ws.paths,
+                    &[(meta.provider_id, meta.source_path.clone())],
+                );
+                ws.ui.antigravity_session_content_hits.remove(&meta.source_path);
                 if let Some(ref mut list) = ws.ui.antigravity_sessions {
                     list.retain(|s| s.session_id != session.session_id);
                 }
@@ -2298,7 +2406,7 @@ pub fn render_toast(ws: &mut Workspace, cx: &mut Context<Workspace>) -> Option<g
 }
 
 pub fn workspace_search_placeholder() -> &'static str {
-    "搜索会话…"
+    "搜索会话标题、目录或消息正文（支持 URL / 关键词）…"
 }
 
 /// Page content router.
