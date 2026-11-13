@@ -24,6 +24,7 @@ gpui-kit.workspace = true
 async-channel.workspace = true
 rfd.workspace = true
 notify = "7"
+png = "0.18"
 rust-i18n.workspace = true
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
@@ -34,8 +35,21 @@ muda = { version = "0.19", default-features = false }
 tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
 muda = { version = "0.19", default-features = false, features = ["gtk"] }
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", features = [
+    "NSApplication",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSView",
+    "NSWindow",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Security",

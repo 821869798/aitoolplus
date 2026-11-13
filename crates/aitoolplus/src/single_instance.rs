@@ -171,6 +171,7 @@ pub fn pump_messages(
                     }
                     tracing::info!("pump_messages calling restore_window_from_tray");
                     crate::app::restore_window_from_tray(window);
+                    cx.activate(true);
                 });
             } else {
                 tracing::warn!("pump_messages could not get window handle");

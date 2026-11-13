@@ -87,16 +87,22 @@ pub fn init_tray(
     let groups_state = Arc::new(Mutex::new(initial_groups.clone()));
     let groups_for_events = groups_state.clone();
 
+    let fallback_icon = || {
+        if let Some((rgba, width, height)) = crate::icon::app_icon_rgba()
+            && let Ok(icon) = tray_icon::Icon::from_rgba(rgba, width, height)
+        {
+            return icon;
+        }
+        tray_icon::Icon::from_rgba(crate::icon::rgba(), crate::icon::SIZE, crate::icon::SIZE)
+            .expect("infallible icon")
+    };
+
     #[cfg(target_os = "windows")]
     let image = tray_icon::Icon::from_resource(1, Some((32, 32)))
-        .or_else(|_| {
-            tray_icon::Icon::from_rgba(crate::icon::rgba(), crate::icon::SIZE, crate::icon::SIZE)
-        })
-        .expect("infallible icon");
+        .unwrap_or_else(|_| fallback_icon());
 
     #[cfg(not(target_os = "windows"))]
-    let image = tray_icon::Icon::from_rgba(crate::icon::rgba(), crate::icon::SIZE, crate::icon::SIZE)
-        .expect("infallible icon");
+    let image = fallback_icon();
 
     let menu = build_menu(&initial_groups).unwrap_or_default();
     let tray_icon = match tray_icon::TrayIconBuilder::new()
@@ -153,8 +159,9 @@ pub fn init_tray(
             match action {
                 TrayAction::ShowWindow => {
                     if let Some(window) = ensure_workspace_window(cx, &updater_for_pump) {
-                        let _ = window.update(cx, |_, window, _cx| {
+                        let _ = window.update(cx, |_, window, cx| {
                             crate::app::restore_window_from_tray(window);
+                            cx.activate(true);
                         });
                     }
                 }
@@ -188,6 +195,7 @@ pub fn init_tray(
                                 });
                             }
                             crate::app::restore_window_from_tray(window);
+                            cx.activate(true);
                         });
                     }
                 }

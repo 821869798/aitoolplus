@@ -60,6 +60,28 @@ pub fn get_window_hwnd(window: &gpui::Window) -> Option<windows::Win32::Foundati
     }
 }
 
+#[cfg(target_os = "macos")]
+fn get_macos_window(window: &gpui::Window) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = match HasWindowHandle::window_handle(window) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("get_macos_window HasWindowHandle failed: {e}");
+            return None;
+        }
+    };
+    match handle.as_raw() {
+        RawWindowHandle::AppKit(appkit) => {
+            let view = unsafe { &*appkit.ns_view.as_ptr().cast::<objc2_app_kit::NSView>() };
+            view.window()
+        }
+        other => {
+            tracing::warn!("get_macos_window unhandled RawWindowHandle: {other:?}");
+            None
+        }
+    }
+}
+
 /// Trims the process working set memory on Windows, releasing idle pages to the OS (parity with flyclip).
 #[cfg(windows)]
 pub fn trim_working_set() {
@@ -82,6 +104,21 @@ pub fn hide_window_to_tray(window: &gpui::Window) {
             tracing::info!(hwnd = ?hwnd, "hide_window_to_tray calling SW_HIDE");
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+            trim_working_set();
+            return;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(ns_window) = get_macos_window(window) {
+            tracing::info!("hide_window_to_tray ordering out macOS NSWindow");
+            ns_window.orderOut(None);
+            if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+                let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+                app.setActivationPolicy(
+                    objc2_app_kit::NSApplicationActivationPolicy::Accessory,
+                );
             }
             trim_working_set();
             return;
@@ -141,6 +178,20 @@ pub fn restore_window_from_tray(window: &gpui::Window) {
             }
         } else {
             tracing::warn!("restore_window_from_tray failed to get HWND");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+            let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+            app.setActivationPolicy(
+                objc2_app_kit::NSApplicationActivationPolicy::Regular,
+            );
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+        }
+        if let Some(ns_window) = get_macos_window(window) {
+            ns_window.makeKeyAndOrderFront(None);
         }
     }
     window.activate_window();

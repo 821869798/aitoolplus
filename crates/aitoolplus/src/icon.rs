@@ -6,6 +6,27 @@
 
 pub const SIZE: u32 = 32;
 
+static APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/aitoolplus_icon.png");
+
+/// Decode the embedded application icon PNG into straight RGBA pixels.
+pub fn app_icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(APP_ICON_PNG));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let data = &buf[..info.buffer_size()];
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => data.to_vec(),
+        png::ColorType::Rgb => data
+            .chunks_exact(3)
+            .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+            .collect(),
+        _ => return None,
+    };
+    Some((rgba, info.width, info.height))
+}
+
 /// Tile background color: modern AI ToolPlus blue.
 const TILE: [f32; 3] = [0.18, 0.45, 0.96];
 /// Inner plus symbol: crisp white.
@@ -89,5 +110,15 @@ mod tests {
             .filter(|&(x, y)| matches!(pixel(&data, x, y)[3], 1..=254))
             .count();
         assert!(partial > 8, "expected soft edges, found {partial} pixels");
+    }
+
+    #[test]
+    fn app_icon_decodes_as_rgba() {
+        let (rgba, width, height) = app_icon_rgba().expect("embedded app icon png should decode");
+        assert_eq!(width, 256);
+        assert_eq!(height, 256);
+        assert_eq!(rgba.len(), (width * height * 4) as usize);
+        let center = (((height / 2) * width + (width / 2)) * 4) as usize;
+        assert_eq!(rgba[center + 3], 255);
     }
 }

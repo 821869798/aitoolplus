@@ -87,15 +87,34 @@ fn main() {
 
     tracing::info!("starting aitoolplus (data at {})", paths.app_data.display());
 
-    gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
-        .run(move |cx| {
+    let gpui_app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    gpui_app.on_reopen(|cx| {
+        if let Some(existing) = cx
+            .windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<gpui_kit::component::Root>())
+        {
+            let _ = existing.update(cx, |_, window, cx| {
+                app::restore_window_from_tray(window);
+                cx.activate(true);
+            });
+        }
+    });
+
+    gpui_app.run(move |cx| {
         aitoolplus_ui::init_i18n();
         gpui_kit::init(cx);
 
         // Keep running with no windows: GPUI must not quit when the
         // last window closes; the tray reopens it.
         cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
+
+        let paths_for_quit = application.paths.clone();
+        cx.on_app_quit(move |_| {
+            app::cleanup_on_app_exit(&paths_for_quit);
+            async {}
+        })
+        .detach();
 
         let initial_groups = tray::snapshot_from_store(
             application.store.as_ref().expect("store").store(),
