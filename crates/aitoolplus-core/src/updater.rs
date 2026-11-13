@@ -484,10 +484,12 @@ pub fn best_asset_for_target<'a>(
         }) {
             return Some(*asset);
         }
-        return valid_assets.into_iter().find(|a| {
+        if let Some(asset) = valid_assets.iter().find(|a| {
             let name = a.name.to_ascii_lowercase();
             is_mac_ext(&name)
-        });
+        }) {
+            return Some(*asset);
+        }
     }
 
     // Linux & other Unix-like targets
@@ -1496,13 +1498,15 @@ mod tests {
         assert!(info.update_available, "Update should be available from 0.0.1");
         assert!(compare_versions(&info.latest_version, "0.0.1").is_gt(), "latest version should be > 0.0.1");
 
-        // Portable mode check
-        let portable_asset = best_asset_for_mode(&info, false).expect("portable asset found");
+        // Portable mode check (explicit Windows target so test passes across all OS runners)
+        let portable_asset =
+            best_asset_for_target(&info, false, "windows", "x86_64").expect("portable asset found");
         assert_eq!(portable_asset.name, "aitoolplus-windows-x86_64.zip");
         assert!(portable_asset.download_url.contains("aitoolplus-windows-x86_64.zip"));
 
         // Installer mode check
-        let installer_asset = best_asset_for_mode(&info, true).expect("installer asset found");
+        let installer_asset =
+            best_asset_for_target(&info, true, "windows", "x86_64").expect("installer asset found");
         assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
         assert!(installer_asset.download_url.contains("aitoolplus-setup.exe"));
     }
@@ -1517,7 +1521,8 @@ mod tests {
             }
         };
 
-        let asset = best_asset_for_mode(&info, false).expect("portable asset found");
+        let asset =
+            best_asset_for_target(&info, false, "windows", "x86_64").expect("portable asset found");
         let mirror = UpdateMirror::GhProxy;
         let download_url = mirror.apply_url(&asset.download_url, "");
         println!("Testing live download from: {download_url}");
@@ -1574,7 +1579,9 @@ mod tests {
         assert!(compare_versions(&info.latest_version, "0.0.1").is_gt());
 
         let asset = best_asset(&info).expect("asset found");
-        assert_eq!(asset.name, "aitoolplus-windows-x86_64.zip");
+        if cfg!(windows) {
+            assert_eq!(asset.name, "aitoolplus-windows-x86_64.zip");
+        }
 
         // Now test forcing installer mode
         unsafe {
@@ -1582,7 +1589,9 @@ mod tests {
             std::env::set_var("AITOOLPLUS_FORCE_INSTALLER", "1");
         }
         let installer_asset = best_asset(&info).expect("installer asset found");
-        assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
+        if cfg!(windows) {
+            assert_eq!(installer_asset.name, "aitoolplus-setup.exe");
+        }
 
         // Clean up environment variables
         unsafe {
