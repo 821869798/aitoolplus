@@ -385,7 +385,11 @@ pub(super) fn extract_provider_config(tool: ToolId, raw_json: &str) -> Extracted
                             if let Some(u) = tbl.get("base_url").and_then(|v| v.as_str()) {
                                 cfg.base_url = u.to_string();
                             }
-                            if let Some(k) = tbl.get("api_key").and_then(|v| v.as_str()) {
+                            if let Some(k) = tbl
+                                .get("experimental_bearer_token")
+                                .or_else(|| tbl.get("api_key"))
+                                .and_then(|v| v.as_str())
+                            {
                                 cfg.api_key = k.to_string();
                             }
                             if let Some(w) = tbl.get("wire_api").and_then(|v| v.as_str()) {
@@ -455,6 +459,63 @@ pub(super) fn extract_provider_config(tool: ToolId, raw_json: &str) -> Extracted
                 }
             }
         }
+        ToolId::Grok => {
+            if let Some(toml_str) = val
+                .get("config")
+                .or_else(|| val.get("toml"))
+                .and_then(Value::as_str)
+            {
+                if let Ok(doc) = toml_str.parse::<toml_edit::DocumentMut>() {
+                    let default_key = doc
+                        .get("models")
+                        .and_then(|v| v.as_table())
+                        .and_then(|t| t.get("default"))
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty());
+                    if let Some(m_tbl) = doc.get("model").and_then(|v| v.as_table()) {
+                        let entry = default_key
+                            .and_then(|k| m_tbl.get(k))
+                            .or_else(|| m_tbl.iter().next().map(|(_, item)| item))
+                            .and_then(|item| item.as_table());
+                        if let Some(tbl) = entry {
+                            if let Some(u) = tbl.get("base_url").and_then(|v| v.as_str()) {
+                                cfg.base_url = u.to_string();
+                            }
+                            if let Some(k) = tbl.get("api_key").and_then(|v| v.as_str()) {
+                                cfg.api_key = k.to_string();
+                            }
+                            if let Some(m) = tbl.get("model").and_then(|v| v.as_str()) {
+                                cfg.model = m.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+            if cfg.base_url.is_empty() {
+                if let Some(v) = val.get("baseUrl").or_else(|| val.get("base_url")).and_then(Value::as_str) {
+                    cfg.base_url = v.to_string();
+                }
+            }
+            if cfg.api_key.is_empty() {
+                if let Some(v) = val.get("apiKey").or_else(|| val.get("api_key")).and_then(Value::as_str) {
+                    cfg.api_key = v.to_string();
+                }
+            }
+            if cfg.model.is_empty() {
+                if let Some(v) = val.get("model").and_then(Value::as_str) {
+                    cfg.model = v.to_string();
+                } else if let Some(first_m) = val
+                    .get("modelCatalog")
+                    .and_then(Value::as_array)
+                    .and_then(|arr| arr.first())
+                    .and_then(|e| e.get("model").or_else(|| e.get("key")))
+                    .and_then(Value::as_str)
+                {
+                    cfg.model = first_m.to_string();
+                }
+            }
+        }
         _ => {
             if let Some(v) = val
                 .get("baseUrl")
@@ -483,8 +544,20 @@ pub(super) fn extract_provider_config(tool: ToolId, raw_json: &str) -> Extracted
             {
                 cfg.api_key = v.to_string();
             }
-            if let Some(v) = val.get("model").and_then(Value::as_str) {
+            if let Some(v) = val
+                .get("model")
+                .or_else(|| val.get("defaultModel"))
+                .and_then(Value::as_str)
+            {
                 cfg.model = v.to_string();
+            } else if let Some(first_m) = val
+                .get("modelCatalog")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(|e| e.get("model").or_else(|| e.get("key")))
+                .and_then(Value::as_str)
+            {
+                cfg.model = first_m.to_string();
             } else if let Some(first_m) = val.get("models").and_then(Value::as_object).and_then(|m| m.keys().next()) {
                 cfg.model = first_m.clone();
             }
@@ -5030,9 +5103,14 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
             if !val.is_object() {
                 val = serde_json::json!({ "env": {} });
             }
-            if tool == ToolId::ClaudeDesktop && !base_url.trim().is_empty() {
+            if tool == ToolId::ClaudeDesktop {
                 if let Some(obj) = val.as_object_mut() {
-                    obj.insert("inferenceGatewayBaseUrl".into(), Value::String(base_url.trim().into()));
+                    if !base_url.trim().is_empty() {
+                        obj.insert("inferenceGatewayBaseUrl".into(), Value::String(base_url.trim().into()));
+                    }
+                    if !model.trim().is_empty() {
+                        obj.insert("inferenceModels".into(), Value::Array(vec![Value::String(model.trim().into())]));
+                    }
                 }
             }
             if val.get("env").is_none() {
@@ -5226,7 +5304,8 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
                             cp_tbl.insert("base_url", toml_edit::value(base_url.trim()));
                         }
                         if !api_key.trim().is_empty() {
-                            cp_tbl.insert("api_key", toml_edit::value(api_key.trim()));
+                            cp_tbl.insert("experimental_bearer_token", toml_edit::value(api_key.trim()));
+                            cp_tbl.remove("api_key");
                         }
                         cp_tbl.insert("wire_api", toml_edit::value(wire));
                     }
@@ -5274,6 +5353,14 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
         }
         ToolId::GeminiCli => {
             let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({ "env": {} }));
+            if !val.is_object() {
+                val = serde_json::json!({ "env": {} });
+            }
+            if val.get("env").and_then(Value::as_object).is_none() {
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("env".into(), serde_json::json!({}));
+                }
+            }
             if let Some(env) = val.get_mut("env").and_then(Value::as_object_mut) {
                 if !api_key.trim().is_empty() {
                     env.insert("GEMINI_API_KEY".into(), Value::String(api_key.trim().into()));
@@ -5385,6 +5472,9 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
                 val = serde_json::json!({});
             }
             if let Some(obj) = val.as_object_mut() {
+                if !name.trim().is_empty() {
+                    obj.insert("name".into(), Value::String(name.trim().into()));
+                }
                 if !base_url.trim().is_empty() {
                     obj.insert("base_url".into(), Value::String(base_url.trim().into()));
                 }
@@ -5405,25 +5495,160 @@ pub(super) fn build_provider_settings(form: &ProviderFormData<'_>) -> Result<Str
                 .and_then(Value::as_str)
                 .unwrap_or(raw_settings_json);
             let mut doc = existing_toml.parse::<toml_edit::DocumentMut>().unwrap_or_default();
-            if !base_url.trim().is_empty() || !api_key.trim().is_empty() {
-                let m_tbl = doc.entry("model").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-                if let Some(mt) = m_tbl.as_table_mut() {
-                    let custom = mt.entry("custom").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-                    if let Some(ct) = custom.as_table_mut() {
-                        if !base_url.trim().is_empty() {
-                            ct.insert("base_url", toml_edit::value(base_url.trim()));
-                        }
-                        if !api_key.trim().is_empty() {
-                            ct.insert("api_key", toml_edit::value(api_key.trim()));
-                        }
+            let active_key = doc
+                .get("models")
+                .and_then(|v| v.as_table())
+                .and_then(|t| t.get("default"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .or_else(|| {
+                    doc.get("model")
+                        .and_then(|v| v.as_table())
+                        .and_then(|t| t.iter().next().map(|(k, _)| k.to_string()))
+                })
+                .unwrap_or_else(|| "custom".to_string());
+
+            let models_tbl = doc.entry("models").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(mt) = models_tbl.as_table_mut() {
+                mt.insert("default", toml_edit::value(active_key.as_str()));
+            }
+
+            let m_tbl = doc.entry("model").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if let Some(mt) = m_tbl.as_table_mut() {
+                let entry = mt.entry(&active_key).or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                if let Some(ct) = entry.as_table_mut() {
+                    if !name.trim().is_empty() {
+                        ct.insert("name", toml_edit::value(name.trim()));
+                    } else if ct.get("name").is_none() {
+                        ct.insert("name", toml_edit::value(active_key.as_str()));
+                    }
+                    if !model.trim().is_empty() {
+                        ct.insert("model", toml_edit::value(model.trim()));
+                    }
+                    if !base_url.trim().is_empty() {
+                        ct.insert("base_url", toml_edit::value(base_url.trim()));
+                    }
+                    if !api_key.trim().is_empty() {
+                        ct.insert("api_key", toml_edit::value(api_key.trim()));
+                    }
+                    if ct.get("api_backend").is_none() {
+                        ct.insert("api_backend", toml_edit::value("responses"));
+                    }
+                    if ct.get("context_window").is_none() {
+                        ct.insert("context_window", toml_edit::value(500_000_i64));
                     }
                 }
             }
             let toml_str = doc.to_string();
-            let mut out = serde_json::Map::new();
+            let mut out = val.as_object().cloned().unwrap_or_default();
             out.insert("config".into(), Value::String(toml_str.clone()));
             out.insert("toml".into(), Value::String(toml_str));
             Ok(serde_json::to_string_pretty(&Value::Object(out)).unwrap_or_default())
+        }
+        ToolId::Kimi => {
+            let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
+            if !val.is_object() {
+                val = serde_json::json!({});
+            }
+            if let Some(obj) = val.as_object_mut() {
+                if !name.trim().is_empty() {
+                    obj.insert("name".into(), Value::String(name.trim().into()));
+                }
+                if !base_url.trim().is_empty() {
+                    obj.insert("base_url".into(), Value::String(base_url.trim().into()));
+                }
+                if !api_key.trim().is_empty() {
+                    obj.insert("api_key".into(), Value::String(api_key.trim().into()));
+                }
+                let effective_model = model.trim();
+                if !effective_model.is_empty() {
+                    obj.insert("model".into(), Value::String(effective_model.into()));
+                }
+                let catalog_key = if !effective_model.is_empty() {
+                    effective_model
+                } else if !name.trim().is_empty() {
+                    name.trim()
+                } else {
+                    "default"
+                };
+                let has_catalog = obj
+                    .get("modelCatalog")
+                    .and_then(Value::as_array)
+                    .is_some_and(|arr| !arr.is_empty());
+                if has_catalog {
+                    if let Some(first) = obj
+                        .get_mut("modelCatalog")
+                        .and_then(Value::as_array_mut)
+                        .and_then(|arr| arr.first_mut())
+                        .and_then(Value::as_object_mut)
+                    {
+                        if !effective_model.is_empty() {
+                            first.insert("key".into(), Value::String(effective_model.into()));
+                            first.insert("model".into(), Value::String(effective_model.into()));
+                        }
+                        if !base_url.trim().is_empty() {
+                            first.insert("base_url".into(), Value::String(base_url.trim().into()));
+                        }
+                        if !api_key.trim().is_empty() {
+                            first.insert("api_key".into(), Value::String(api_key.trim().into()));
+                        }
+                    }
+                } else {
+                    let mut entry = serde_json::Map::new();
+                    entry.insert("key".into(), Value::String(catalog_key.into()));
+                    if !effective_model.is_empty() {
+                        entry.insert("model".into(), Value::String(effective_model.into()));
+                    }
+                    if !base_url.trim().is_empty() {
+                        entry.insert("base_url".into(), Value::String(base_url.trim().into()));
+                    }
+                    if !api_key.trim().is_empty() {
+                        entry.insert("api_key".into(), Value::String(api_key.trim().into()));
+                    }
+                    obj.insert("modelCatalog".into(), Value::Array(vec![Value::Object(entry)]));
+                }
+            }
+            Ok(serde_json::to_string_pretty(&val).unwrap_or_default())
+        }
+        ToolId::Dsh => {
+            let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
+            if !val.is_object() {
+                val = serde_json::json!({});
+            }
+            if let Some(obj) = val.as_object_mut() {
+                if !name.trim().is_empty() {
+                    obj.insert("name".into(), Value::String(name.trim().into()));
+                }
+                if !obj.contains_key("api") {
+                    obj.insert("api".into(), Value::String("openai-completions".into()));
+                }
+                let options = obj.entry("options").or_insert_with(|| serde_json::json!({}));
+                if !options.is_object() {
+                    *options = serde_json::json!({});
+                }
+                if let Some(opt_obj) = options.as_object_mut() {
+                    if !base_url.trim().is_empty() {
+                        opt_obj.insert("baseURL".into(), Value::String(base_url.trim().into()));
+                    }
+                    if !api_key.trim().is_empty() {
+                        opt_obj.insert("apiKey".into(), Value::String(api_key.trim().into()));
+                    }
+                }
+                if !model.trim().is_empty() {
+                    let m = model.trim();
+                    obj.insert("defaultModel".into(), Value::String(m.into()));
+                    let models = obj.entry("models").or_insert_with(|| serde_json::json!({}));
+                    if !models.is_object() {
+                        *models = serde_json::json!({});
+                    }
+                    if let Some(models_obj) = models.as_object_mut() {
+                        models_obj.entry(m).or_insert_with(|| serde_json::json!({}));
+                    }
+                }
+            }
+            Ok(serde_json::to_string_pretty(&val).unwrap_or_default())
         }
         _ => {
             let mut val: Value = serde_json::from_str(raw_settings_json).unwrap_or_else(|_| serde_json::json!({}));
@@ -5866,5 +6091,191 @@ pub(super) fn save_provider(
     let msg = i.t("tool_dialog.provider_saved").to_string();
     ws.ui.toast(msg, false);
     cx.notify();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_form<'a>(tool: ToolId, name: &'a str, base_url: &'a str, api_key: &'a str, model: &'a str, raw: &'a str) -> ProviderFormData<'a> {
+        ProviderFormData {
+            tool,
+            name,
+            category: "third_party",
+            base_url,
+            api_key,
+            api_format: "openai",
+            model,
+            sonnet_model: "",
+            sonnet_name: "",
+            opus_model: "",
+            opus_name: "",
+            haiku_model: "",
+            haiku_name: "",
+            fable_model: "",
+            fable_name: "",
+            subagent_model: "",
+            sonnet_1m: false,
+            opus_1m: false,
+            haiku_1m: false,
+            fable_1m: false,
+            subagent_1m: false,
+            pi_provider_key: "",
+            pi_api_format: "openai-completions",
+            pi_models: &[],
+            codex_wire_api: "responses",
+            codex_reasoning_effort: "default",
+            codex_catalog_models: &[],
+            custom_user_agent: "",
+            custom_headers: "",
+            headers_map: &[],
+            raw_settings_json: raw,
+        }
+    }
+
+    #[test]
+    fn codex_build_and_extract_uses_experimental_bearer_token() {
+        let form = empty_form(
+            ToolId::Codex,
+            "MyCodex",
+            "https://codex.example/v1",
+            "sk-codex-123",
+            "gpt-5-codex",
+            "{}",
+        );
+        let built = build_provider_settings(&form).expect("build codex");
+        let v: Value = serde_json::from_str(&built).expect("json");
+        let toml_str = v["toml"].as_str().expect("toml");
+        let doc = toml_str.parse::<toml_edit::DocumentMut>().expect("parse toml");
+        let tbl = doc["model_providers"]["custom"].as_table().expect("custom table");
+        assert_eq!(tbl["name"].as_str(), Some("MyCodex"));
+        assert_eq!(tbl["base_url"].as_str(), Some("https://codex.example/v1"));
+        assert_eq!(tbl["experimental_bearer_token"].as_str(), Some("sk-codex-123"));
+        assert!(tbl.get("api_key").is_none());
+
+        let extracted = extract_provider_config(ToolId::Codex, &built);
+        assert_eq!(extracted.base_url, "https://codex.example/v1");
+        assert_eq!(extracted.api_key, "sk-codex-123");
+        assert_eq!(extracted.model, "gpt-5-codex");
+    }
+
+    #[test]
+    fn grok_build_and_extract_populates_default_and_model_fields() {
+        let form = empty_form(
+            ToolId::Grok,
+            "CustomGrok",
+            "https://grok.example/v1",
+            "xai-key-1",
+            "grok-4",
+            "{}",
+        );
+        let built = build_provider_settings(&form).expect("build grok");
+        let v: Value = serde_json::from_str(&built).expect("json");
+        let toml_str = v["toml"].as_str().expect("toml");
+        let doc = toml_str.parse::<toml_edit::DocumentMut>().expect("parse toml");
+        assert_eq!(doc["models"]["default"].as_str(), Some("custom"));
+        let entry = doc["model"]["custom"].as_table().expect("model.custom");
+        assert_eq!(entry["name"].as_str(), Some("CustomGrok"));
+        assert_eq!(entry["model"].as_str(), Some("grok-4"));
+        assert_eq!(entry["base_url"].as_str(), Some("https://grok.example/v1"));
+        assert_eq!(entry["api_key"].as_str(), Some("xai-key-1"));
+        assert_eq!(entry["api_backend"].as_str(), Some("responses"));
+        assert_eq!(entry["context_window"].as_integer(), Some(500_000));
+
+        let extracted = extract_provider_config(ToolId::Grok, &built);
+        assert_eq!(extracted.base_url, "https://grok.example/v1");
+        assert_eq!(extracted.api_key, "xai-key-1");
+        assert_eq!(extracted.model, "grok-4");
+    }
+
+    #[test]
+    fn kimi_build_and_extract_includes_snake_case_and_model_catalog() {
+        let form = empty_form(
+            ToolId::Kimi,
+            "MyKimi",
+            "https://kimi.example/v1",
+            "sk-kimi",
+            "kimi-k2",
+            "{}",
+        );
+        let built = build_provider_settings(&form).expect("build kimi");
+        let v: Value = serde_json::from_str(&built).expect("json");
+        assert_eq!(v["name"], "MyKimi");
+        assert_eq!(v["base_url"], "https://kimi.example/v1");
+        assert_eq!(v["api_key"], "sk-kimi");
+        assert_eq!(v["model"], "kimi-k2");
+        assert_eq!(v["modelCatalog"][0]["key"], "kimi-k2");
+        assert_eq!(v["modelCatalog"][0]["model"], "kimi-k2");
+
+        let extracted = extract_provider_config(ToolId::Kimi, &built);
+        assert_eq!(extracted.base_url, "https://kimi.example/v1");
+        assert_eq!(extracted.api_key, "sk-kimi");
+        assert_eq!(extracted.model, "kimi-k2");
+    }
+
+    #[test]
+    fn dsh_build_and_extract_writes_options_and_models_map() {
+        let form = empty_form(
+            ToolId::Dsh,
+            "MyDsh",
+            "https://dsh.example/v1",
+            "sk-dsh",
+            "deepseek-chat",
+            "{}",
+        );
+        let built = build_provider_settings(&form).expect("build dsh");
+        let v: Value = serde_json::from_str(&built).expect("json");
+        assert_eq!(v["name"], "MyDsh");
+        assert_eq!(v["api"], "openai-completions");
+        assert_eq!(v["options"]["baseURL"], "https://dsh.example/v1");
+        assert_eq!(v["options"]["apiKey"], "sk-dsh");
+        assert_eq!(v["defaultModel"], "deepseek-chat");
+        assert!(v["models"]["deepseek-chat"].is_object());
+
+        let extracted = extract_provider_config(ToolId::Dsh, &built);
+        assert_eq!(extracted.base_url, "https://dsh.example/v1");
+        assert_eq!(extracted.api_key, "sk-dsh");
+        assert_eq!(extracted.model, "deepseek-chat");
+    }
+
+    #[test]
+    fn hermes_gemini_and_claude_desktop_build_valid_fields() {
+        let hermes_form = empty_form(
+            ToolId::Hermes,
+            "MyHermes",
+            "https://hermes.example/v1",
+            "sk-h",
+            "hermes-model",
+            "{}",
+        );
+        let hv: Value = serde_json::from_str(&build_provider_settings(&hermes_form).unwrap()).unwrap();
+        assert_eq!(hv["name"], "MyHermes");
+        assert_eq!(hv["base_url"], "https://hermes.example/v1");
+
+        let gemini_form = empty_form(
+            ToolId::GeminiCli,
+            "MyGemini",
+            "https://gemini.example",
+            "gm-key",
+            "gemini-2.5-pro",
+            "{}",
+        );
+        let gv: Value = serde_json::from_str(&build_provider_settings(&gemini_form).unwrap()).unwrap();
+        assert_eq!(gv["env"]["GEMINI_API_KEY"], "gm-key");
+        assert_eq!(gv["env"]["GOOGLE_GEMINI_BASE_URL"], "https://gemini.example");
+        assert_eq!(gv["env"]["GEMINI_MODEL"], "gemini-2.5-pro");
+
+        let cd_form = empty_form(
+            ToolId::ClaudeDesktop,
+            "MyCD",
+            "https://cd.example",
+            "sk-cd",
+            "claude-sonnet-4-5",
+            "{}",
+        );
+        let cdv: Value = serde_json::from_str(&build_provider_settings(&cd_form).unwrap()).unwrap();
+        assert_eq!(cdv["inferenceGatewayBaseUrl"], "https://cd.example");
+        assert_eq!(cdv["inferenceModels"][0], "claude-sonnet-4-5");
+    }
 }
 

@@ -258,6 +258,7 @@ pub fn patch_codex_config(
     provider_table["name"] = value("AIToolPlus Gateway");
     provider_table["base_url"] = value(gateway_endpoint);
     provider_table["wire_api"] = value("responses");
+    provider_table["experimental_bearer_token"] = value(GATEWAY_API_KEY);
     provider_table["requires_openai_auth"] = value(true);
 
     if let Some(parent) = config_path.parent() {
@@ -403,5 +404,9 @@ mod tests {
             .as_str()
             .unwrap_or("");
         assert!(!name.trim().is_empty(), "gateway provider name must not be empty");
+        assert_eq!(
+            doc["model_providers"][GATEWAY_PROVIDER_ID]["experimental_bearer_token"].as_str(),
+            Some(GATEWAY_API_KEY)
+        );
     }
 }

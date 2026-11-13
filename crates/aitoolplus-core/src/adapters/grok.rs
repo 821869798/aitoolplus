@@ -21,14 +21,116 @@ use crate::tools::ToolId;
 pub struct GrokAdapter;
 
 /// Fields a provider may own on its `[model.<key>]` table.
-const MANAGED_MODEL_FIELDS: [&str; 6] = [
+const MANAGED_MODEL_FIELDS: [&str; 9] = [
+    "name",
+    "model",
     "base_url",
     "api_key",
     "api_backend",
     "env_key",
+    "context_window",
     "default_reasoning_effort",
     "reasoning_efforts",
 ];
+
+const DEFAULT_GROK_CONTEXT_WINDOW: i64 = 500_000;
+
+fn parse_toml_catalog_fallback(
+    payload: &Value,
+    provider_name: &str,
+) -> (Option<String>, Vec<(String, Value)>) {
+    let raw_toml = payload
+        .get("config")
+        .or_else(|| payload.get("toml"))
+        .and_then(Value::as_str);
+
+    if let Some(toml_str) = raw_toml
+        && let Ok(parsed) = toml_str.parse::<toml::Table>()
+    {
+        let toml_default = parsed
+            .get("models")
+            .and_then(|v| v.as_table())
+            .and_then(|m| m.get("default"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        if let Some(model_tbl) = parsed.get("model").and_then(|v| v.as_table()) {
+            let mut entries = Vec::new();
+            for (k, v) in model_tbl {
+                if let Some(tbl) = v.as_table()
+                    && let Ok(mut json_val) = serde_json::to_value(tbl)
+                {
+                    if let Some(obj) = json_val.as_object_mut() {
+                        obj.entry("key").or_insert_with(|| Value::String(k.clone()));
+                        if !obj.get("name").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()) {
+                            let fallback_name = if provider_name.trim().is_empty() {
+                                k.as_str()
+                            } else {
+                                provider_name.trim()
+                            };
+                            obj.insert("name".into(), Value::String(fallback_name.to_string()));
+                        }
+                    }
+                    entries.push((k.clone(), json_val));
+                }
+            }
+            if !entries.is_empty() {
+                return (toml_default, entries);
+            }
+        }
+        return (toml_default, vec![]);
+    }
+
+    // Flat JSON fallback (e.g. default_settings_for or direct form fields).
+    let base_url = payload
+        .get("base_url")
+        .or_else(|| payload.get("baseUrl"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let api_key = payload
+        .get("api_key")
+        .or_else(|| payload.get("apiKey"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let model = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    if base_url.is_none() && api_key.is_none() && model.is_none() {
+        return (None, vec![]);
+    }
+
+    let key = model.clone().unwrap_or_else(|| "custom".to_string());
+    let mut obj = serde_json::Map::new();
+    let display_name = if provider_name.trim().is_empty() {
+        key.as_str()
+    } else {
+        provider_name.trim()
+    };
+    obj.insert("name".into(), Value::String(display_name.to_string()));
+    obj.insert("model".into(), Value::String(model.unwrap_or_else(|| key.clone())));
+    if let Some(u) = base_url {
+        obj.insert("base_url".into(), Value::String(u));
+    }
+    if let Some(k) = api_key {
+        obj.insert("api_key".into(), Value::String(k));
+    }
+    obj.insert("api_backend".into(), Value::String("responses".into()));
+    obj.insert(
+        "context_window".into(),
+        Value::Number(DEFAULT_GROK_CONTEXT_WINDOW.into()),
+    );
+    (Some(key.clone()), vec![(key, Value::Object(obj))])
+}
 
 impl ToolAdapter for GrokAdapter {
     fn tool(&self) -> ToolId {
@@ -75,7 +177,7 @@ impl ToolAdapter for GrokAdapter {
             tbl.remove(&prev);
         }
 
-        let catalog: Vec<(String, Value)> = payload
+        let mut catalog: Vec<(String, Value)> = payload
             .get("modelCatalog")
             .or_else(|| payload.get("model_catalog"))
             .and_then(Value::as_array)
@@ -89,11 +191,21 @@ impl ToolAdapter for GrokAdapter {
             })
             .unwrap_or_default();
 
-        // Default model: provider's `model` field or first catalog key.
+        let mut toml_default_key = None;
+        if catalog.is_empty() {
+            let (td, fallback_catalog) = parse_toml_catalog_fallback(&payload, &ctx.provider.name);
+            toml_default_key = td;
+            catalog = fallback_catalog;
+        }
+
+        // Default model: provider's `model` field, TOML [models].default, or first catalog key.
         let default_key = payload
             .get("model")
             .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .map(str::to_string)
+            .or(toml_default_key)
             .or_else(|| catalog.first().map(|(k, _)| k.clone()));
 
         // Remove stale custom [model.<key>] keys that this provider no
@@ -112,10 +224,43 @@ impl ToolAdapter for GrokAdapter {
             }
         }
 
+        let mut extracted_key = payload
+            .get("api_key")
+            .or_else(|| payload.get("apiKey"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
         if !catalog.is_empty() {
             for (key, model) in &catalog {
                 let table = format!("model.{key}");
-                let model_obj = model.get("toml").cloned().unwrap_or_else(|| model.clone());
+                let mut model_obj = model.get("toml").cloned().unwrap_or_else(|| model.clone());
+                if let Some(obj) = model_obj.as_object_mut() {
+                    if !obj.get("name").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()) {
+                        let fallback_name = if !ctx.provider.name.trim().is_empty() {
+                            ctx.provider.name.trim()
+                        } else {
+                            key.as_str()
+                        };
+                        obj.insert("name".into(), Value::String(fallback_name.to_string()));
+                    }
+                    if !obj.get("model").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()) {
+                        obj.insert("model".into(), Value::String(key.clone()));
+                    }
+                    if !obj.get("api_backend").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()) {
+                        obj.insert("api_backend".into(), Value::String("responses".into()));
+                    }
+                    if obj.get("context_window").and_then(Value::as_i64).is_none_or(|n| n <= 0) {
+                        obj.insert("context_window".into(), Value::Number(DEFAULT_GROK_CONTEXT_WINDOW.into()));
+                    }
+                    if extracted_key.is_none()
+                        && (default_key.as_deref() == Some(key.as_str()) || catalog.len() == 1)
+                        && let Some(k) = obj.get("api_key").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+                    {
+                        extracted_key = Some(k.to_string());
+                    }
+                }
                 let mut buf = doc.to_string();
                 for field in MANAGED_MODEL_FIELDS {
                     if let Some(v) = model_obj.get(field) {
@@ -157,9 +302,7 @@ impl ToolAdapter for GrokAdapter {
 
         // auth.json: only managed third-party api keys land here; OAuth
         // entries are runtime-owned and never touched.
-        if let Some(api_key) = payload.get("api_key").and_then(Value::as_str)
-            && !api_key.is_empty()
-        {
+        if let Some(api_key) = extracted_key {
             let auth = root.join("auth.json");
             if auth.exists() {
                 backup_file(ctx.paths, ToolId::Grok, &auth);
@@ -313,5 +456,36 @@ mod tests {
         assert_eq!(toml_literal(&json!(true)), "true");
         assert_eq!(toml_literal(&json!(5)), "5");
         assert_eq!(toml_literal(&json!(["a", "b"])), "[\"a\", \"b\"]");
+    }
+
+    #[test]
+    fn apply_toml_and_flat_form_writes_valid_grok_config() {
+        let (_dir, paths) = setup();
+        let cfg = paths.home.join(".grok").join("config.toml");
+
+        let mut p = ProviderRecord::new("My Grok Relay", "custom");
+        p.set_settings(&json!({
+            "config": "[models]\ndefault = \"grok-4\"\n\n[model.grok-4]\nname = \"My Grok Relay\"\nmodel = \"grok-4\"\nbase_url = \"https://grok-relay.example/v1\"\napi_key = \"gk-toml\"\napi_backend = \"responses\"\ncontext_window = 500000\n"
+        }));
+        GrokAdapter.apply(&ctx(&paths, &p)).unwrap();
+        let toml = std::fs::read_to_string(&cfg).unwrap();
+        let parsed: toml::Table = toml.parse().unwrap();
+        assert_eq!(parsed["models"]["default"].as_str(), Some("grok-4"));
+        assert_eq!(
+            parsed["model"]["grok-4"]["name"].as_str(),
+            Some("My Grok Relay")
+        );
+        assert_eq!(
+            parsed["model"]["grok-4"]["base_url"].as_str(),
+            Some("https://grok-relay.example/v1")
+        );
+        assert_eq!(
+            parsed["model"]["grok-4"]["api_backend"].as_str(),
+            Some("responses")
+        );
+        assert_eq!(
+            parsed["model"]["grok-4"]["context_window"].as_integer(),
+            Some(500_000)
+        );
     }
 }

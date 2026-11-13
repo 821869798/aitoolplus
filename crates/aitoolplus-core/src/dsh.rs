@@ -130,6 +130,94 @@ pub fn import_runtime(
     Ok(added)
 }
 
+fn normalize_dsh_settings_json(raw: &Value, provider_name: &str, route: &str) -> Value {
+    let mut obj = raw.as_object().cloned().unwrap_or_default();
+    if !obj
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        let display = if !provider_name.trim().is_empty() {
+            provider_name.trim()
+        } else {
+            route
+        };
+        obj.insert("name".into(), Value::String(display.to_string()));
+    }
+    if !obj
+        .get("api")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        obj.insert("api".into(), Value::String("openai-completions".into()));
+    }
+
+    let base_url = obj
+        .get("baseUrl")
+        .or_else(|| obj.get("base_url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let api_key = obj
+        .get("apiKey")
+        .or_else(|| obj.get("api_key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let has_api_key_env = obj
+        .get("apiKeyEnv")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty());
+
+    let mut options = obj
+        .get("options")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if !options
+        .get("baseURL")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty())
+        && let Some(u) = base_url
+    {
+        options.insert("baseURL".into(), Value::String(u));
+    }
+    if !has_api_key_env
+        && !options
+            .get("apiKey")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.trim().is_empty())
+        && let Some(k) = api_key
+    {
+        options.insert("apiKey".into(), Value::String(k));
+    }
+    if !options.is_empty() {
+        obj.insert("options".into(), Value::Object(options));
+    }
+
+    let default_model = obj
+        .get("defaultModel")
+        .or_else(|| obj.get("model"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let has_nonempty_models = obj
+        .get("models")
+        .and_then(Value::as_object)
+        .is_some_and(|m| !m.is_empty());
+    if !has_nonempty_models && let Some(ref dm) = default_model {
+        let mut models = serde_json::Map::new();
+        models.insert(dm.clone(), serde_json::json!({}));
+        obj.insert("models".into(), Value::Object(models));
+    }
+
+    Value::Object(obj)
+}
+
 /// Apply one provider record: upsert `llm-pi-ai.providers.<route>`, write
 /// `agent-default-model` from the record, preserve unknown sections.
 pub fn apply_provider(
@@ -148,9 +236,11 @@ pub fn apply_provider(
         serde_yaml::from_str(&raw).map_err(|e| format!("parse settings.yaml: {e}"))?
     };
 
+    let parsed_settings: Value = serde_json::from_str(&provider.settings_config).unwrap_or_default();
+    let normalized = normalize_dsh_settings_json(&parsed_settings, &provider.name, route);
+
     // Upsert provider under llm-pi-ai.providers.<route>.
-    let provider_yaml =
-        json_to_yaml(&serde_json::from_str(&provider.settings_config).unwrap_or_default())?;
+    let provider_yaml = json_to_yaml(&normalized)?;
     if !matches!(doc, serde_yaml::Value::Mapping(_)) {
         return Err("settings.yaml root must be a mapping".into());
     }
@@ -177,18 +267,26 @@ pub fn apply_provider(
                 serde_yaml::Value::String("provider".into()),
                 serde_yaml::Value::String(route.into()),
             );
-            if let Some(model) = provider
-                .settings()
+            let default_model = normalized
                 .get("defaultModel")
+                .or_else(|| normalized.get("model"))
                 .and_then(Value::as_str)
-            {
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    normalized
+                        .get("models")
+                        .and_then(Value::as_object)
+                        .and_then(|ms| ms.keys().next())
+                        .map(String::as_str)
+                });
+            if let Some(model) = default_model {
                 m.insert(
                     serde_yaml::Value::String("model".into()),
                     serde_yaml::Value::String(model.into()),
                 );
             }
-            if let Some(effort) = provider
-                .settings()
+            if let Some(effort) = normalized
                 .get("reasoningEffort")
                 .and_then(Value::as_str)
                 && !effort.is_empty()
@@ -570,5 +668,28 @@ mod tests {
         assert!(!content.contains("to_remove"));
         assert!(!content.contains("llm-pi-ai"));
         assert!(!content.contains("agent-default-model"));
+    }
+
+    #[test]
+    fn flat_form_settings_normalize_to_valid_dsh_schema() {
+        let (_dir, paths) = setup();
+        let mut rec = ProviderRecord::new("DeepSeek Proxy", "custom");
+        rec.id = "dsh:deepseek-proxy".into();
+        rec.set_settings(&serde_json::json!({
+            "baseUrl": "https://proxy.example.com/v1",
+            "apiKey": "sk-dsh-1",
+            "model": "deepseek-chat"
+        }));
+        apply_provider(&paths, &rec).unwrap();
+
+        let content = std::fs::read_to_string(&paths.settings).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        let p = &parsed["llm-pi-ai"]["providers"]["deepseek-proxy"];
+        assert_eq!(p["api"].as_str(), Some("openai-completions"));
+        assert_eq!(p["options"]["baseURL"].as_str(), Some("https://proxy.example.com/v1"));
+        assert_eq!(p["options"]["apiKey"].as_str(), Some("sk-dsh-1"));
+        assert!(p["models"]["deepseek-chat"].is_mapping());
+        assert_eq!(parsed["agent-default-model"]["provider"].as_str(), Some("deepseek-proxy"));
+        assert_eq!(parsed["agent-default-model"]["model"].as_str(), Some("deepseek-chat"));
     }
 }

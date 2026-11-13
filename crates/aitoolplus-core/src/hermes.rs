@@ -82,13 +82,79 @@ fn write_config_atomic(paths: &HermesRuntimePaths, doc: &serde_yaml::Value) -> R
     Ok(())
 }
 
-/// Import `custom_providers` entries into UI records.
+fn slug_key(raw: &str) -> String {
+    let key: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = key.trim_matches('-').to_lowercase();
+    if trimmed.is_empty() {
+        raw.trim().to_lowercase()
+    } else {
+        trimmed
+    }
+}
+
+fn normalize_provider_json_for_hermes(incoming: &mut Value) {
+    const KEY_ALIASES: &[(&str, &str)] = &[
+        ("baseUrl", "base_url"),
+        ("apiKey", "api_key"),
+        ("apiMode", "api_mode"),
+        ("maxTokens", "max_tokens"),
+        ("contextLength", "context_length"),
+    ];
+    let Some(obj) = incoming.as_object_mut() else {
+        return;
+    };
+    for (from, to) in KEY_ALIASES {
+        if let Some(val) = obj.remove(*from) {
+            obj.entry((*to).to_string()).or_insert(val);
+        }
+    }
+}
+
+/// Import `custom_providers` entries (standard YAML sequence or legacy mapping) into UI records.
 pub fn import_runtime(
     paths: &HermesRuntimePaths,
     providers: &mut Vec<ProviderRecord>,
 ) -> Result<usize, String> {
     let doc = read_config(paths)?;
-    let Some(map) = doc.get("custom_providers").and_then(|v| v.as_mapping()) else {
+    let Some(raw_custom) = doc.get("custom_providers") else {
+        return Ok(0);
+    };
+
+    let entries: Vec<(String, Value)> = if let Some(seq) = raw_custom.as_sequence() {
+        seq.iter()
+            .filter_map(|item| {
+                let json = serde_json::to_value(item).ok()?;
+                let name = json
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())?
+                    .to_string();
+                Some((slug_key(&name), json))
+            })
+            .collect()
+    } else if let Some(map) = raw_custom.as_mapping() {
+        map.iter()
+            .filter_map(|(k, v)| {
+                let key = k.as_str()?;
+                let mut json = serde_json::to_value(v).ok()?;
+                if let Some(obj) = json.as_object_mut() {
+                    obj.entry("name")
+                        .or_insert_with(|| Value::String(key.to_string()));
+                }
+                Some((slug_key(key), json))
+            })
+            .collect()
+    } else {
         return Ok(0);
     };
 
@@ -105,18 +171,18 @@ pub fn import_runtime(
 
     let mut added = 0;
     let mut next = providers.iter().map(|p| p.sort_index).max().unwrap_or(-1);
-    for (key, value) in map {
-        let Some(key) = key.as_str() else { continue };
-        let json: Value =
-            serde_json::to_value(value).map_err(|e| format!("convert provider: {e}"))?;
+    for (key, json) in entries {
         let name = json
             .get("name")
             .and_then(Value::as_str)
-            .unwrap_or(key)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&key)
             .to_string();
 
         let stable_id = format!("hermes:{key}");
-        let is_applied = default_provider.as_deref() == Some(key);
+        let is_applied = default_provider
+            .as_deref()
+            .is_some_and(|dp| dp == name || dp == key || slug_key(dp) == key);
         if let Some(record) = providers.iter_mut().find(|p| p.id == stable_id) {
             record.name = name.clone();
             record.settings_config = serde_json::to_string_pretty(&json).unwrap_or_default();
@@ -137,8 +203,8 @@ pub fn import_runtime(
     Ok(added)
 }
 
-/// Apply a provider: upsert `custom_providers.<id>` and set top-level
-/// `model: { provider, model }`, preserving everything else.
+/// Apply a provider: upsert into `custom_providers` YAML sequence (`[{ name, ... }]`)
+/// and set top-level `model: { provider, model }`, preserving everything else.
 pub fn apply_provider(
     paths: &HermesRuntimePaths,
     provider: &ProviderRecord,
@@ -153,25 +219,86 @@ pub fn apply_provider(
         return Err("config.yaml root must be a mapping".into());
     }
 
-    let incoming: Value = serde_json::from_str(&provider.settings_config)
+    let mut incoming: Value = serde_json::from_str(&provider.settings_config)
         .map_err(|e| format!("invalid provider JSON: {e}"))?;
-    let yaml_value = serde_yaml::to_value(&incoming).map_err(|e| e.to_string())?;
+    normalize_provider_json_for_hermes(&mut incoming);
+
+    let entry_name = incoming
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| {
+            if !provider.name.trim().is_empty() {
+                provider.name.trim().to_string()
+            } else {
+                key.to_string()
+            }
+        });
+    if let Some(obj) = incoming.as_object_mut() {
+        obj.insert("name".into(), Value::String(entry_name.clone()));
+    }
+
+    let mut yaml_value = serde_yaml::to_value(&incoming).map_err(|e| e.to_string())?;
+    let entry_slug = slug_key(&entry_name);
+    let key_slug = slug_key(key);
 
     if let Some(map) = doc.as_mapping_mut() {
-        let custom = map
-            .entry(serde_yaml::Value::String("custom_providers".into()))
-            .or_insert(serde_yaml::Value::Mapping(Default::default()));
-        if let Some(cm) = custom.as_mapping_mut() {
-            cm.insert(serde_yaml::Value::String(key.into()), yaml_value);
+        let mut seq: Vec<serde_yaml::Value> = match map.get(&serde_yaml::Value::String("custom_providers".into())) {
+            Some(serde_yaml::Value::Sequence(seq)) => seq.clone(),
+            Some(serde_yaml::Value::Mapping(m)) => m
+                .iter()
+                .map(|(k, v)| {
+                    let mut item = v.clone();
+                    if let (Some(ks), serde_yaml::Value::Mapping(im)) = (k.as_str(), &mut item) {
+                        im.entry(serde_yaml::Value::String("name".into()))
+                            .or_insert_with(|| serde_yaml::Value::String(ks.to_string()));
+                    }
+                    item
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let matches_entry = |item: &serde_yaml::Value| {
+            item.get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(|n| {
+                    let n_slug = slug_key(n);
+                    n == entry_name || n == key || n_slug == entry_slug || n_slug == key_slug
+                })
+        };
+        if let Some(existing) = seq.iter_mut().find(|item| matches_entry(item)) {
+            if let (Some(existing_map), serde_yaml::Value::Mapping(new_map)) =
+                (existing.as_mapping(), &mut yaml_value)
+            {
+                for (k, v) in existing_map {
+                    new_map.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+            *existing = yaml_value;
+        } else {
+            seq.push(yaml_value);
         }
 
+        map.insert(
+            serde_yaml::Value::String("custom_providers".into()),
+            serde_yaml::Value::Sequence(seq),
+        );
+
         // Default model from the record's model field.
-        if let Some(model) = incoming.get("model").and_then(Value::as_str) {
+        if let Some(model) = incoming
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             let mut model_map = serde_yaml::Value::Mapping(Default::default());
             if let Some(m) = model_map.as_mapping_mut() {
                 m.insert(
                     serde_yaml::Value::String("provider".into()),
-                    serde_yaml::Value::String(key.into()),
+                    serde_yaml::Value::String(entry_name),
                 );
                 m.insert(
                     serde_yaml::Value::String("model".into()),
@@ -194,18 +321,40 @@ pub fn remove_provider(
     let key = provider_id
         .strip_prefix("hermes:")
         .unwrap_or(provider_id);
+    let key_slug = slug_key(key);
 
     let mut doc = read_config(paths)?;
     let mut changed = false;
+    let mut removed_names: Vec<String> = vec![key.to_string()];
 
     if let Some(map) = doc.as_mapping_mut() {
-        if let Some(custom) = map
-            .get_mut(&serde_yaml::Value::String("custom_providers".into()))
-            .and_then(|v| v.as_mapping_mut())
-        {
-            if custom.remove(&serde_yaml::Value::String(key.into())).is_some() {
-                changed = true;
+        let custom_key = serde_yaml::Value::String("custom_providers".into());
+        match map.get_mut(&custom_key) {
+            Some(serde_yaml::Value::Sequence(seq)) => {
+                let before = seq.len();
+                seq.retain(|item| {
+                    let matched = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|n| {
+                            let match_flag = n == key || slug_key(n) == key_slug;
+                            if match_flag {
+                                removed_names.push(n.to_string());
+                            }
+                            match_flag
+                        });
+                    !matched
+                });
+                if seq.len() != before {
+                    changed = true;
+                }
             }
+            Some(serde_yaml::Value::Mapping(custom)) => {
+                if custom.remove(&serde_yaml::Value::String(key.into())).is_some() {
+                    changed = true;
+                }
+            }
+            _ => {}
         }
         if let Some(model) = map
             .get_mut(&serde_yaml::Value::String("model".into()))
@@ -214,7 +363,7 @@ pub fn remove_provider(
             if model
                 .get(&serde_yaml::Value::String("provider".into()))
                 .and_then(|v| v.as_str())
-                == Some(key)
+                .is_some_and(|p| p == key || slug_key(p) == key_slug || removed_names.iter().any(|rn| rn == p))
             {
                 map.remove(&serde_yaml::Value::String("model".into()));
                 changed = true;
@@ -333,7 +482,7 @@ mod tests {
         let (_dir, paths) = setup();
         std::fs::write(
             &paths.config,
-            "agent:\n  name: hermes\nmodel:\n  provider: alpha\n  model: m1\ncustom_providers:\n  alpha:\n    name: Alpha\n    base_url: https://a/v1\n    api_key: k1\nunknown:\n  keep: true\n",
+            "agent:\n  name: hermes\nmodel:\n  provider: Alpha\n  model: m1\ncustom_providers:\n  - name: Alpha\n    base_url: https://a/v1\n    api_key: k1\nunknown:\n  keep: true\n",
         )
         .unwrap();
 
@@ -352,11 +501,13 @@ mod tests {
         assert_eq!(files.len(), 1);
 
         let out = std::fs::read_to_string(&paths.config).unwrap();
-        assert!(out.contains("unknown:"), "unknown section lost");
-        assert!(out.contains("keep: true"));
-        assert!(out.contains("provider: alpha"));
-        assert!(out.contains("model: m2"));
-        assert!(out.contains("base_url: https://a/v1"));
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert!(parsed["custom_providers"].is_sequence(), "custom_providers must be a YAML sequence: {out}");
+        assert_eq!(parsed["custom_providers"][0]["name"].as_str(), Some("Alpha"));
+        assert_eq!(parsed["unknown"]["keep"].as_bool(), Some(true));
+        assert_eq!(parsed["model"]["provider"].as_str(), Some("Alpha"));
+        assert_eq!(parsed["model"]["model"].as_str(), Some("m2"));
+        assert_eq!(parsed["custom_providers"][0]["base_url"].as_str(), Some("https://a/v1"));
     }
 
     #[test]
@@ -388,15 +539,15 @@ mod tests {
         let (_dir, paths) = setup();
         std::fs::write(
             &paths.config,
-            "custom_providers:\n  to_remove:\n    name: Remove\n  keep:\n    name: Keep\nmodel:\n  provider: to_remove\n  model: m1\n",
+            "custom_providers:\n  - name: Remove\n    base_url: https://r\n  - name: Keep\n    base_url: https://k\nmodel:\n  provider: Remove\n  model: m1\n",
         ).unwrap();
 
-        let removed = remove_provider(&paths, "hermes:to_remove").unwrap();
+        let removed = remove_provider(&paths, "hermes:remove").unwrap();
         assert_eq!(removed.len(), 1);
 
         let content = std::fs::read_to_string(&paths.config).unwrap();
-        assert!(!content.contains("to_remove:"));
-        assert!(content.contains("keep:"));
-        assert!(!content.contains("provider: to_remove"));
+        assert!(!content.contains("Remove"));
+        assert!(content.contains("Keep"));
+        assert!(!content.contains("provider: Remove"));
     }
 }

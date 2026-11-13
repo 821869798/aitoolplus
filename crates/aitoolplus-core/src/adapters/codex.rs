@@ -290,6 +290,69 @@ pub fn ensure_model_provider_names(doc: &mut toml_edit::DocumentMut, preferred_n
     }
 }
 
+/// Populate `experimental_bearer_token` on custom third-party `[model_providers.<id>]`
+/// tables (Codex 0.149+ no longer reads `OPENAI_API_KEY` from `auth.json` for custom
+/// providers), skipping tables that already declare their own `env_key` or auth headers.
+pub fn ensure_custom_provider_bearer_token(toml_text: &str, api_key: &str) -> String {
+    let trimmed_key = api_key.trim();
+    if trimmed_key.is_empty() {
+        return toml_text.to_string();
+    }
+    let Ok(mut doc) = parse_toml_document(toml_text, "config") else {
+        return toml_text.to_string();
+    };
+    let active_selector = doc
+        .get("model_provider")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let Some(providers) = doc
+        .get_mut("model_providers")
+        .and_then(|t| t.as_table_mut())
+    else {
+        return toml_text.to_string();
+    };
+
+    let target_key = active_selector
+        .filter(|sel| *sel != "openai" && providers.contains_key(sel))
+        .or_else(|| {
+            providers
+                .iter()
+                .map(|(k, _)| k.to_string())
+                .find(|k| k != "openai")
+        });
+
+    if let Some(key) = target_key
+        && let Some(tbl) = providers.get_mut(&key).and_then(|t| t.as_table_mut())
+    {
+        let has_env_key = tbl
+            .get("env_key")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty());
+        let has_external_auth = tbl.get("auth").is_some()
+            || tbl.get("aws").is_some()
+            || tbl
+                .get("http_headers")
+                .and_then(|h| h.as_table())
+                .is_some_and(|h| h.iter().any(|(hk, _)| hk.eq_ignore_ascii_case("authorization")));
+        if !has_env_key && !has_external_auth {
+            let has_bearer = tbl
+                .get("experimental_bearer_token")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.trim().is_empty());
+            if !has_bearer {
+                tbl.insert("experimental_bearer_token", toml_edit::value(trimmed_key));
+            }
+            // Strip non-standard `api_key` from TOML provider table once bearer token is set.
+            tbl.remove("api_key");
+        }
+    }
+
+    doc.to_string()
+}
+
 /// Remove `[model_providers.*]` tables and root `model_provider` from
 /// `current` when the incoming layer doesn't declare them.
 fn sweep_stale_model_providers(current: &mut toml_edit::DocumentMut, next: &toml_edit::Table) {
@@ -469,6 +532,8 @@ impl ToolAdapter for CodexAdapter {
 
         // Remove the previous provider's footprint: any root `model_provider`
         // + `[model_providers.*]` tables the new layer does not declare.
+        let extracted_api_key =
+            extract_provider_api_key(&ctx.provider.settings_config, &provider_toml);
         let mut final_toml = build_written_config_toml_with_provider_name(
             &existing_cfg,
             Some(&provider_toml),
@@ -477,6 +542,10 @@ impl ToolAdapter for CodexAdapter {
             Some(&ctx.provider.name),
         )
         .map_err(ApplyError::Message)?;
+
+        if !is_official && let Some(ref api_key) = extracted_api_key {
+            final_toml = ensure_custom_provider_bearer_token(&final_toml, api_key);
+        }
 
         if let Some(cat_path) = catalog_file_opt {
             let cat_str = cat_path.to_string_lossy().replace('\\', "/");
@@ -489,7 +558,7 @@ impl ToolAdapter for CodexAdapter {
         files.push(cfg);
 
         // auth.json: replace only managed fields, keep OAuth runtime data.
-        if let Some(api_key) = extract_provider_api_key(&ctx.provider.settings_config, &provider_toml) {
+        if let Some(api_key) = extracted_api_key {
             let existing_auth: Value = if auth.exists() {
                 serde_json::from_str(&std::fs::read_to_string(&auth).unwrap_or_default())
                     .unwrap_or(Value::Object(Map::new()))
@@ -717,6 +786,14 @@ mod tests {
         assert_eq!(
             doc["model_providers"]["custom"]["name"].as_str(),
             Some("My Relay")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom"]["experimental_bearer_token"].as_str(),
+            Some("sk-1")
+        );
+        assert!(
+            doc["model_providers"]["custom"].get("api_key").is_none(),
+            "non-standard api_key should migrate to experimental_bearer_token: {written}"
         );
     }
 }

@@ -15,7 +15,6 @@ use serde_json::Value;
 use crate::adapters::{
     AppliedReport, ApplyCtx, ApplyError, ToolAdapter, backup_file, merged_payload, write_atomic,
 };
-use crate::config::toml_set;
 use crate::paths::Paths;
 use crate::tools::ToolId;
 
@@ -57,7 +56,7 @@ impl ToolAdapter for KimiAdapter {
 
         // Clean managed [models.<key>] and [providers.<key>] keys that the
         // incoming catalog no longer owns, preserving user-added locals.
-        let catalog: Vec<(String, Value)> = payload
+        let mut catalog: Vec<(String, Value)> = payload
             .get("modelCatalog")
             .or_else(|| payload.get("model_catalog"))
             .and_then(Value::as_array)
@@ -70,6 +69,38 @@ impl ToolAdapter for KimiAdapter {
                     .collect()
             })
             .unwrap_or_default();
+
+        if catalog.is_empty() {
+            let model_str = payload
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let base_url = payload
+                .get("base_url")
+                .or_else(|| payload.get("baseUrl"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let api_key = payload
+                .get("api_key")
+                .or_else(|| payload.get("apiKey"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if model_str.is_some() || base_url.is_some() || api_key.is_some() {
+                let key = model_str.unwrap_or("kimi-k2").to_string();
+                let mut entry = serde_json::json!({
+                    "key": key,
+                    "model": key,
+                    "maxContextSize": DEFAULT_MAX_CONTEXT_SIZE,
+                });
+                if !ctx.provider.name.trim().is_empty() {
+                    entry["displayName"] = Value::String(ctx.provider.name.trim().to_string());
+                }
+                catalog.push((key, entry));
+            }
+        }
 
         let keep_keys: std::collections::HashSet<String> =
             catalog.iter().map(|(k, _)| k.clone()).collect();
@@ -96,56 +127,77 @@ impl ToolAdapter for KimiAdapter {
             }
         }
 
-        // Project the catalog.
-        for (key, model) in &catalog {
-            let model_table = format!("models.{key}");
-            let provider_table = format!("providers.{key}");
+        // Project the catalog using toml_edit directly so keys containing dots
+        // (e.g. "kimi-k2.5") are properly quoted instead of split into subtables.
+        let p_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("openai");
+        let base_url = payload
+            .get("base_url")
+            .or_else(|| payload.get("baseUrl"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let api_key = payload
+            .get("api_key")
+            .or_else(|| payload.get("apiKey"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
-            // [models.<key>] links to its provider entry.
-            let mut buf = doc.to_string();
-            buf = toml_set(&buf, Some(&model_table), "provider", &format!("\"{key}\""));
+        for (key, model) in &catalog {
+            let model_id = model
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(key.as_str());
             let max_ctx = model
                 .get("maxContextSize")
                 .or_else(|| model.get("max_context_size"))
                 .and_then(Value::as_i64)
                 .filter(|v| *v > 0)
                 .unwrap_or(DEFAULT_MAX_CONTEXT_SIZE);
-            buf = toml_set(
-                &buf,
-                Some(&model_table),
-                "max_context_size",
-                &max_ctx.to_string(),
-            );
-            if let Some(display) = model.get("displayName").and_then(Value::as_str) {
-                buf = toml_set(
-                    &buf,
-                    Some(&model_table),
-                    "displayName",
-                    &format!("\"{display}\""),
-                );
-            }
-            doc = buf.parse().unwrap_or(doc);
 
-            // [providers.<key>] holds connection settings.
-            let mut buf = doc.to_string();
-            buf = toml_set(&buf, Some(&provider_table), "type", "\"openai\"");
-            if let Some(base_url) = payload.get("base_url").and_then(Value::as_str) {
-                buf = toml_set(
-                    &buf,
-                    Some(&provider_table),
-                    "base_url",
-                    &format!("\"{base_url}\""),
-                );
+            if let Some(models_tbl) = doc
+                .entry("models")
+                .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+                .as_table_like_mut()
+            {
+                let model_item = models_tbl
+                    .entry(key)
+                    .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+                if let Some(mt) = model_item.as_table_like_mut() {
+                    mt.insert("model", toml_edit::value(model_id));
+                    mt.insert("provider", toml_edit::value(key.as_str()));
+                    mt.insert("max_context_size", toml_edit::value(max_ctx));
+                    if let Some(display) = model.get("displayName").and_then(Value::as_str) {
+                        mt.insert("displayName", toml_edit::value(display));
+                    }
+                }
             }
-            if let Some(api_key) = payload.get("api_key").and_then(Value::as_str) {
-                buf = toml_set(
-                    &buf,
-                    Some(&provider_table),
-                    "api_key",
-                    &format!("\"{api_key}\""),
-                );
+
+            if let Some(providers_tbl) = doc
+                .entry("providers")
+                .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+                .as_table_like_mut()
+            {
+                let prov_item = providers_tbl
+                    .entry(key)
+                    .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+                if let Some(pt) = prov_item.as_table_like_mut() {
+                    pt.insert("type", toml_edit::value(p_type));
+                    if let Some(bu) = base_url {
+                        pt.insert("base_url", toml_edit::value(bu));
+                    }
+                    if let Some(ak) = api_key {
+                        pt.insert("api_key", toml_edit::value(ak));
+                    }
+                }
             }
-            doc = buf.parse().unwrap_or(doc);
         }
 
         // Default model selection.
@@ -155,13 +207,13 @@ impl ToolAdapter for KimiAdapter {
             .map(str::to_string)
             .or_else(|| catalog.first().map(|(k, _)| k.clone()));
         if let Some(dk) = &default_key {
-            let buf = toml_set(
-                &doc.to_string(),
-                Some("models"),
-                "default_model",
-                &format!("\"{dk}\""),
-            );
-            doc = buf.parse().unwrap_or(doc);
+            if let Some(models_tbl) = doc
+                .entry("models")
+                .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+                .as_table_like_mut()
+            {
+                models_tbl.insert("default_model", toml_edit::value(dk.as_str()));
+            }
         }
 
         write_atomic(&cfg, &doc.to_string())?;
@@ -273,5 +325,41 @@ mod tests {
             std::fs::read_to_string(paths.home.join(".kimi-code").join("config.toml")).unwrap();
         assert!(!toml.contains("[models.m1]"));
         assert!(toml.contains("max_context_size = 262144"));
+    }
+
+    #[test]
+    fn apply_flat_form_synthesizes_models_and_providers() {
+        let (_dir, paths) = setup();
+        let mut p = ProviderRecord::new("Kimi Relay", "custom");
+        p.set_settings(&json!({
+            "baseUrl": "https://relay.moonshot.example/v1",
+            "apiKey": "mk-flat",
+            "model": "kimi-k2.5"
+        }));
+        KimiAdapter.apply(&ctx(&paths, &p)).unwrap();
+        let toml =
+            std::fs::read_to_string(paths.home.join(".kimi-code").join("config.toml")).unwrap();
+        let parsed: toml::Table = toml.parse().unwrap();
+        assert_eq!(
+            parsed["models"]["default_model"].as_str(),
+            Some("kimi-k2.5")
+        );
+        assert_eq!(parsed["models"]["kimi-k2.5"]["model"].as_str(), Some("kimi-k2.5"));
+        assert_eq!(
+            parsed["models"]["kimi-k2.5"]["provider"].as_str(),
+            Some("kimi-k2.5")
+        );
+        assert_eq!(
+            parsed["models"]["kimi-k2.5"]["max_context_size"].as_integer(),
+            Some(262144)
+        );
+        assert_eq!(
+            parsed["providers"]["kimi-k2.5"]["base_url"].as_str(),
+            Some("https://relay.moonshot.example/v1")
+        );
+        assert_eq!(
+            parsed["providers"]["kimi-k2.5"]["api_key"].as_str(),
+            Some("mk-flat")
+        );
     }
 }
