@@ -85,7 +85,7 @@ jobs:
 
   build-macos-arm64:
     name: Build macOS (Apple Silicon arm64)
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
