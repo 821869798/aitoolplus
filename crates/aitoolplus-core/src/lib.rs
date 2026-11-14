@@ -43,6 +43,7 @@ pub mod skills;
 pub mod store;
 pub mod tools;
 pub mod updater;
+pub mod session_usage;
 pub mod usage;
 pub mod webdav;
 

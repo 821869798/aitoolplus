@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use chrono::{Local, TimeZone};
 use rusqlite::{params, Connection};
@@ -85,6 +84,8 @@ pub struct ModelStats {
 #[serde(rename_all = "camelCase")]
 pub struct LogFilters {
     pub app_type: Option<String>,
+    #[serde(default)]
+    pub allowed_apps: Option<Vec<String>>,
     pub provider_name: Option<String>,
     pub model: Option<String>,
     pub status_code: Option<u16>,
@@ -315,6 +316,33 @@ impl UsageDb {
         .map_err(|e| format!("创建 session_log_sync 失败: {e}"))?;
 
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_usage_dedup (
+                data_source TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                semantic_id TEXT NOT NULL,
+                has_entry_id INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (data_source, request_id)
+            )",
+            [],
+        )
+        .map_err(|e| format!("创建 session_usage_dedup 失败: {e}"))?;
+
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_usage_dedup_semantic ON session_usage_dedup(data_source, semantic_id)",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_session ON proxy_request_logs(session_id)",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_dedup_cols ON proxy_request_logs(app_type, data_source, input_tokens, output_tokens, cache_read_tokens, created_at, cache_creation_tokens)",
+            [],
+        );
+
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON proxy_request_logs(created_at)",
             [],
         )
@@ -382,7 +410,16 @@ impl UsageDb {
             ("claude", "1.0", "response"),
             ("codex", "1.0", "response"),
             ("agy", "1.0", "response"),
+            ("gemini", "1.0", "response"),
             ("grok", "1.0", "response"),
+            ("opencode", "1.0", "response"),
+            ("pi", "1.0", "response"),
+            ("oh_my_pi", "1.0", "response"),
+            ("kimi", "1.0", "response"),
+            ("openclaw", "1.0", "response"),
+            ("hermes", "1.0", "response"),
+            ("dsh", "1.0", "response"),
+            ("claude_desktop", "1.0", "response"),
         ];
         if let Ok(mut app_stmt) = conn.prepare(
             "INSERT OR IGNORE INTO app_pricing_config (app_type, cost_multiplier, pricing_model_source) VALUES (?1, ?2, ?3)",
@@ -501,39 +538,30 @@ impl UsageDb {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<UsageSummary, String> {
+        self.get_usage_summary_scoped(start_date, end_date, app_type, None, provider_name, model)
+    }
+
+    /// Get overall usage summary metrics, restricted to `allowed_apps` when present.
+    pub fn get_usage_summary_scoped(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        allowed_apps: Option<&[String]>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<UsageSummary, String> {
         let conn = self.connect()?;
 
-        let mut conditions = Vec::new();
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if let Some(start) = start_date {
-            conditions.push("created_at >= ?".to_string());
-            params_vec.push(Box::new(start));
-        }
-        if let Some(end) = end_date {
-            conditions.push("created_at <= ?".to_string());
-            params_vec.push(Box::new(end));
-        }
-        if let Some(at) = app_type {
-            if at != "all" {
-                conditions.push("app_type = ?".to_string());
-                params_vec.push(Box::new(at.to_string()));
-            }
-        }
-        if let Some(p) = provider_name {
-            conditions.push("provider_id = ?".to_string());
-            params_vec.push(Box::new(p.to_string()));
-        }
-        if let Some(m) = model {
-            conditions.push("model = ?".to_string());
-            params_vec.push(Box::new(m.to_string()));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let (where_clause, params_vec) = build_usage_where(
+            start_date,
+            end_date,
+            app_type,
+            allowed_apps,
+            provider_name,
+            model,
+            None,
+        );
 
         let sql = format!(
             "SELECT
@@ -599,33 +627,29 @@ impl UsageDb {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<UsageSummaryByApp>, String> {
+        self.get_usage_summary_by_app_scoped(start_date, end_date, None, provider_name, model)
+    }
+
+    /// Get usage summary grouped by application type, restricted to `allowed_apps` when present.
+    pub fn get_usage_summary_by_app_scoped(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        allowed_apps: Option<&[String]>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<Vec<UsageSummaryByApp>, String> {
         let conn = self.connect()?;
 
-        let mut conditions = Vec::new();
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if let Some(start) = start_date {
-            conditions.push("created_at >= ?".to_string());
-            params_vec.push(Box::new(start));
-        }
-        if let Some(end) = end_date {
-            conditions.push("created_at <= ?".to_string());
-            params_vec.push(Box::new(end));
-        }
-        if let Some(p) = provider_name {
-            conditions.push("provider_id = ?".to_string());
-            params_vec.push(Box::new(p.to_string()));
-        }
-        if let Some(m) = model {
-            conditions.push("model = ?".to_string());
-            params_vec.push(Box::new(m.to_string()));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let (where_clause, params_vec) = build_usage_where(
+            start_date,
+            end_date,
+            None,
+            allowed_apps,
+            provider_name,
+            model,
+            None,
+        );
 
         let sql = format!(
             "SELECT
@@ -705,6 +729,19 @@ impl UsageDb {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<DailyStats>, String> {
+        self.get_daily_trends_scoped(start_date, end_date, app_type, None, provider_name, model)
+    }
+
+    /// Get daily or hourly usage trends, restricted to `allowed_apps` when present.
+    pub fn get_daily_trends_scoped(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        allowed_apps: Option<&[String]>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<Vec<DailyStats>, String> {
         let conn = self.connect()?;
 
         let now_ts = Local::now().timestamp();
@@ -712,8 +749,20 @@ impl UsageDb {
         let start_ts = match start_date {
             Some(s) => s,
             None => {
+                let (min_where, min_params) = build_usage_where(
+                    None,
+                    end_date,
+                    app_type,
+                    allowed_apps,
+                    provider_name,
+                    model,
+                    None,
+                );
+                let min_sql = format!("SELECT MIN(created_at) FROM proxy_request_logs {min_where}");
+                let min_refs: Vec<&dyn rusqlite::ToSql> =
+                    min_params.iter().map(|p| p.as_ref()).collect();
                 let min_ts: Option<i64> = conn
-                    .query_row("SELECT MIN(created_at) FROM proxy_request_logs", [], |row| row.get(0))
+                    .query_row(&min_sql, min_refs.as_slice(), |row| row.get(0))
                     .ok()
                     .flatten();
                 min_ts.unwrap_or_else(|| end_ts - 30 * 86400)
@@ -723,25 +772,15 @@ impl UsageDb {
 
         let is_hourly = duration <= 24 * 3600;
 
-        let mut conditions = vec!["created_at >= ?".to_string(), "created_at <= ?".to_string()];
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(start_ts), Box::new(end_ts)];
-
-        if let Some(at) = app_type {
-            if at != "all" {
-                conditions.push("app_type = ?".to_string());
-                params_vec.push(Box::new(at.to_string()));
-            }
-        }
-        if let Some(p) = provider_name {
-            conditions.push("provider_id = ?".to_string());
-            params_vec.push(Box::new(p.to_string()));
-        }
-        if let Some(m) = model {
-            conditions.push("model = ?".to_string());
-            params_vec.push(Box::new(m.to_string()));
-        }
-
-        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+        let (where_clause, params_vec) = build_usage_where(
+            Some(start_ts),
+            Some(end_ts),
+            app_type,
+            allowed_apps,
+            provider_name,
+            model,
+            None,
+        );
 
         if is_hourly {
             let bucket_seconds: i64 = 3600;
@@ -920,39 +959,30 @@ impl UsageDb {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<ProviderStats>, String> {
+        self.get_provider_stats_scoped(start_date, end_date, app_type, None, provider_name, model)
+    }
+
+    /// Get usage statistics grouped by provider, restricted to `allowed_apps` when present.
+    pub fn get_provider_stats_scoped(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        allowed_apps: Option<&[String]>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<Vec<ProviderStats>, String> {
         let conn = self.connect()?;
 
-        let mut conditions = Vec::new();
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if let Some(start) = start_date {
-            conditions.push("created_at >= ?".to_string());
-            params_vec.push(Box::new(start));
-        }
-        if let Some(end) = end_date {
-            conditions.push("created_at <= ?".to_string());
-            params_vec.push(Box::new(end));
-        }
-        if let Some(at) = app_type {
-            if at != "all" {
-                conditions.push("app_type = ?".to_string());
-                params_vec.push(Box::new(at.to_string()));
-            }
-        }
-        if let Some(p) = provider_name {
-            conditions.push("provider_id = ?".to_string());
-            params_vec.push(Box::new(p.to_string()));
-        }
-        if let Some(m) = model {
-            conditions.push("model = ?".to_string());
-            params_vec.push(Box::new(m.to_string()));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let (where_clause, params_vec) = build_usage_where(
+            start_date,
+            end_date,
+            app_type,
+            allowed_apps,
+            provider_name,
+            model,
+            None,
+        );
 
         let sql = format!(
             "SELECT
@@ -985,16 +1015,7 @@ impl UsageDb {
                 0.0
             };
 
-            let readable_name = match provider_id.as_str() {
-                "_session" => "Claude (Session)".to_string(),
-                "_codex_session" => "Codex (Session)".to_string(),
-                "_agy_session" | "_antigravity_session" => "Antigravity (Session)".to_string(),
-                "_gemini_session" => "Gemini (Session)".to_string(),
-                "_grok_session" => "Grok Build (Session)".to_string(),
-                "_opencode_session" => "OpenCode (Session)".to_string(),
-                "_pi_session" => "Pi (Session)".to_string(),
-                other => other.to_string(),
-            };
+            let readable_name = format_provider_display_name(&provider_id);
 
             Ok(ProviderStats {
                 provider_id,
@@ -1025,39 +1046,30 @@ impl UsageDb {
         provider_name: Option<&str>,
         model: Option<&str>,
     ) -> Result<Vec<ModelStats>, String> {
+        self.get_model_stats_scoped(start_date, end_date, app_type, None, provider_name, model)
+    }
+
+    /// Get usage statistics grouped by model, restricted to `allowed_apps` when present.
+    pub fn get_model_stats_scoped(
+        &self,
+        start_date: Option<i64>,
+        end_date: Option<i64>,
+        app_type: Option<&str>,
+        allowed_apps: Option<&[String]>,
+        provider_name: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<Vec<ModelStats>, String> {
         let conn = self.connect()?;
 
-        let mut conditions = Vec::new();
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if let Some(start) = start_date {
-            conditions.push("created_at >= ?".to_string());
-            params_vec.push(Box::new(start));
-        }
-        if let Some(end) = end_date {
-            conditions.push("created_at <= ?".to_string());
-            params_vec.push(Box::new(end));
-        }
-        if let Some(at) = app_type {
-            if at != "all" {
-                conditions.push("app_type = ?".to_string());
-                params_vec.push(Box::new(at.to_string()));
-            }
-        }
-        if let Some(p) = provider_name {
-            conditions.push("provider_id = ?".to_string());
-            params_vec.push(Box::new(p.to_string()));
-        }
-        if let Some(m) = model {
-            conditions.push("model = ?".to_string());
-            params_vec.push(Box::new(m.to_string()));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let (where_clause, params_vec) = build_usage_where(
+            start_date,
+            end_date,
+            app_type,
+            allowed_apps,
+            provider_name,
+            model,
+            None,
+        );
 
         let sql = format!(
             "SELECT
@@ -1113,41 +1125,15 @@ impl UsageDb {
     ) -> Result<PaginatedLogs, String> {
         let conn = self.connect()?;
 
-        let mut conditions = Vec::new();
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if let Some(ref at) = filters.app_type {
-            if at != "all" {
-                conditions.push("app_type = ?".to_string());
-                params_vec.push(Box::new(at.clone()));
-            }
-        }
-        if let Some(ref p) = filters.provider_name {
-            conditions.push("provider_id = ?".to_string());
-            params_vec.push(Box::new(p.clone()));
-        }
-        if let Some(ref m) = filters.model {
-            conditions.push("model = ?".to_string());
-            params_vec.push(Box::new(m.clone()));
-        }
-        if let Some(status) = filters.status_code {
-            conditions.push("status_code = ?".to_string());
-            params_vec.push(Box::new(status as i64));
-        }
-        if let Some(start) = filters.start_date {
-            conditions.push("created_at >= ?".to_string());
-            params_vec.push(Box::new(start));
-        }
-        if let Some(end) = filters.end_date {
-            conditions.push("created_at <= ?".to_string());
-            params_vec.push(Box::new(end));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let (where_clause, params_vec) = build_usage_where(
+            filters.start_date,
+            filters.end_date,
+            filters.app_type.as_deref(),
+            filters.allowed_apps.as_deref(),
+            filters.provider_name.as_deref(),
+            filters.model.as_deref(),
+            filters.status_code,
+        );
 
         // Total count
         let count_sql = format!("SELECT COUNT(*) FROM proxy_request_logs {where_clause}");
@@ -1177,16 +1163,7 @@ impl UsageDb {
         let mut stmt = conn.prepare(&query_sql).map_err(|e| format!("准备日志列表失败: {e}"))?;
         let rows = stmt.query_map(query_refs.as_slice(), |row| {
             let provider_id: String = row.get(1)?;
-            let readable_name = match provider_id.as_str() {
-                "_session" => "Claude (Session)".to_string(),
-                "_codex_session" => "Codex (Session)".to_string(),
-                "_agy_session" | "_antigravity_session" => "Antigravity (Session)".to_string(),
-                "_gemini_session" => "Gemini (Session)".to_string(),
-                "_grok_session" => "Grok Build (Session)".to_string(),
-                "_opencode_session" => "OpenCode (Session)".to_string(),
-                "_pi_session" => "Pi (Session)".to_string(),
-                other => other.to_string(),
-            };
+            let readable_name = format_provider_display_name(&provider_id);
 
             Ok(RequestLogDetail {
                 request_id: row.get(0)?,
@@ -1343,584 +1320,151 @@ impl UsageDb {
 
     /// Scan local session files for all supported tools and record new usage.
     pub fn sync_session_usage(&self, paths: &Paths) -> Result<SessionSyncResult, String> {
-        let mut report = SessionSyncResult::default();
         let conn = self.connect()?;
-
-        // Fetch pricing lookup table
-        let mut pricing_map: HashMap<String, (f64, f64, f64, f64)> = HashMap::new();
-        if let Ok(mut stmt) = conn.prepare("SELECT model_id, input_cost_per_million, output_cost_per_million, cache_read_cost_per_million, cache_creation_cost_per_million FROM model_pricing") {
-            if let Ok(rows) = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?.parse::<f64>().unwrap_or(0.0),
-                    r.get::<_, String>(2)?.parse::<f64>().unwrap_or(0.0),
-                    r.get::<_, String>(3)?.parse::<f64>().unwrap_or(0.0),
-                    r.get::<_, String>(4)?.parse::<f64>().unwrap_or(0.0),
-                ))
-            }) {
-                for r in rows.flatten() {
-                    pricing_map.insert(r.0.to_lowercase(), (r.1, r.2, r.3, r.4));
-                }
-            }
-        }
-
-        // Helper to calculate cost
-        let calc_cost = |model: &str, inp: u32, out: u32, cr: u32, cc: u32| -> String {
-            let m_lower = model.to_lowercase();
-            let prices = pricing_map.get(&m_lower).or_else(|| {
-                pricing_map.iter().find(|(k, _)| m_lower.contains(k.as_str())).map(|(_, v)| v)
-            });
-            if let Some((pi, po, pcr, pcc)) = prices {
-                let cost = (inp as f64 * pi + out as f64 * po + cr as f64 * pcr + cc as f64 * pcc) / 1_000_000.0;
-                format!("{cost:.6}")
-            } else {
-                "0.000000".to_string()
-            }
-        };
-
-        // Pre-fetch session_log_sync cursors for fast mtime check (avoids re-parsing unchanged files)
-        let mut cursors: HashMap<String, i64> = HashMap::new();
-        if let Ok(mut stmt) = conn.prepare("SELECT file_path, last_modified FROM session_log_sync") {
-            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
-                for r in rows.flatten() {
-                    cursors.insert(r.0, r.1);
-                }
-            }
-        }
-
-        let mut in_transaction = false;
-
-        let mut sync_file = |p: &Path, ingest_fn: &dyn Fn(&Connection, &Path, &dyn Fn(&str, u32, u32, u32, u32) -> String, &mut SessionSyncResult)| {
-            report.files_scanned += 1;
-            let mtime = p.metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            let mtime_secs = mtime / 1000;
-            let path_str = p.to_string_lossy().to_string();
-            if let Some(&last_mod) = cursors.get(&path_str) {
-                // Match both 13-digit millisecond cursors and 10-digit second cursors imported from cc-switch
-                if mtime > 0 && (last_mod == mtime || (mtime_secs > 0 && last_mod == mtime_secs)) {
-                    return;
-                }
-            }
-            if !in_transaction {
-                if conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;").is_ok() {
-                    in_transaction = true;
-                }
-            }
-            ingest_fn(&conn, p, &calc_cost, &mut report);
-            let now_sec = chrono::Local::now().timestamp();
-            let _ = conn.execute(
-                "INSERT INTO session_log_sync (file_path, last_modified, last_line_offset, last_synced_at)
-                 VALUES (?1, ?2, 0, ?3)
-                 ON CONFLICT(file_path) DO UPDATE SET
-                     last_modified = excluded.last_modified,
-                     last_synced_at = excluded.last_synced_at",
-                rusqlite::params![path_str, mtime, now_sec],
-            );
-        };
-
-        // 1. Claude Code (~/.claude/projects/*/*.jsonl)
-        let claude_projects = paths.home.join(".claude").join("projects");
-        if claude_projects.is_dir() {
-            if let Ok(entries) = fs::read_dir(&claude_projects) {
-                for proj in entries.flatten() {
-                    if proj.path().is_dir() {
-                        if let Ok(files) = fs::read_dir(proj.path()) {
-                            for f in files.flatten() {
-                                let p = f.path();
-                                if p.extension().map_or(false, |ext| ext == "jsonl") {
-                                    sync_file(&p, &Self::ingest_claude_jsonl);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Codex (~/.codex/sessions/YYYY/MM/DD/*.jsonl + ~/.codex/archived_sessions/*.jsonl)
-        let codex_sessions = paths.home.join(".codex").join("sessions");
-        if codex_sessions.is_dir() {
-            let mut codex_files = Vec::new();
-            Self::collect_files_recursive(&codex_sessions, "jsonl", 0, 4, &mut codex_files);
-            for p in codex_files {
-                sync_file(&p, &Self::ingest_codex_jsonl);
-            }
-        }
-        let codex_archived = paths.home.join(".codex").join("archived_sessions");
-        if codex_archived.is_dir() {
-            if let Ok(files) = fs::read_dir(&codex_archived) {
-                for f in files.flatten() {
-                    let p = f.path();
-                    if p.extension().map_or(false, |ext| ext == "jsonl") {
-                        sync_file(&p, &Self::ingest_codex_jsonl);
-                    }
-                }
-            }
-        }
-
-        // 3. Pi (~/.pi/agent/sessions/*.jsonl)
-        let pi_sessions = paths.home.join(".pi").join("agent").join("sessions");
-        if pi_sessions.is_dir() {
-            if let Ok(files) = fs::read_dir(&pi_sessions) {
-                for f in files.flatten() {
-                    let p = f.path();
-                    if p.extension().map_or(false, |ext| ext == "jsonl") {
-                        sync_file(&p, &Self::ingest_pi_jsonl);
-                    }
-                }
-            }
-        }
-
-        // 4. Antigravity (~/.gemini/{antigravity-cli,antigravity-ide,antigravity}/brain/*/.system_generated/logs/transcript.jsonl)
-        let default_agy_model = Self::read_default_agy_model(&paths.home);
-        for sub in ["antigravity-cli", "antigravity-ide", "antigravity"] {
-            let brain_dir = paths.home.join(".gemini").join(sub).join("brain");
-            if brain_dir.is_dir() {
-                if let Ok(entries) = fs::read_dir(&brain_dir) {
-                    for entry in entries.flatten() {
-                        let transcript = entry
-                            .path()
-                            .join(".system_generated")
-                            .join("logs")
-                            .join("transcript.jsonl");
-                        if transcript.is_file() {
-                            sync_file(&transcript, &|conn, p, calc_cost, report| {
-                                Self::ingest_antigravity_jsonl(conn, p, &default_agy_model, calc_cost, report);
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        if in_transaction {
-            let _ = conn.execute_batch("COMMIT;");
-        }
-
-        Ok(report)
-    }
-
-    fn collect_files_recursive(dir: &Path, ext: &str, current_depth: u32, max_depth: u32, files: &mut Vec<PathBuf>) {
-        if current_depth > max_depth {
-            return;
-        }
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    Self::collect_files_recursive(&path, ext, current_depth + 1, max_depth, files);
-                } else if path.extension().map_or(false, |e| e == ext) {
-                    files.push(path);
-                }
-            }
-        }
-    }
-
-    fn read_default_agy_model(home: &Path) -> String {
-        for sub in ["antigravity-cli", "antigravity-ide", "antigravity"] {
-            let settings_path = home.join(".gemini").join(sub).join("settings.json");
-            if let Ok(content) = fs::read_to_string(&settings_path) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(m) = val.get("model").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
-                        return m.trim().to_string();
-                    }
-                }
-            }
-        }
-        "Gemini 4 Argon (Medium)".to_string()
-    }
-
-    fn normalize_agy_model_slug(display_model: &str) -> String {
-        display_model
-            .trim()
-            .to_lowercase()
-            .replace(['(', ')'], "")
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join("-")
-    }
-
-    fn ingest_antigravity_jsonl(
-        conn: &Connection,
-        path: &Path,
-        default_display_model: &str,
-        calc_cost: &dyn Fn(&str, u32, u32, u32, u32) -> String,
-        report: &mut SessionSyncResult,
-    ) {
-        let file = match fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let reader = std::io::BufReader::new(file);
-
-        // Extract <conversation_id> from .../brain/<cid>/.system_generated/logs/transcript.jsonl
-        let cid = path
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let mut current_request_model = default_display_model.to_string();
-        let mut current_model_slug = Self::normalize_agy_model_slug(&current_request_model);
-
-        for line_res in reader.lines() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            if line.is_empty() {
-                continue;
-            }
-
-            let has_model_change = line.contains("Model Selection");
-            let has_tokens = line.contains("\"input_tokens\"") || line.contains("\"output_tokens\"");
-            if !has_model_change && !has_tokens {
-                continue;
-            }
-
-            let val: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            if has_model_change {
-                if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
-                    if let Some(idx) = content.find("Model Selection` from ") {
-                        let after = &content[idx + "Model Selection` from ".len()..];
-                        if let Some(to_idx) = after.find(" to ") {
-                            let rest = &after[to_idx + 4..];
-                            let new_model = rest
-                                .split(". No need to comment")
-                                .next()
-                                .unwrap_or(rest)
-                                .trim_end_matches('.')
-                                .trim();
-                            if !new_model.is_empty() {
-                                current_request_model = new_model.to_string();
-                                current_model_slug = Self::normalize_agy_model_slug(&current_request_model);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if has_tokens {
-                let inp = val.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let out = val.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let cr = val.get("cache_read_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                if inp == 0 && out == 0 && cr == 0 {
-                    continue;
-                }
-
-                let step_idx = val.get("step_index").and_then(|v| v.as_u64()).unwrap_or(0);
-                let req_id = if step_idx > 0 {
-                    format!("agy:{cid}:{step_idx}")
-                } else {
-                    format!("agy:{cid}:{:x}", md5_hash(&line))
-                };
-
-                let created_at = val
-                    .get("created_at")
-                    .and_then(|v| v.as_str())
-                    .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-                    .map(|dt| dt.timestamp())
-                    .unwrap_or_else(|| Local::now().timestamp());
-
-                let total_cost = calc_cost(&current_model_slug, inp, out, cr, 0);
-
-                let inserted = conn.execute(
-                    "INSERT OR IGNORE INTO proxy_request_logs (
-                        request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens,
-                        cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
-                        status_code, session_id, provider_type, is_streaming, cost_multiplier, created_at, data_source
-                    ) VALUES (?1, '_agy_session', 'agy', ?2, ?3, ?4, ?5, ?6, 0, ?7, 0, 200, ?8, 'agy_session', 1, '1.0', ?9, 'agy_session')",
-                    params![
-                        req_id,
-                        current_model_slug,
-                        current_request_model,
-                        inp,
-                        out,
-                        cr,
-                        total_cost,
-                        cid,
-                        created_at
-                    ],
-                );
-
-                if let Ok(n) = inserted {
-                    if n > 0 {
-                        report.imported += 1;
-                    } else {
-                        report.skipped += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    fn ingest_claude_jsonl(
-        conn: &Connection,
-        path: &Path,
-        calc_cost: &dyn Fn(&str, u32, u32, u32, u32) -> String,
-        report: &mut SessionSyncResult,
-    ) {
-        let file = match fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let reader = std::io::BufReader::new(file);
-
-        for line_res in reader.lines() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            if !line.contains("\"assistant\"") || !line.contains("\"usage\"") {
-                continue;
-            }
-
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                if val.get("type").and_then(|v| v.as_str()) == Some("assistant") {
-                    if let Some(msg) = val.get("message") {
-                        let msg_id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let model = msg.get("model").and_then(|v| v.as_str()).unwrap_or("claude-3-5-sonnet");
-                        if let Some(usage) = msg.get("usage") {
-                            let inp = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let out = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let cr = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let cc = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-                            let req_id = if !msg_id.is_empty() {
-                                format!("claude:{msg_id}")
-                            } else {
-                                format!("claude:{:x}", md5_hash(&line))
-                            };
-
-                            let created_at = val.get("timestamp")
-                                .and_then(|v| v.as_str())
-                                .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-                                .map(|dt| dt.timestamp())
-                                .unwrap_or_else(|| Local::now().timestamp());
-
-                            let total_cost = calc_cost(model, inp, out, cr, cc);
-
-                            let inserted = conn.execute(
-                                "INSERT OR IGNORE INTO proxy_request_logs (
-                                    request_id, provider_id, app_type, model, input_tokens, output_tokens,
-                                    cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
-                                    status_code, created_at, data_source
-                                ) VALUES (?1, '_session', 'claude', ?2, ?3, ?4, ?5, ?6, ?7, 0, 200, ?8, 'session_log')",
-                                params![req_id, model, inp, out, cr, cc, total_cost, created_at],
-                            );
-
-                            if let Ok(n) = inserted {
-                                if n > 0 {
-                                    report.imported += 1;
-                                } else {
-                                    report.skipped += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn ingest_codex_jsonl(
-        conn: &Connection,
-        path: &Path,
-        calc_cost: &dyn Fn(&str, u32, u32, u32, u32) -> String,
-        report: &mut SessionSyncResult,
-    ) {
-        let file = match fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let reader = std::io::BufReader::new(file);
-
-        let mut current_model = "gpt-5-codex".to_string();
-
-        for line_res in reader.lines() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            if line.is_empty() {
-                continue;
-            }
-
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                let entry_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-                // 1. Turn context: track active model
-                if entry_type == "turn_context" {
-                    if let Some(payload) = val.get("payload") {
-                        if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
-                            if !m.is_empty() {
-                                current_model = m.to_string();
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                // 2. Event message with token_count
-                if entry_type == "event_msg" {
-                    if let Some(payload) = val.get("payload") {
-                        if payload.get("type").and_then(|v| v.as_str()) == Some("token_count") {
-                            if let Some(info) = payload.get("info") {
-                                let usage_obj = info.get("last_token_usage").or_else(|| info.get("total_token_usage"));
-                                if let Some(usage) = usage_obj {
-                                    let inp = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                                    let out = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                                    let cr = usage.get("cached_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-                                    if inp == 0 && out == 0 && cr == 0 {
-                                        continue;
-                                    }
-
-                                    let req_id = format!("codex:{:x}", md5_hash(&line));
-                                    let created_at = val.get("timestamp")
-                                        .and_then(|v| v.as_str())
-                                        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-                                        .map(|dt| dt.timestamp())
-                                        .unwrap_or_else(|| Local::now().timestamp());
-
-                                    let total_cost = calc_cost(&current_model, inp, out, cr, 0);
-
-                                    let inserted = conn.execute(
-                                        "INSERT OR IGNORE INTO proxy_request_logs (
-                                            request_id, provider_id, app_type, model, input_tokens, output_tokens,
-                                            cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
-                                            status_code, created_at, data_source
-                                        ) VALUES (?1, '_codex_session', 'codex', ?2, ?3, ?4, ?5, 0, ?6, 0, 200, ?7, 'codex_session')",
-                                        params![req_id, current_model, inp, out, cr, total_cost, created_at],
-                                    );
-
-                                    if let Ok(n) = inserted {
-                                        if n > 0 {
-                                            report.imported += 1;
-                                        } else {
-                                            report.skipped += 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
-
-                // 3. Fallback to generic usage if present
-                if let Some(usage) = val.get("usage") {
-                    let inp = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let out = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let cr = usage.get("prompt_tokens_details")
-                        .and_then(|d| d.get("cached_tokens"))
-                        .and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-                    let model = val.get("model").and_then(|v| v.as_str()).unwrap_or(&current_model);
-                    let req_id = format!("codex:{:x}", md5_hash(&line));
-                    let created_at = val.get("created_at")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or_else(|| Local::now().timestamp());
-
-                    let total_cost = calc_cost(model, inp, out, cr, 0);
-
-                    let inserted = conn.execute(
-                        "INSERT OR IGNORE INTO proxy_request_logs (
-                            request_id, provider_id, app_type, model, input_tokens, output_tokens,
-                            cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
-                            status_code, created_at, data_source
-                        ) VALUES (?1, '_codex_session', 'codex', ?2, ?3, ?4, ?5, 0, ?6, 0, 200, ?7, 'codex_session')",
-                        params![req_id, model, inp, out, cr, total_cost, created_at],
-                    );
-
-                    if let Ok(n) = inserted {
-                        if n > 0 {
-                            report.imported += 1;
-                        } else {
-                            report.skipped += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn ingest_pi_jsonl(
-        conn: &Connection,
-        path: &Path,
-        calc_cost: &dyn Fn(&str, u32, u32, u32, u32) -> String,
-        report: &mut SessionSyncResult,
-    ) {
-        let file = match fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let reader = std::io::BufReader::new(file);
-
-        for line_res in reader.lines() {
-            let line = match line_res {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            if !line.contains("\"usage\"") {
-                continue;
-            }
-
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                if let Some(msg) = val.get("message").or(Some(&val)) {
-                    if let Some(usage) = msg.get("usage") {
-                        let inp = usage.get("input").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                        let out = usage.get("output").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                        let cr = usage.get("cacheRead").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                        let cc = usage.get("cacheWrite").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-                        let model = msg.get("model").and_then(|v| v.as_str()).unwrap_or("pi-default");
-                        let req_id = format!("pi:{:x}", md5_hash(&line));
-                        let created_at = val.get("timestamp")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or_else(|| Local::now().timestamp());
-
-                        let total_cost = calc_cost(model, inp, out, cr, cc);
-
-                        let inserted = conn.execute(
-                            "INSERT OR IGNORE INTO proxy_request_logs (
-                                request_id, provider_id, app_type, model, input_tokens, output_tokens,
-                                cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
-                                status_code, created_at, data_source
-                            ) VALUES (?1, '_pi_session', 'pi', ?2, ?3, ?4, ?5, ?6, ?7, 0, 200, ?8, 'session_log')",
-                            params![req_id, model, inp, out, cr, cc, total_cost, created_at],
-                        );
-
-                        if let Ok(n) = inserted {
-                            if n > 0 {
-                                report.imported += 1;
-                            } else {
-                                report.skipped += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        crate::session_usage::sync_all(&conn, paths)
     }
 }
 
-fn md5_hash(s: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
+/// Map a sidebar `visible_tools` key to its canonical `proxy_request_logs.app_type`.
+pub fn sidebar_key_to_usage_app_type(key: &str) -> Option<&'static str> {
+    match key.trim().to_ascii_lowercase().as_str() {
+        "claude_code" | "claudecode" | "claude" => Some("claude"),
+        "claude_desktop" | "claudedesktop" => Some("claude_desktop"),
+        "codex" => Some("codex"),
+        "antigravity" | "agy" => Some("agy"),
+        "gemini_cli" | "gemini" | "geminicli" => Some("gemini"),
+        "grok" | "grokbuild" => Some("grok"),
+        "kimi" => Some("kimi"),
+        "opencode" | "open_code" => Some("opencode"),
+        "openclaw" | "open_claw" => Some("openclaw"),
+        "pi" => Some("pi"),
+        "oh_my_pi" | "omp" | "ohmypi" => Some("oh_my_pi"),
+        "hermes" => Some("hermes"),
+        "dsh" | "deepseek_harness" => Some("dsh"),
+        _ => None,
+    }
+}
+
+/// Resolve the allowed `app_type` list in Usage stats from `AppSettings.visible_tools`.
+/// Mirrors sidebar semantics: when `visible_tools` is empty, all default sidebar tools apply.
+pub fn usage_app_types_for_visible_tools(visible_tools: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let push_unique = |out: &mut Vec<String>, app: &str| {
+        if !out.iter().any(|existing| existing == app) {
+            out.push(app.to_string());
+        }
+    };
+    if visible_tools.is_empty() {
+        for tool in crate::tools::ToolId::ALL {
+            if let Some(app) = sidebar_key_to_usage_app_type(tool.key()) {
+                push_unique(&mut out, app);
+            }
+        }
+        push_unique(&mut out, "agy");
+        return out;
+    }
+    for key in visible_tools {
+        if let Some(app) = sidebar_key_to_usage_app_type(key) {
+            push_unique(&mut out, app);
+        }
+    }
+    out
+}
+
+fn append_app_filter(
+    conditions: &mut Vec<String>,
+    params_vec: &mut Vec<Box<dyn rusqlite::ToSql>>,
+    app_type: Option<&str>,
+    allowed_apps: Option<&[String]>,
+) {
+    let selected = app_type.filter(|at| *at != "all");
+    match (selected, allowed_apps) {
+        (Some(at), Some(allowed)) => {
+            if allowed.iter().any(|a| a == at) {
+                conditions.push("app_type = ?".to_string());
+                params_vec.push(Box::new(at.to_string()));
+            } else {
+                conditions.push("1 = 0".to_string());
+            }
+        }
+        (Some(at), None) => {
+            conditions.push("app_type = ?".to_string());
+            params_vec.push(Box::new(at.to_string()));
+        }
+        (None, Some(allowed)) => {
+            if allowed.is_empty() {
+                conditions.push("1 = 0".to_string());
+            } else {
+                let placeholders = vec!["?"; allowed.len()].join(", ");
+                conditions.push(format!("app_type IN ({placeholders})"));
+                for app in allowed {
+                    params_vec.push(Box::new(app.clone()));
+                }
+            }
+        }
+        (None, None) => {}
+    }
+}
+
+fn build_usage_where(
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    app_type: Option<&str>,
+    allowed_apps: Option<&[String]>,
+    provider_name: Option<&str>,
+    model: Option<&str>,
+    status_code: Option<u16>,
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut conditions = Vec::new();
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(start) = start_date {
+        conditions.push("created_at >= ?".to_string());
+        params_vec.push(Box::new(start));
+    }
+    if let Some(end) = end_date {
+        conditions.push("created_at <= ?".to_string());
+        params_vec.push(Box::new(end));
+    }
+    append_app_filter(&mut conditions, &mut params_vec, app_type, allowed_apps);
+    if let Some(p) = provider_name {
+        conditions.push("provider_id = ?".to_string());
+        params_vec.push(Box::new(p.to_string()));
+    }
+    if let Some(m) = model {
+        conditions.push("model = ?".to_string());
+        params_vec.push(Box::new(m.to_string()));
+    }
+    if let Some(status) = status_code {
+        conditions.push("status_code = ?".to_string());
+        params_vec.push(Box::new(status as i64));
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+    (where_clause, params_vec)
+}
+
+fn format_provider_display_name(provider_id: &str) -> String {
+    match provider_id {
+        "_session" => "Claude (Session)".to_string(),
+        "_claude_desktop_session" => "Claude Desktop (Session)".to_string(),
+        "_codex_session" => "Codex (Session)".to_string(),
+        "_agy_session" | "_antigravity_session" => "Antigravity (Session)".to_string(),
+        "_gemini_session" => "Gemini (Session)".to_string(),
+        "_grok_session" => "Grok (Session)".to_string(),
+        "_opencode_session" => "OpenCode (Session)".to_string(),
+        "_pi_session" => "Pi (Session)".to_string(),
+        "_omp_session" => "OhMyPi (Session)".to_string(),
+        "_kimi_session" => "Kimi (Session)".to_string(),
+        "_openclaw_session" => "OpenClaw (Session)".to_string(),
+        "_hermes_session" => "Hermes (Session)".to_string(),
+        "_dsh_session" => "Dsh (Session)".to_string(),
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -2085,6 +1629,92 @@ mod tests {
         let rep3 = db.sync_session_usage(&paths).unwrap();
         assert_eq!(rep3.files_scanned, 2);
         assert_eq!(rep3.imported, 0, "10-digit second cursor from cc-switch should match without re-parsing");
+    }
+
+    #[test]
+    fn test_scoped_usage_queries_and_visible_tools_mapping() {
+        let mapped = usage_app_types_for_visible_tools(&[
+            "claude_code".into(),
+            "codex".into(),
+            "pi".into(),
+            "antigravity".into(),
+            "agents".into(),
+        ]);
+        assert_eq!(mapped, vec!["claude", "codex", "pi", "agy"]);
+
+        let defaults = usage_app_types_for_visible_tools(&[]);
+        assert!(defaults.contains(&"claude".to_string()));
+        assert!(defaults.contains(&"agy".to_string()));
+        assert!(!defaults.contains(&"gemini".to_string()));
+
+        let tmp = tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("home"), tmp.path().join("appdata"));
+        let db = UsageDb::open(&paths).expect("open usage db");
+        let now = chrono::Utc::now().timestamp();
+        {
+            let conn = db.connect().unwrap();
+            for (id, app, prov, model, ts) in [
+                ("r-claude", "claude", "_session", "claude-sonnet", now),
+                ("r-pi", "pi", "_pi_session", "claude-sonnet", now),
+                ("r-gemini", "gemini", "_gemini_session", "gemini-2.5-pro", now - 5 * 86400),
+            ] {
+                conn.execute(
+                    "INSERT INTO proxy_request_logs (
+                        request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
+                        status_code, created_at, data_source
+                    ) VALUES (?1, ?2, ?3, ?4, 100, 50, 0, 0, '0.100000', 100, 200, ?5, 'session')",
+                    params![id, prov, app, model, ts],
+                )
+                .unwrap();
+            }
+        }
+
+        let allowed = vec!["claude".to_string(), "pi".to_string()];
+        // "All Apps" scoped to visible tools must exclude hidden gemini
+        let sum = db
+            .get_usage_summary_scoped(None, None, None, Some(&allowed), None, None)
+            .unwrap();
+        assert_eq!(sum.total_requests, 2);
+        assert_eq!(sum.real_total_tokens, 300);
+
+        // Explicitly querying a hidden app inside scope must return 0
+        let hidden = db
+            .get_usage_summary_scoped(None, None, Some("gemini"), Some(&allowed), None, None)
+            .unwrap();
+        assert_eq!(hidden.total_requests, 0);
+
+        let provs = db
+            .get_provider_stats_scoped(None, None, None, Some(&allowed), None, None)
+            .unwrap();
+        assert_eq!(provs.len(), 2);
+        assert!(provs.iter().all(|p| p.provider_id != "_gemini_session"));
+
+        let models = db
+            .get_model_stats_scoped(None, None, None, Some(&allowed), None, None)
+            .unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model, "claude-sonnet");
+
+        // All-time daily trends MIN(created_at) must not stretch back to hidden gemini timestamp
+        let trends = db
+            .get_daily_trends_scoped(None, None, None, Some(&allowed), None, None)
+            .unwrap();
+        assert_eq!(trends.len(), 1);
+        assert_eq!(trends[0].request_count, 2);
+
+        let logs = db
+            .get_request_logs(
+                &LogFilters {
+                    allowed_apps: Some(allowed),
+                    ..Default::default()
+                },
+                0,
+                10,
+            )
+            .unwrap();
+        assert_eq!(logs.total, 2);
+        assert!(logs.data.iter().all(|r| r.app_type != "gemini"));
     }
 }
 

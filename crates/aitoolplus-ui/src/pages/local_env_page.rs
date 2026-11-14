@@ -140,12 +140,31 @@ fn toggle_tool_visibility(
     let is_currently_visible = ws.settings.visible_tools.iter().any(|k| k == sidebar_key);
     if is_currently_visible && ws.settings.visible_tools.len() <= 1 {
         ws.ui.toast("至少需要保留一个侧栏工具".to_string(), true);
-    } else if is_currently_visible {
-        ws.settings.visible_tools.retain(|k| k != sidebar_key);
-        (ws.callbacks.save_settings)(&ws.settings);
     } else {
-        ws.settings.visible_tools.push(sidebar_key.to_string());
+        if is_currently_visible {
+            ws.settings.visible_tools.retain(|k| k != sidebar_key);
+        } else {
+            ws.settings.visible_tools.push(sidebar_key.to_string());
+        }
         (ws.callbacks.save_settings)(&ws.settings);
+        let allowed_apps =
+            aitoolplus_core::usage::usage_app_types_for_visible_tools(&ws.settings.visible_tools);
+        if ws
+            .ui
+            .usage_app_filter
+            .as_deref()
+            .is_some_and(|cur| !allowed_apps.iter().any(|a| a == cur))
+        {
+            ws.ui.usage_app_filter = None;
+            ws.ui.usage_provider_filter = None;
+            ws.ui.usage_model_filter = None;
+            ws.ui.usage_page = 0;
+        }
+        // Invalidate cached usage snapshot so "All Apps" immediately reflects visible tools next view.
+        ws.ui.usage_summary = None;
+        ws.ui.usage_apps_summary.clear();
+        ws.ui.usage_trends.clear();
+        ws.ui.usage_load_failed = false;
     }
     cx.notify();
 }

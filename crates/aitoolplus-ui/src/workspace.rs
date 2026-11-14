@@ -1790,6 +1790,19 @@ impl Workspace {
         };
         let cc_switch_db = self.paths.home.join(".cc-switch").join("cc-switch.db");
         let (start_ts, end_ts) = self.ui.usage_range.timestamps();
+        let allowed_apps =
+            aitoolplus_core::usage::usage_app_types_for_visible_tools(&self.settings.visible_tools);
+        if self
+            .ui
+            .usage_app_filter
+            .as_deref()
+            .is_some_and(|cur| !allowed_apps.iter().any(|a| a == cur))
+        {
+            self.ui.usage_app_filter = None;
+            self.ui.usage_provider_filter = None;
+            self.ui.usage_model_filter = None;
+            self.ui.usage_page = 0;
+        }
         let app_type = self.ui.usage_app_filter.clone();
         let provider_name = self.ui.usage_provider_filter.clone();
         let model = self.ui.usage_model_filter.clone();
@@ -1807,33 +1820,70 @@ impl Workspace {
                         let _ = db.import_from_cc_switch_if_changed(&cc_switch_db);
                     }
                     let app = app_type.as_deref();
+                    let allowed = Some(allowed_apps.as_slice());
                     let provider = provider_name.as_deref();
                     let model_filter = model.as_deref();
                     let providers = db
-                        .get_provider_stats(start_ts, end_ts, app, provider, model_filter)
+                        .get_provider_stats_scoped(
+                            start_ts,
+                            end_ts,
+                            app,
+                            allowed,
+                            provider,
+                            model_filter,
+                        )
                         .ok();
                     let provider_options = if provider.is_none() && model_filter.is_none() {
                         providers.clone()
                     } else {
-                        db.get_provider_stats(start_ts, end_ts, app, None, None).ok()
+                        db.get_provider_stats_scoped(start_ts, end_ts, app, allowed, None, None)
+                            .ok()
                     };
                     let models = db
-                        .get_model_stats(start_ts, end_ts, app, provider, model_filter)
+                        .get_model_stats_scoped(
+                            start_ts,
+                            end_ts,
+                            app,
+                            allowed,
+                            provider,
+                            model_filter,
+                        )
                         .ok();
                     let model_options = if model_filter.is_none() {
                         models.clone()
                     } else {
-                        db.get_model_stats(start_ts, end_ts, app, provider, None).ok()
+                        db.get_model_stats_scoped(start_ts, end_ts, app, allowed, provider, None)
+                            .ok()
                     };
                     UsageSnapshot {
                         summary: db
-                            .get_usage_summary(start_ts, end_ts, app, provider, model_filter)
+                            .get_usage_summary_scoped(
+                                start_ts,
+                                end_ts,
+                                app,
+                                allowed,
+                                provider,
+                                model_filter,
+                            )
                             .ok(),
                         apps: db
-                            .get_usage_summary_by_app(start_ts, end_ts, provider, model_filter)
+                            .get_usage_summary_by_app_scoped(
+                                start_ts,
+                                end_ts,
+                                allowed,
+                                provider,
+                                model_filter,
+                            )
                             .ok(),
                         trends: db
-                            .get_daily_trends(start_ts, end_ts, app, provider, model_filter)
+                            .get_daily_trends_scoped(
+                                start_ts,
+                                end_ts,
+                                app,
+                                allowed,
+                                provider,
+                                model_filter,
+                            )
                             .ok(),
                         providers,
                         provider_options,
@@ -1843,6 +1893,7 @@ impl Workspace {
                             .get_request_logs(
                                 &aitoolplus_core::usage::LogFilters {
                                     app_type,
+                                    allowed_apps: Some(allowed_apps),
                                     provider_name,
                                     model,
                                     status_code,

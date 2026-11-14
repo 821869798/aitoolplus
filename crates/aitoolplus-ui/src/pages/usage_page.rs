@@ -48,34 +48,63 @@ pub fn render_usage_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpu
 // 1. Top Header & Global Filter Toolbar
 // ---------------------------------------------------------------------------
 
+struct UsageAppUiMeta {
+    key: &'static str,
+    icon: &'static [u8],
+    zh: &'static str,
+    en: &'static str,
+    brand_color: u32,
+}
+
+const USAGE_APP_CATALOG: &[UsageAppUiMeta] = &[
+    UsageAppUiMeta { key: "claude", icon: crate::icons::CLAUDE_SVG, zh: "Claude Code", en: "Claude Code", brand_color: 0xd97757ff },
+    UsageAppUiMeta { key: "codex", icon: crate::icons::OPENAI_SVG, zh: "Codex", en: "Codex", brand_color: 0x10a37fff },
+    UsageAppUiMeta { key: "agy", icon: crate::icons::GEMINI_SVG, zh: "Antigravity", en: "Antigravity", brand_color: 0x3186ffff },
+    UsageAppUiMeta { key: "gemini", icon: crate::icons::TERMINAL_SVG, zh: "Gemini CLI", en: "Gemini CLI", brand_color: 0x4285f4ff },
+    UsageAppUiMeta { key: "grok", icon: crate::icons::GROK_SVG, zh: "Grok", en: "Grok", brand_color: 0xf43f5eff },
+    UsageAppUiMeta { key: "opencode", icon: crate::icons::OPENCODE_SVG, zh: "OpenCode", en: "OpenCode", brand_color: 0x6366f1ff },
+    UsageAppUiMeta { key: "pi", icon: crate::icons::PI_SVG, zh: "Pi", en: "Pi", brand_color: 0x8b5cf6ff },
+    UsageAppUiMeta { key: "oh_my_pi", icon: crate::icons::OMP_SVG, zh: "OhMyPi", en: "OhMyPi", brand_color: 0xa855f7ff },
+    UsageAppUiMeta { key: "kimi", icon: crate::icons::KIMI_SVG, zh: "Kimi", en: "Kimi", brand_color: 0x0ea5e9ff },
+    UsageAppUiMeta { key: "openclaw", icon: crate::icons::CLAW_SVG, zh: "OpenClaw", en: "OpenClaw", brand_color: 0xf97316ff },
+    UsageAppUiMeta { key: "hermes", icon: crate::icons::HERMES_SVG, zh: "Hermes", en: "Hermes", brand_color: 0x14b8a6ff },
+    UsageAppUiMeta { key: "dsh", icon: crate::icons::DEEPSEEK_SVG, zh: "Dsh", en: "Dsh", brand_color: 0x3b82f6ff },
+    UsageAppUiMeta { key: "claude_desktop", icon: crate::icons::ANTHROPIC_SVG, zh: "Claude Desktop", en: "Claude Desktop", brand_color: 0xd97757ff },
+];
+
+fn visible_usage_apps(visible_tools: &[String]) -> Vec<&'static UsageAppUiMeta> {
+    let allowed = aitoolplus_core::usage::usage_app_types_for_visible_tools(visible_tools);
+    USAGE_APP_CATALOG
+        .iter()
+        .filter(|meta| allowed.iter().any(|k| k == meta.key))
+        .collect()
+}
+
 fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::AnyElement {
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    // App Filter icons: All (Grid), Claude, Codex, Antigravity, Grok, OpenCode, Pi
-    let current_app: &'static str = match ws.ui.usage_app_filter.as_deref() {
-        Some("claude") => "claude",
-        Some("codex") => "codex",
-        Some("agy") | Some("antigravity") => "agy",
-        Some("grok") => "grok",
-        Some("opencode") => "opencode",
-        Some("pi") => "pi",
-        _ => "all",
+    let visible_apps = visible_usage_apps(&ws.settings.visible_tools);
+    let normalized_filter = match ws.ui.usage_app_filter.as_deref() {
+        Some("agy") | Some("antigravity") => Some("agy"),
+        Some("grok") | Some("grokbuild") => Some("grok"),
+        other => other,
     };
+    let current_app: &'static str = normalized_filter
+        .and_then(|key| visible_apps.iter().find(|meta| meta.key == key).map(|meta| meta.key))
+        .unwrap_or("all");
 
-    let app_options: Vec<(&'static str, &'static [u8], &'static str, &'static str)> = vec![
-        ("all", crate::icons::LAYOUT_GRID_SVG, "全部应用", "All Apps"),
-        ("claude", crate::icons::CLAUDE_SVG, "Claude", "Claude"),
-        ("codex", crate::icons::OPENAI_SVG, "Codex", "Codex"),
-        ("agy", crate::icons::GEMINI_SVG, "Antigravity", "Antigravity"),
-        ("grok", crate::icons::GROK_SVG, "Grok", "Grok"),
-        ("opencode", crate::icons::OPENCODE_SVG, "OpenCode", "OpenCode"),
-        ("pi", crate::icons::PI_SVG, "Pi", "Pi"),
-    ];
+    let mut app_options: Vec<(&'static str, &'static [u8], &'static str, &'static str)> =
+        Vec::with_capacity(visible_apps.len() + 1);
+    app_options.push(("all", crate::icons::LAYOUT_GRID_SVG, "全部应用", "All Apps"));
+    for meta in &visible_apps {
+        app_options.push((meta.key, meta.icon, meta.zh, meta.en));
+    }
 
     let app_selector = div()
         .id("usage-app-filter-icons")
         .flex()
+        .flex_wrap()
         .items_center()
         .p(px(2.0))
         .gap(px(2.0))
@@ -2013,12 +2042,12 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
     let t = ws.theme.clone();
     let i = ws.i18n;
 
-    let apps = [
-        ("claude", "Claude Code", crate::icons::CLAUDE_SVG, crate::rgba_const(0xd97757ff)),
-        ("codex", "Codex", crate::icons::OPENAI_SVG, crate::rgba_const(0x10a37fff)),
-        ("agy", "Antigravity", crate::icons::GEMINI_SVG, crate::rgba_const(0x3186ffff)),
-        ("grok", "Grok", crate::icons::GROK_SVG, crate::rgba_const(0xf43f5eff)),
-    ];
+    let apps: Vec<(&'static str, &'static str, &'static [u8], gpui::Rgba)> =
+        visible_usage_apps(&ws.settings.visible_tools)
+            .into_iter()
+            .map(|meta| (meta.key, meta.en, meta.icon, crate::rgba_const(meta.brand_color)))
+            .collect();
+    let save_app_keys: Vec<&'static str> = apps.iter().map(|(k, _, _, _)| *k).collect();
 
     // Ensure inputs and sources are initialized
     for (app_id, _, _, _) in &apps {
@@ -2053,14 +2082,13 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         ButtonVariant::Primary,
         &t,
         cx,
-        |ws, _, _, cx| {
+        move |ws, _, _, cx| {
             let db = match ws.ensure_usage_db() {
                 Some(d) => d,
                 None => return,
             };
-            let apps = ["claude", "codex", "agy", "grok"];
             let mut valid = true;
-            for app in &apps {
+            for app in &save_app_keys {
                 let mult_str = ws.ui.usage_app_pricing_inputs.get(*app)
                     .map(|ti| ti.read(cx).text().trim().to_string())
                     .unwrap_or_else(|| "1.0".to_string());
@@ -2071,7 +2099,7 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 }
             }
             if valid {
-                for app in &apps {
+                for app in &save_app_keys {
                     let mult_str = ws.ui.usage_app_pricing_inputs.get(*app)
                         .map(|ti| ti.read(cx).text().trim().to_string())
                         .unwrap_or_else(|| "1.0".to_string());
