@@ -726,11 +726,16 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
         });
     }
 
-    // 3. Claude Desktop (projects & local-agent-mode-sessions JSONL)
+    // 3. Claude Desktop (projects & local-agent-mode-sessions JSONL / audit.jsonl)
     for cd_root in claude_desktop_roots(paths) {
         for sub in ["projects", "local-agent-mode-sessions"] {
             let dir = cd_root.join(sub);
+            let mut audit_files = Vec::new();
             for path in collect_files(&dir, &["jsonl"], &["tool-results"], false) {
+                if path.file_name().and_then(|n| n.to_str()) == Some("audit.jsonl") {
+                    audit_files.push(path);
+                    continue;
+                }
                 sync_file_step(conn, &cursors, &mut in_tx, &path, None, &mut report, |_, _, rep| {
                     ingest_claude_jsonl(
                         conn,
@@ -743,6 +748,11 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
                         "claude_desktop_session",
                         rep,
                     )
+                });
+            }
+            for path in audit_files {
+                sync_file_step(conn, &cursors, &mut in_tx, &path, None, &mut report, |_, _, rep| {
+                    ingest_claude_desktop_audit_jsonl(conn, &pricing, &path, rep)
                 });
             }
         }
@@ -766,7 +776,7 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
         });
     }
 
-    // 5. Antigravity (~/.gemini/antigravity*{,/brain/*/.system_generated/logs/transcript.jsonl})
+    // 5. Antigravity (~/.gemini/antigravity*{,/brain/*/.system_generated/logs/transcript.jsonl} + conversations/*.db fallback)
     let default_agy_model = read_default_agy_model(&paths.home);
     for sub in ["antigravity-cli", "antigravity-ide", "antigravity"] {
         let brain = paths.home.join(".gemini").join(sub).join("brain");
@@ -802,6 +812,7 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
             }
         }
     }
+    ingest_antigravity_dbs(conn, &pricing, &paths.home, &cursors, &mut in_tx, &mut report);
 
     // 6. Gemini CLI (~/.gemini/tmp/*/chats/session-*.{json,jsonl})
     let gemini_tmp = paths.home.join(".gemini").join("tmp");
@@ -853,8 +864,14 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
         }
     }
 
-    // 8. Grok (~/.grok/{sessions,archived_sessions}/**/updates.jsonl, skip subagents)
+    // 8. Grok (~/.grok/{sessions,archived_sessions}/**/updates.jsonl & ~/.grok/logs/unified.jsonl)
     let grok_root = paths.tool_root(ToolId::Grok);
+    let grok_unified = grok_root.join("logs").join("unified.jsonl");
+    if grok_unified.is_file() {
+        sync_file_step(conn, &cursors, &mut in_tx, &grok_unified, None, &mut report, |_, _, rep| {
+            ingest_grok_unified_log(conn, &pricing, &grok_unified, rep)
+        });
+    }
     for sub in ["sessions", "archived_sessions"] {
         for path in collect_files(&grok_root.join(sub), &["jsonl"], &["subagents"], true) {
             if path.file_name().and_then(|n| n.to_str()) == Some("updates.jsonl") {
@@ -865,11 +882,25 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
         }
     }
 
-    // 9. Kimi (~/.kimi/sessions/**/wire.jsonl & ~/.kimi-code/{wire.jsonl,trees/*.jsonl,sessions/**/*.jsonl})
-    for kimi_dir in [
-        paths.home.join(".kimi").join("sessions"),
-        paths.tool_root(ToolId::Kimi),
-    ] {
+    // 9. Kimi ($KIMI_SHARE_DIR/sessions, ~/.kimi/sessions & ~/.kimi-code/{wire.jsonl,trees/*.jsonl,sessions/**/*.jsonl})
+    let mut kimi_dirs = Vec::new();
+    if let Ok(env_dir) = std::env::var("KIMI_SHARE_DIR") {
+        if !env_dir.trim().is_empty() {
+            let p = PathBuf::from(env_dir).join("sessions");
+            if !kimi_dirs.contains(&p) {
+                kimi_dirs.push(p);
+            }
+        }
+    }
+    let default_kimi_cli = paths.home.join(".kimi").join("sessions");
+    if !kimi_dirs.contains(&default_kimi_cli) {
+        kimi_dirs.push(default_kimi_cli);
+    }
+    let kimi_code_root = paths.tool_root(ToolId::Kimi);
+    if !kimi_dirs.contains(&kimi_code_root) {
+        kimi_dirs.push(kimi_code_root);
+    }
+    for kimi_dir in kimi_dirs {
         for path in collect_files(&kimi_dir, &["jsonl"], &["subagents"], true) {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let parent_name = path
@@ -887,7 +918,7 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
         }
     }
 
-    // 10. OpenClaw (~/.openclaw/agents/*/sessions/*.jsonl & ~/.openclaw/openclaw-agent.sqlite)
+    // 10. OpenClaw (~/.openclaw/agents/*/sessions/*.jsonl & **/openclaw-agent.sqlite)
     let openclaw_root = paths.tool_root(ToolId::OpenClaw);
     for path in collect_files(&openclaw_root.join("agents"), &["jsonl"], &["subagents"], true) {
         if path
@@ -901,8 +932,19 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
             });
         }
     }
-    let openclaw_db = openclaw_root.join("openclaw-agent.sqlite");
-    if openclaw_db.is_file() {
+    let mut openclaw_dbs = Vec::new();
+    let root_oc_db = openclaw_root.join("openclaw-agent.sqlite");
+    if root_oc_db.is_file() {
+        openclaw_dbs.push(root_oc_db);
+    }
+    for path in collect_files(&openclaw_root, &["sqlite"], &[], true) {
+        if path.file_name().and_then(|n| n.to_str()) == Some("openclaw-agent.sqlite")
+            && !openclaw_dbs.contains(&path)
+        {
+            openclaw_dbs.push(path);
+        }
+    }
+    for openclaw_db in openclaw_dbs {
         let stamp = FileStamp::from_sqlite_path(&openclaw_db);
         let key = openclaw_db.to_string_lossy().to_string();
         report.files_scanned += 1;
@@ -913,26 +955,27 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
         }
     }
 
-    // 11. Hermes (~/.hermes/state.db)
-    let hermes_db = paths.tool_root(ToolId::Hermes).join("state.db");
-    if hermes_db.is_file() {
+    // 11. Hermes (<root>/state.db + <root>/profiles/*/state.db)
+    let hermes_root = paths.tool_root(ToolId::Hermes);
+    for (hermes_db, source_prefix) in hermes_database_paths(&hermes_root) {
         let stamp = FileStamp::from_sqlite_path(&hermes_db);
         let key = hermes_db.to_string_lossy().to_string();
         report.files_scanned += 1;
         if !cursors.get(&key).is_some_and(|c| stamp.matches(c)) {
             begin_tx_once(conn, &mut in_tx);
-            let rows = ingest_hermes_db(conn, &pricing, &hermes_db, &mut report);
+            let rows = ingest_hermes_db(conn, &pricing, &hermes_db, &source_prefix, &mut report);
             save_cursor(conn, &key, stamp, rows);
         }
     }
 
-    // 12. Dsh (~/.dsh/sessions/**/*.jsonl)
-    for path in collect_files(
+    // 12. Dsh (~/.dsh/sessions/**/session[.vN].jsonl)
+    let dsh_files = select_dsh_generation_files(collect_files(
         &paths.tool_root(ToolId::Dsh).join("sessions"),
         &["jsonl"],
         &[],
         true,
-    ) {
+    ));
+    for path in dsh_files {
         sync_file_step(conn, &cursors, &mut in_tx, &path, None, &mut report, |_, _, rep| {
             ingest_dsh_jsonl(conn, &pricing, &path, rep)
         });
@@ -1583,10 +1626,14 @@ fn ingest_claude_jsonl(
 fn claude_desktop_roots(paths: &Paths) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     roots.push(paths.tool_root(ToolId::ClaudeDesktop));
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let p = PathBuf::from(appdata).join("Claude");
-        if !roots.contains(&p) {
-            roots.push(p);
+    for var in ["LOCALAPPDATA", "APPDATA"] {
+        if let Ok(dir) = std::env::var(var) {
+            if !dir.trim().is_empty() {
+                let p = PathBuf::from(dir).join("Claude");
+                if !roots.contains(&p) {
+                    roots.push(p);
+                }
+            }
         }
     }
     #[cfg(target_os = "macos")]
@@ -1605,6 +1652,122 @@ fn claude_desktop_roots(paths: &Paths) -> Vec<PathBuf> {
         roots.push(cfg);
     }
     roots
+}
+
+/// Claude Desktop `audit.jsonl` contains SDK `type == "result"` aggregates for a turn.
+/// Only emit records when `.claude/projects/**/*.jsonl` in the same folder does not already
+/// hold transcript usage for that session ID, avoiding double-counting.
+fn ingest_claude_desktop_audit_jsonl(
+    conn: &Connection,
+    pricing: &PricingTable,
+    path: &Path,
+    report: &mut SessionSyncResult,
+) -> i64 {
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    let root = path.parent().unwrap_or(Path::new("."));
+    let mut covered_sessions: HashSet<String> = HashSet::new();
+    for tpath in collect_files(&root.join(".claude").join("projects"), &["jsonl"], &["tool-results", "memory"], false) {
+        let Ok(tfile) = File::open(&tpath) else {
+            continue;
+        };
+        for line in BufReader::new(tfile).lines().map_while(Result::ok) {
+            if !line.contains("\"assistant\"") || !line.contains("\"usage\"") {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<Value>(&line) {
+                if let Some(sid) = nonempty_str(val.get("sessionId")) {
+                    covered_sessions.insert(sid.to_string());
+                }
+            }
+        }
+    }
+
+    let fallback_sid = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("claude_desktop")
+        .to_string();
+    let mut session_id = fallback_sid;
+    let mut line_num: i64 = 0;
+
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        line_num += 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.contains("\"result\"") {
+            continue;
+        }
+        let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if let Some(sid) = nonempty_str(val.get("session_id")).or_else(|| nonempty_str(val.get("sessionId"))) {
+            session_id = sid.to_string();
+        }
+        if val.get("type").and_then(Value::as_str) != Some("result") {
+            continue;
+        }
+        if covered_sessions.contains(&session_id) {
+            continue;
+        }
+        let Some(usage) = val.get("usage") else {
+            continue;
+        };
+        let inp = get_u32(usage, &["input_tokens"]);
+        let out = get_u32(usage, &["output_tokens"]);
+        let cr = get_u32(usage, &["cache_read_input_tokens"]);
+        let cc = get_u32(usage, &["cache_creation_input_tokens"]);
+        if inp == 0 && out == 0 && cr == 0 && cc == 0 {
+            continue;
+        }
+        let model = val
+            .get("modelUsage")
+            .and_then(Value::as_object)
+            .filter(|m| m.len() == 1)
+            .and_then(|m| m.keys().next())
+            .cloned()
+            .or_else(|| nonempty_str(val.get("model")).map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        let created_at = val
+            .get("timestamp")
+            .and_then(parse_any_timestamp)
+            .unwrap_or_else(|| Local::now().timestamp());
+        let eid = nonempty_str(val.get("uuid"))
+            .or_else(|| nonempty_str(val.get("id")))
+            .map(str::to_string)
+            .unwrap_or_else(|| sha256_str(trimmed.as_bytes()));
+        let total_cost = val.get("total_cost_usd").and_then(parse_f64).filter(|c| *c > 0.0);
+        let rec = UsageRecord {
+            request_id: format!("claude_desktop:{eid}"),
+            alternate_request_ids: Vec::new(),
+            dedup_namespace: None,
+            semantic_id: None,
+            has_entry_id: true,
+            provider_id: "_claude_desktop_session".to_string(),
+            app_type: "claude_desktop".to_string(),
+            model: model.clone(),
+            request_model: model,
+            fresh_input_tokens: inp,
+            output_tokens: out,
+            cache_read_tokens: cr,
+            cache_creation_tokens: cc,
+            cache_creation_1h_tokens: 0,
+            explicit_cost: total_cost.map(|total| CostBreakdown {
+                total,
+                ..CostBreakdown::default()
+            }),
+            status_code: 200,
+            error_message: None,
+            session_id: Some(session_id.clone()),
+            provider_type: "claude_desktop_session",
+            data_source: "claude_desktop_session",
+            is_streaming: false,
+            created_at,
+            update_if_higher_output: false,
+        };
+        let _ = insert_or_update_record(conn, pricing, &rec, report);
+    }
+    line_num
 }
 
 // ---------------------------------------------------------------------------
@@ -2173,6 +2336,317 @@ fn ingest_antigravity_jsonl(
     line_num
 }
 
+const AGY_MAX_GENERATION_TOKENS: u64 = 100_000_000;
+const AGY_MIN_GENERATION_TIMESTAMP: u64 = 1_577_836_800;
+
+struct AgyProtoField {
+    number: u64,
+    varint: Option<u64>,
+    bytes: Option<Vec<u8>>,
+}
+
+fn agy_decode_varint(data: &[u8], mut offset: usize) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    let mut shift = 0u32;
+    for _ in 0..10 {
+        let byte = *data.get(offset)?;
+        offset += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some((value, offset));
+        }
+        shift += 7;
+    }
+    None
+}
+
+fn agy_parse_proto_fields(data: &[u8]) -> Vec<AgyProtoField> {
+    let mut fields = Vec::new();
+    let mut index = 0usize;
+    while index < data.len() {
+        let Some((key, next)) = agy_decode_varint(data, index) else {
+            break;
+        };
+        index = next;
+        let number = key >> 3;
+        let wire_type = key & 0x7;
+        let (varint, bytes) = match wire_type {
+            0 => match agy_decode_varint(data, index) {
+                Some((v, n)) => {
+                    index = n;
+                    (Some(v), None)
+                }
+                None => break,
+            },
+            2 => {
+                let Some((length, n)) = agy_decode_varint(data, index) else {
+                    break;
+                };
+                index = n;
+                let Some(end) = usize::try_from(length).ok().and_then(|l| index.checked_add(l)) else {
+                    break;
+                };
+                if end > data.len() {
+                    break;
+                }
+                let slice = data[index..end].to_vec();
+                index = end;
+                (None, Some(slice))
+            }
+            1 => {
+                let Some(end) = index.checked_add(8) else { break };
+                if end > data.len() { break; }
+                index = end;
+                (None, None)
+            }
+            5 => {
+                let Some(end) = index.checked_add(4) else { break };
+                if end > data.len() { break; }
+                index = end;
+                (None, None)
+            }
+            _ => break,
+        };
+        fields.push(AgyProtoField { number, varint, bytes });
+    }
+    fields
+}
+
+fn agy_step_timestamp(metadata: &[u8]) -> Option<u64> {
+    for field in agy_parse_proto_fields(metadata) {
+        if field.number != 1 {
+            continue;
+        }
+        let Some(inner) = field.bytes else { continue };
+        for sub in agy_parse_proto_fields(&inner) {
+            if sub.number == 1
+                && let Some(val) = sub.varint.filter(|v| *v >= AGY_MIN_GENERATION_TIMESTAMP)
+            {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
+fn agy_decode_generation(data: &[u8], fallback_ts: Option<u64>) -> Option<(String, u32, u32, u32, i64)> {
+    let mut model = String::new();
+    let mut input = 0u64;
+    let mut output = 0u64;
+    let mut cached = 0u64;
+    let mut thoughts = 0u64;
+    let mut response: Option<u64> = None;
+    let mut created_at = None;
+    for field in agy_parse_proto_fields(data) {
+        match field.number {
+            19 => {
+                if let Some(bytes) = field.bytes
+                    && let Ok(name) = String::from_utf8(bytes)
+                    && name.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+                {
+                    model = name;
+                }
+            }
+            4 => {
+                let Some(bytes) = field.bytes else { continue };
+                for token in agy_parse_proto_fields(&bytes) {
+                    let Some(val) = token.varint else { continue };
+                    match token.number {
+                        2 => input = val,
+                        3 => output = val,
+                        5 => cached = val,
+                        9 => thoughts = val,
+                        10 => response = Some(val),
+                        _ => {}
+                    }
+                }
+            }
+            9 => {
+                let Some(bytes) = field.bytes else { continue };
+                for nested in agy_parse_proto_fields(&bytes) {
+                    if nested.number != 4 { continue; }
+                    let Some(inner) = nested.bytes else { continue };
+                    for stamp in agy_parse_proto_fields(&inner) {
+                        if stamp.number == 1 {
+                            created_at = stamp.varint.filter(|v| *v >= AGY_MIN_GENERATION_TIMESTAMP);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let created_at = created_at.or(fallback_ts)?;
+    if [input, output, cached, thoughts]
+        .iter()
+        .any(|v| *v > AGY_MAX_GENERATION_TOKENS)
+    {
+        return None;
+    }
+    let final_out = response.unwrap_or_else(|| output.saturating_sub(thoughts));
+    if input == 0 && final_out == 0 && cached == 0 {
+        return None;
+    }
+    let model = if model.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        model
+    };
+    Some((
+        model,
+        input.min(u32::MAX as u64) as u32,
+        final_out.min(u32::MAX as u64) as u32,
+        cached.min(u32::MAX as u64) as u32,
+        created_at as i64,
+    ))
+}
+
+fn ingest_antigravity_dbs(
+    conn: &Connection,
+    pricing: &PricingTable,
+    home: &Path,
+    cursors: &HashMap<String, CursorRow>,
+    in_tx: &mut bool,
+    report: &mut SessionSyncResult,
+) {
+    // Pick the newest conversation DB per UUID across CLI/IDE profiles.
+    let mut newest: HashMap<String, (u64, PathBuf)> = HashMap::new();
+    for sub in ["antigravity-cli", "antigravity-ide", "antigravity"] {
+        let conv_dir = home.join(".gemini").join(sub).join("conversations");
+        let Ok(entries) = fs::read_dir(&conv_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("db") {
+                continue;
+            }
+            let Some(cid) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let stamp = FileStamp::from_sqlite_path(&path).mtime_millis.max(0) as u64;
+            match newest.get(cid) {
+                Some((prev, _)) if *prev >= stamp => {}
+                _ => {
+                    newest.insert(cid.to_string(), (stamp, path));
+                }
+            }
+        }
+    }
+    if newest.is_empty() {
+        return;
+    }
+
+    // Conversations already covered by transcript token rows stay transcript-owned
+    // so we never double-count CLI sessions when both transcript and DB exist.
+    let mut covered_cids: HashSet<String> = HashSet::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT session_id FROM proxy_request_logs WHERE app_type = 'agy' AND data_source = 'agy_session' AND session_id IS NOT NULL",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for sid in rows.flatten() {
+                covered_cids.insert(sid);
+            }
+        }
+    }
+
+    let mut dbs: Vec<(String, PathBuf)> = newest.into_iter().map(|(cid, (_, p))| (cid, p)).collect();
+    dbs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (cid, db_path) in dbs {
+        if covered_cids.contains(&cid) {
+            continue;
+        }
+        let stamp = FileStamp::from_sqlite_path(&db_path);
+        let key = format!("agy_db:{}", db_path.to_string_lossy());
+        report.files_scanned += 1;
+        if cursors.get(&key).is_some_and(|c| stamp.matches(c)) {
+            continue;
+        }
+        begin_tx_once(conn, in_tx);
+        let mut rows_seen: i64 = 0;
+        if let Ok(agy_conn) = open_readonly_sqlite(&db_path) {
+            let step_ts: HashMap<u64, u64> = agy_conn
+                .prepare("SELECT idx, metadata FROM steps")
+                .ok()
+                .and_then(|mut stmt| {
+                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, Vec<u8>>(1)?)))
+                        .ok()
+                        .map(|rows| {
+                            rows.flatten()
+                                .filter_map(|(idx, meta)| agy_step_timestamp(&meta).map(|ts| (idx, ts)))
+                                .collect()
+                        })
+                })
+                .unwrap_or_default();
+
+            if let Ok(mut stmt) = agy_conn.prepare("SELECT idx, data FROM gen_metadata ORDER BY idx ASC")
+                && let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, Vec<u8>>(1)?)))
+            {
+                for (idx, data) in rows.flatten() {
+                    let fallback_ts = agy_parse_proto_fields(&data)
+                        .into_iter()
+                        .filter(|f| f.number == 2)
+                        .filter_map(|f| f.bytes)
+                        .filter_map(|bytes| {
+                            let mut vals = Vec::new();
+                            let mut off = 0;
+                            while off < bytes.len() {
+                                let (v, n) = agy_decode_varint(&bytes, off)?;
+                                vals.push(v);
+                                off = n;
+                            }
+                            Some(vals)
+                        })
+                        .flatten()
+                        .find_map(|step| step_ts.get(&step).copied());
+                    let mut rec_idx = 0u64;
+                    for field in agy_parse_proto_fields(&data) {
+                        if field.number != 1 {
+                            continue;
+                        }
+                        let Some(bytes) = field.bytes else { continue };
+                        let Some((model_name, inp, out, cached, created_at)) =
+                            agy_decode_generation(&bytes, fallback_ts)
+                        else {
+                            continue;
+                        };
+                        rows_seen += 1;
+                        let rec = UsageRecord {
+                            request_id: format!("agy_db:{cid}:gen:{idx}:{rec_idx}"),
+                            alternate_request_ids: Vec::new(),
+                            dedup_namespace: None,
+                            semantic_id: None,
+                            has_entry_id: true,
+                            provider_id: "_agy_session".to_string(),
+                            app_type: "agy".to_string(),
+                            model: normalize_agy_model_slug(&model_name),
+                            request_model: model_name,
+                            fresh_input_tokens: inp,
+                            output_tokens: out,
+                            cache_read_tokens: cached,
+                            cache_creation_tokens: 0,
+                            cache_creation_1h_tokens: 0,
+                            explicit_cost: None,
+                            status_code: 200,
+                            error_message: None,
+                            session_id: Some(cid.clone()),
+                            provider_type: "agy_db",
+                            data_source: "agy_db",
+                            is_streaming: true,
+                            created_at,
+                            update_if_higher_output: false,
+                        };
+                        let _ = insert_or_update_record(conn, pricing, &rec, report);
+                        rec_idx += 1;
+                    }
+                }
+            }
+        }
+        save_cursor(conn, &key, stamp, rows_seen);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 5. Gemini CLI (.json & .jsonl)
 // ---------------------------------------------------------------------------
@@ -2362,7 +2836,68 @@ fn ingest_opencode_db(
     };
     let mut rows_seen: i64 = 0;
 
-    // Strategy A: V1 `message` table (`id`, `session_id`, `time_created`, `data`)
+    // OpenCode 2.0 migrated `session`/`message` to `session_v2`/`session_message` while often
+    // leaving the old tables behind; detect V2 first and read only the live store.
+    let has_v2 = table_has_columns(&oc_conn, "session_v2", &["id"])
+        && table_has_columns(&oc_conn, "session_message", &["id", "session_id", "data"]);
+
+    if has_v2 {
+        let msg_cols = table_columns(&oc_conn, "session_message");
+        let sess_cols = table_columns(&oc_conn, "session_v2");
+        let type_sel = if msg_cols.contains("type") {
+            "m.type"
+        } else {
+            "NULL"
+        };
+        let fork_sel = if sess_cols.contains("fork_session_id") && sess_cols.contains("time_created") {
+            "CASE WHEN s.fork_session_id IS NOT NULL THEN s.time_created ELSE NULL END"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "SELECT m.id, m.session_id, m.time_created, m.data, {type_sel}, {fork_sel}
+             FROM session_message m
+             LEFT JOIN session_v2 s ON s.id = m.session_id
+             ORDER BY m.rowid ASC"
+        );
+        if let Ok(mut stmt) = oc_conn.prepare(&sql) {
+            if let Ok(rows) = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                ))
+            }) {
+                for (msg_id, sid, t_created, data_str, msg_type, fork_cutoff) in rows.flatten() {
+                    rows_seen += 1;
+                    // Drop forked parent history copied before the fork timestamp.
+                    if let (Some(tc), Some(cutoff)) = (t_created, fork_cutoff)
+                        && tc < cutoff
+                    {
+                        continue;
+                    }
+                    if let Ok(data) = serde_json::from_str::<Value>(&data_str) {
+                        ingest_opencode_payload(
+                            conn,
+                            pricing,
+                            &msg_id,
+                            &sid,
+                            t_created,
+                            msg_type.as_deref(),
+                            &data,
+                            report,
+                        );
+                    }
+                }
+            }
+        }
+        return rows_seen;
+    }
+
+    // V1 `message` table (`id`, `session_id`, `time_created`, `data`)
     if table_has_columns(&oc_conn, "message", &["id", "session_id", "data"]) {
         if let Ok(mut stmt) = oc_conn
             .prepare("SELECT id, session_id, time_created, data FROM message ORDER BY rowid ASC")
@@ -2385,44 +2920,10 @@ fn ingest_opencode_db(
                             &msg_id,
                             &sid,
                             t_created,
+                            None,
                             &data,
                             report,
                         );
-                    }
-                }
-            }
-        }
-    }
-
-    // Strategy B: V2 `session_message` (or `session_v2` aggregate / JSON data)
-    if rows_seen == 0 && table_has_columns(&oc_conn, "session_message", &["id", "session_id"]) {
-        let cols = table_columns(&oc_conn, "session_message");
-        if cols.contains("data") {
-            if let Ok(mut stmt) = oc_conn.prepare(
-                "SELECT id, session_id, time_created, data FROM session_message ORDER BY rowid ASC",
-            ) {
-                if let Ok(rows) = stmt.query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, Option<i64>>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
-                }) {
-                    for row in rows.flatten() {
-                        rows_seen += 1;
-                        let (msg_id, sid, t_created, data_str) = row;
-                        if let Ok(data) = serde_json::from_str::<Value>(&data_str) {
-                            ingest_opencode_payload(
-                                conn,
-                                pricing,
-                                &msg_id,
-                                &sid,
-                                t_created,
-                                &data,
-                                report,
-                            );
-                        }
                     }
                 }
             }
@@ -2457,20 +2958,25 @@ fn ingest_opencode_message_json(
         })
         .unwrap_or("opencode-session")
         .to_string();
-    ingest_opencode_payload(conn, pricing, &msg_id, &sid, None, &data, report);
+    ingest_opencode_payload(conn, pricing, &msg_id, &sid, None, None, &data, report);
     1
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_opencode_payload(
     conn: &Connection,
     pricing: &PricingTable,
     msg_id: &str,
     session_id: &str,
     fallback_created: Option<i64>,
+    role_override: Option<&str>,
     data: &Value,
     report: &mut SessionSyncResult,
 ) {
-    if data.get("role").and_then(Value::as_str) != Some("assistant") {
+    let is_assistant = role_override == Some("assistant")
+        || data.get("role").and_then(Value::as_str) == Some("assistant")
+        || data.get("type").and_then(Value::as_str) == Some("assistant");
+    if !is_assistant {
         return;
     }
     let Some(tokens) = data.get("tokens") else {
@@ -2559,8 +3065,97 @@ fn ingest_opencode_payload(
 }
 
 // ---------------------------------------------------------------------------
-// 7. Grok (`updates.jsonl`)
+// 7. Grok (`updates.jsonl` & `~/.grok/logs/unified.jsonl`)
 // ---------------------------------------------------------------------------
+
+fn ingest_grok_unified_log(
+    conn: &Connection,
+    pricing: &PricingTable,
+    path: &Path,
+    report: &mut SessionSyncResult,
+) -> i64 {
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    let mut line_num: i64 = 0;
+
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        line_num += 1;
+        if !line.contains("shell.turn.inference_done") {
+            continue;
+        }
+        let Ok(val) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if val.get("msg").and_then(Value::as_str) != Some("shell.turn.inference_done") {
+            continue;
+        }
+        let Some(ctx) = val.get("ctx").filter(|c| c.is_object()) else {
+            continue;
+        };
+        let has_tokens = [
+            "prompt_tokens",
+            "cached_prompt_tokens",
+            "completion_tokens",
+            "reasoning_tokens",
+        ]
+        .iter()
+        .any(|k| ctx.get(*k).is_some());
+        if !has_tokens {
+            continue;
+        }
+        let Some(sid) = nonempty_str(val.get("sid")).map(str::to_string) else {
+            continue;
+        };
+        let Some(created_at) = val.get("timestamp").and_then(parse_any_timestamp) else {
+            continue;
+        };
+        let prompt = get_u32(ctx, &["prompt_tokens"]);
+        let cached = get_u32(ctx, &["cached_prompt_tokens"]).min(prompt);
+        let completion = get_u32(ctx, &["completion_tokens"]);
+        let reasoning = get_u32(ctx, &["reasoning_tokens"]).min(completion);
+        let fresh = prompt.saturating_sub(cached);
+        if fresh == 0 && cached == 0 && completion == 0 {
+            continue;
+        }
+        let loop_idx = ctx.get("loop_index").and_then(Value::as_u64).unwrap_or(0);
+        let attempts = ctx.get("attempts").and_then(Value::as_u64).unwrap_or(0);
+        let model = nonempty_str(ctx.get("model"))
+            .unwrap_or("unknown")
+            .to_string();
+        let req_id = format!(
+            "grok_unified:{sid}:inference:{created_at}:{loop_idx}:{attempts}:{prompt}:{cached}:{completion}:{reasoning}"
+        );
+        let rec = UsageRecord {
+            request_id: req_id,
+            alternate_request_ids: Vec::new(),
+            dedup_namespace: None,
+            semantic_id: None,
+            has_entry_id: true,
+            provider_id: "_grok_session".to_string(),
+            app_type: "grok".to_string(),
+            model: model.clone(),
+            request_model: model,
+            fresh_input_tokens: fresh,
+            output_tokens: completion,
+            cache_read_tokens: cached,
+            cache_creation_tokens: 0,
+            cache_creation_1h_tokens: 0,
+            explicit_cost: None,
+            status_code: 200,
+            error_message: None,
+            session_id: Some(sid),
+            provider_type: "grok_session",
+            data_source: "grok_session",
+            is_streaming: true,
+            created_at,
+            update_if_higher_output: false,
+        };
+        let _ = insert_or_update_record(conn, pricing, &rec, report);
+    }
+
+    line_num
+}
 
 fn ingest_grok_updates(
     conn: &Connection,
@@ -2571,7 +3166,7 @@ fn ingest_grok_updates(
     let Ok(file) = File::open(path) else {
         return 0;
     };
-    let session_id = path
+    let default_session_id = path
         .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
@@ -2587,43 +3182,75 @@ fn ingest_grok_updates(
         let Ok(val) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        let update = val.get("update").unwrap_or(&val);
-        if update.get("type").and_then(Value::as_str) != Some("turn_completed") {
+        let update = val
+            .pointer("/params/update")
+            .or_else(|| val.get("update"))
+            .unwrap_or(&val);
+        let is_turn_done = update.get("type").and_then(Value::as_str) == Some("turn_completed")
+            || update.get("sessionUpdate").and_then(Value::as_str) == Some("turn_completed");
+        if !is_turn_done {
             continue;
         }
+        let session_id = nonempty_str(val.pointer("/params/sessionId"))
+            .map(str::to_string)
+            .unwrap_or_else(|| default_session_id.clone());
         let created_at = val
             .get("timestamp")
             .and_then(parse_any_timestamp)
             .or_else(|| update.get("timestamp").and_then(parse_any_timestamp))
             .unwrap_or_else(|| Local::now().timestamp());
         let turn_id = nonempty_str(update.get("turnId"))
+            .or_else(|| nonempty_str(update.get("prompt_id")))
+            .or_else(|| nonempty_str(update.get("promptId")))
             .or_else(|| nonempty_str(val.get("id")))
             .map(str::to_string)
             .unwrap_or_else(|| format!("line-{line_num}"));
 
-        if let Some(model_map) = update.get("modelUsage").and_then(Value::as_object) {
+        let model_map_opt = update
+            .get("modelUsage")
+            .or_else(|| update.get("usage").and_then(|u| u.get("modelUsage")))
+            .and_then(Value::as_object);
+
+        if let Some(model_map) = model_map_opt {
             for (model_name, usage) in model_map {
                 let raw_inp = get_u32(usage, &["inputTokens", "input_tokens"]);
-                let cached = get_u32(usage, &["cachedInputTokens", "cached_input_tokens"]);
+                let cached = get_u32(
+                    usage,
+                    &[
+                        "cachedReadTokens",
+                        "cacheReadInputTokens",
+                        "cachedInputTokens",
+                        "cached_input_tokens",
+                    ],
+                )
+                .min(raw_inp);
+                let created_cache = get_u32(
+                    usage,
+                    &["cacheCreationTokens", "cacheCreationInputTokens"],
+                )
+                .min(raw_inp.saturating_sub(cached));
                 let out = get_u32(usage, &["outputTokens", "output_tokens"])
                     .saturating_add(get_u32(usage, &["reasoningTokens", "reasoning_tokens"]));
-                let fresh_inp = raw_inp.saturating_sub(cached);
-                let ticks = usage
-                    .get("costUsdTicks")
+                let fresh_inp = raw_inp
+                    .saturating_sub(cached)
+                    .saturating_sub(created_cache);
+                let explicit_cost_val = usage
+                    .get("costUSD")
+                    .or_else(|| usage.get("costUsd"))
                     .and_then(parse_f64)
-                    .unwrap_or(0.0);
-                let explicit_cost = if ticks > 0.0 {
-                    Some(CostBreakdown {
-                        input: 0.0,
-                        output: 0.0,
-                        cache_read: 0.0,
-                        cache_creation: 0.0,
-                        total: ticks / 10_000_000_000.0,
-                    })
-                } else {
-                    None
-                };
-                if fresh_inp == 0 && cached == 0 && out == 0 && explicit_cost.is_none() {
+                    .filter(|c| *c > 0.0)
+                    .or_else(|| {
+                        usage
+                            .get("costUsdTicks")
+                            .and_then(parse_f64)
+                            .filter(|t| *t > 0.0)
+                            .map(|ticks| ticks / 10_000_000_000.0)
+                    });
+                let explicit_cost = explicit_cost_val.map(|total| CostBreakdown {
+                    total,
+                    ..CostBreakdown::default()
+                });
+                if fresh_inp == 0 && cached == 0 && created_cache == 0 && out == 0 && explicit_cost.is_none() {
                     continue;
                 }
                 let rec = UsageRecord {
@@ -2639,7 +3266,7 @@ fn ingest_grok_updates(
                     fresh_input_tokens: fresh_inp,
                     output_tokens: out,
                     cache_read_tokens: cached,
-                    cache_creation_tokens: 0,
+                    cache_creation_tokens: created_cache,
                     cache_creation_1h_tokens: 0,
                     explicit_cost,
                     status_code: 200,
@@ -2663,6 +3290,184 @@ fn ingest_grok_updates(
 // 8. Kimi (`wire.jsonl` / `trees/*.jsonl`)
 // ---------------------------------------------------------------------------
 
+fn kimi_session_id_from_path(path: &Path) -> String {
+    if let Some(agents) = path
+        .ancestors()
+        .find(|a| a.file_name().is_some_and(|n| n == "agents"))
+        && let Some(name) = agents.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+    {
+        return name.to_string();
+    }
+    if let Some(trees) = path
+        .ancestors()
+        .find(|a| a.file_name().is_some_and(|n| n == "trees"))
+        && let Some(name) = trees.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+        && !name.trim().is_empty()
+    {
+        return name.to_string();
+    }
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("kimi")
+        .to_string()
+}
+
+fn collect_kimi_records(
+    val: &Value,
+    trimmed_raw: &str,
+    session_id: &str,
+    current_model: &mut String,
+    depth: usize,
+    out: &mut Vec<UsageRecord>,
+) {
+    if depth > 32 {
+        return;
+    }
+    let kind = val.get("type").and_then(Value::as_str).unwrap_or("");
+    let payload = val.get("payload").unwrap_or(val);
+
+    // Python Kimi CLI wraps child usage inside recursive SubagentEvent nodes.
+    if kind == "SubagentEvent" {
+        if let Some(inner) = payload.get("event") {
+            collect_kimi_records(inner, trimmed_raw, session_id, current_model, depth + 1, out);
+        }
+        return;
+    }
+
+    // Kimi Code `usage.record` format: record.usage with camelCase keys
+    if kind == "usage.record" {
+        let rec_val = val.get("record").unwrap_or(val);
+        if let Some(tu) = rec_val.get("usage") {
+            let model = nonempty_str(rec_val.get("model"))
+                .or_else(|| nonempty_str(rec_val.pointer("/model/model")))
+                .map(str::to_string)
+                .unwrap_or_else(|| current_model.clone());
+            let inp = get_u32(tu, &["inputOther", "input_other", "input_tokens", "input"]);
+            let cr = get_u32(tu, &["inputCacheRead", "input_cache_read", "cached_tokens"]);
+            let cw = get_u32(tu, &["inputCacheCreation", "input_cache_creation"]);
+            let output = get_u32(tu, &["output", "output_tokens", "completion_tokens"]);
+            if inp > 0 || cr > 0 || cw > 0 || output > 0 {
+                let provider = nonempty_str(rec_val.get("provider"))
+                    .or_else(|| nonempty_str(rec_val.pointer("/model/provider")))
+                    .unwrap_or("_kimi_session")
+                    .to_string();
+                let created_at = rec_val
+                    .get("time")
+                    .or_else(|| rec_val.get("at"))
+                    .or_else(|| val.get("timestamp"))
+                    .and_then(parse_any_timestamp)
+                    .unwrap_or_else(|| Local::now().timestamp());
+                let eid = nonempty_str(rec_val.get("messageId"))
+                    .or_else(|| nonempty_str(rec_val.get("responseId")))
+                    .or_else(|| nonempty_str(val.get("id")))
+                    .map(str::to_string)
+                    .unwrap_or_else(|| sha256_str(trimmed_raw.as_bytes()));
+                out.push(UsageRecord {
+                    request_id: format!("kimi_session:{session_id}:{eid}"),
+                    alternate_request_ids: Vec::new(),
+                    dedup_namespace: None,
+                    semantic_id: None,
+                    has_entry_id: true,
+                    provider_id: provider,
+                    app_type: "kimi".to_string(),
+                    model: model.clone(),
+                    request_model: model,
+                    fresh_input_tokens: inp,
+                    output_tokens: output,
+                    cache_read_tokens: cr,
+                    cache_creation_tokens: cw,
+                    cache_creation_1h_tokens: 0,
+                    explicit_cost: None,
+                    status_code: 200,
+                    error_message: None,
+                    session_id: Some(session_id.to_string()),
+                    provider_type: "kimi_session",
+                    data_source: "kimi_session",
+                    is_streaming: true,
+                    created_at,
+                    update_if_higher_output: false,
+                });
+            }
+        }
+        return;
+    }
+
+    let msg = val.get("message").unwrap_or(val);
+    if let Some(m) = nonempty_str(msg.get("model"))
+        .or_else(|| nonempty_str(val.get("model")))
+        .or_else(|| nonempty_str(payload.get("model")))
+    {
+        *current_model = m.to_string();
+    }
+    let token_usage = msg
+        .get("token_usage")
+        .or_else(|| msg.get("usage"))
+        .or_else(|| payload.get("token_usage").or_else(|| payload.get("usage")));
+    let Some(tu) = token_usage else {
+        return;
+    };
+    let raw_inp = get_u32(tu, &["input_other", "inputOther", "input_tokens", "input", "prompt_tokens"]);
+    let cr = get_u32(
+        tu,
+        &[
+            "input_cache_read",
+            "inputCacheRead",
+            "cached_tokens",
+            "cache_read_input_tokens",
+            "cacheRead",
+        ],
+    );
+    let cw = get_u32(
+        tu,
+        &[
+            "input_cache_creation",
+            "inputCacheCreation",
+            "cache_creation_input_tokens",
+            "cacheWrite",
+        ],
+    );
+    let output = get_u32(tu, &["output", "output_tokens", "completion_tokens"]);
+    if raw_inp == 0 && cr == 0 && cw == 0 && output == 0 {
+        return;
+    }
+    let created_at = val
+        .get("timestamp")
+        .or_else(|| payload.get("timestamp"))
+        .and_then(parse_any_timestamp)
+        .unwrap_or_else(|| Local::now().timestamp());
+    let eid = nonempty_str(val.get("message_id"))
+        .or_else(|| nonempty_str(payload.get("message_id")))
+        .or_else(|| nonempty_str(val.get("id")))
+        .map(str::to_string)
+        .unwrap_or_else(|| sha256_str(trimmed_raw.as_bytes()));
+    out.push(UsageRecord {
+        request_id: format!("kimi_session:{session_id}:{eid}"),
+        alternate_request_ids: Vec::new(),
+        dedup_namespace: None,
+        semantic_id: None,
+        has_entry_id: true,
+        provider_id: "_kimi_session".to_string(),
+        app_type: "kimi".to_string(),
+        model: current_model.clone(),
+        request_model: current_model.clone(),
+        fresh_input_tokens: raw_inp,
+        output_tokens: output,
+        cache_read_tokens: cr,
+        cache_creation_tokens: cw,
+        cache_creation_1h_tokens: 0,
+        explicit_cost: None,
+        status_code: 200,
+        error_message: None,
+        session_id: Some(session_id.to_string()),
+        provider_type: "kimi_session",
+        data_source: "kimi_session",
+        is_streaming: true,
+        created_at,
+        update_if_higher_output: false,
+    });
+}
+
 fn ingest_kimi_jsonl(
     conn: &Connection,
     pricing: &PricingTable,
@@ -2672,12 +3477,7 @@ fn ingest_kimi_jsonl(
     let Ok(file) = File::open(path) else {
         return 0;
     };
-    let session_id = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("kimi")
-        .to_string();
+    let mut session_id = kimi_session_id_from_path(path);
     let mut line_num: i64 = 0;
     let mut current_model = "kimi-k2.5".to_string();
 
@@ -2687,84 +3487,26 @@ fn ingest_kimi_jsonl(
         if trimmed.is_empty() {
             continue;
         }
-        let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
+        let Ok(raw_val) = serde_json::from_str::<Value>(trimmed) else {
             continue;
         };
-        let msg = val.get("message").unwrap_or(&val);
-        if let Some(m) = nonempty_str(msg.get("model"))
-            .or_else(|| nonempty_str(val.get("model")))
-            .or_else(|| val.get("payload").and_then(|p| nonempty_str(p.get("model"))))
-        {
-            current_model = m.to_string();
+        if let Some(tree) = nonempty_str(raw_val.get("tree")) {
+            session_id = tree.to_string();
         }
-        let token_usage = msg
-            .get("token_usage")
-            .or_else(|| msg.get("usage"))
-            .or_else(|| {
-                val.get("payload")
-                    .and_then(|p| p.get("token_usage").or_else(|| p.get("usage")))
-            });
-        let Some(tu) = token_usage else {
-            continue;
-        };
-        let raw_inp = get_u32(tu, &["input_other", "input_tokens", "input", "prompt_tokens"]);
-        let cr = get_u32(
-            tu,
-            &[
-                "input_cache_read",
-                "cached_tokens",
-                "cache_read_input_tokens",
-                "cacheRead",
-            ],
+        let val = raw_val.pointer("/payload/data").unwrap_or(&raw_val);
+        let target = val.get("message").unwrap_or(val);
+        let mut records = Vec::new();
+        collect_kimi_records(
+            target,
+            trimmed,
+            &session_id,
+            &mut current_model,
+            0,
+            &mut records,
         );
-        let cw = get_u32(
-            tu,
-            &[
-                "input_cache_creation",
-                "cache_creation_input_tokens",
-                "cacheWrite",
-            ],
-        );
-        let out = get_u32(tu, &["output", "output_tokens", "completion_tokens"]);
-        if raw_inp == 0 && cr == 0 && cw == 0 && out == 0 {
-            continue;
+        for rec in records {
+            let _ = insert_or_update_record(conn, pricing, &rec, report);
         }
-        let created_at = val
-            .get("timestamp")
-            .and_then(parse_any_timestamp)
-            .unwrap_or_else(|| Local::now().timestamp());
-        let eid = nonempty_str(val.get("message_id"))
-            .or_else(|| val.get("payload").and_then(|p| nonempty_str(p.get("message_id"))))
-            .or_else(|| nonempty_str(val.get("id")))
-            .map(str::to_string)
-            .unwrap_or_else(|| sha256_str(trimmed.as_bytes()));
-
-        let rec = UsageRecord {
-            request_id: format!("kimi_session:{session_id}:{eid}"),
-            alternate_request_ids: Vec::new(),
-            dedup_namespace: None,
-            semantic_id: None,
-            has_entry_id: true,
-            provider_id: "_kimi_session".to_string(),
-            app_type: "kimi".to_string(),
-            model: current_model.clone(),
-            request_model: current_model.clone(),
-            fresh_input_tokens: raw_inp,
-            output_tokens: out,
-            cache_read_tokens: cr,
-            cache_creation_tokens: cw,
-            cache_creation_1h_tokens: 0,
-            explicit_cost: None,
-            status_code: 200,
-            error_message: None,
-            session_id: Some(session_id.clone()),
-            provider_type: "kimi_session",
-            data_source: "kimi_session",
-            is_streaming: true,
-            created_at,
-            update_if_higher_output: false,
-        };
-        let _ = insert_or_update_record(conn, pricing, &rec, report);
     }
 
     line_num
@@ -2773,6 +3515,151 @@ fn ingest_kimi_jsonl(
 // ---------------------------------------------------------------------------
 // 9. OpenClaw (`agents/*/sessions/*.jsonl` & `openclaw-agent.sqlite`)
 // ---------------------------------------------------------------------------
+
+fn parse_openclaw_event_record(
+    val: &Value,
+    session_id: &str,
+    fallback_id: String,
+    fallback_ts: Option<i64>,
+) -> Option<UsageRecord> {
+    let msg = val.get("message").unwrap_or(val);
+    let role = msg.get("role").and_then(Value::as_str).unwrap_or("");
+    if role != "assistant" && val.get("type").and_then(Value::as_str) != Some("assistant") {
+        return None;
+    }
+    let usage = msg.get("usage").or_else(|| val.get("usage"))?;
+    let mut inp = get_u32(
+        usage,
+        &[
+            "input",
+            "inputTokens",
+            "input_tokens",
+            "promptTokens",
+            "prompt_tokens",
+            "prompt_n",
+        ],
+    );
+    let out = get_u32(
+        usage,
+        &[
+            "output",
+            "outputTokens",
+            "output_tokens",
+            "completionTokens",
+            "completion_tokens",
+        ],
+    );
+    let cr = get_u32(
+        usage,
+        &[
+            "cacheRead",
+            "cache_read",
+            "cache_read_input_tokens",
+            "cached_input_tokens",
+            "cached",
+            "cached_tokens",
+        ],
+    )
+    .max(
+        usage
+            .pointer("/input_tokens_details/cached_tokens")
+            .or_else(|| usage.pointer("/prompt_tokens_details/cached_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
+    );
+    let cw = get_u32(
+        usage,
+        &[
+            "cacheWrite",
+            "cache_write",
+            "cache_creation_input_tokens",
+            "cache_write_input_tokens",
+        ],
+    )
+    .max(
+        usage
+            .pointer("/input_tokens_details/cache_write_tokens")
+            .or_else(|| usage.pointer("/prompt_tokens_details/cache_write_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(u32::MAX as u64) as u32,
+    );
+    let direct_input = usage.get("input").is_some();
+    if usage.get("cached_tokens").is_some()
+        || usage.pointer("/input_tokens_details/cached_tokens").is_some()
+        || usage.pointer("/prompt_tokens_details/cached_tokens").is_some()
+        || (!direct_input
+            && (usage.get("cached_input_tokens").is_some() || usage.get("cached").is_some()))
+    {
+        inp = inp.saturating_sub(cr);
+    }
+    if !direct_input
+        && (usage.get("cache_write_input_tokens").is_some()
+            || usage.pointer("/input_tokens_details/cache_write_tokens").is_some()
+            || usage.pointer("/prompt_tokens_details/cache_write_tokens").is_some())
+    {
+        inp = inp.saturating_sub(cw);
+    }
+    let cost_total = usage
+        .get("cost")
+        .and_then(|c| c.get("total"))
+        .and_then(parse_f64)
+        .unwrap_or(0.0);
+    if inp == 0 && out == 0 && cr == 0 && cw == 0 && cost_total <= 0.0 {
+        return None;
+    }
+    let model = nonempty_str(msg.get("model"))
+        .or_else(|| nonempty_str(val.get("model")))
+        .unwrap_or("unknown")
+        .to_string();
+    let provider = nonempty_str(msg.get("provider"))
+        .unwrap_or("_openclaw_session")
+        .to_string();
+    let created_at = val
+        .get("timestamp")
+        .and_then(parse_any_timestamp)
+        .or_else(|| msg.get("timestamp").and_then(parse_any_timestamp))
+        .or(fallback_ts)
+        .unwrap_or_else(|| Local::now().timestamp());
+    let eid = nonempty_str(val.get("id"))
+        .or_else(|| nonempty_str(msg.get("id")))
+        .map(str::to_string)
+        .unwrap_or(fallback_id);
+
+    Some(UsageRecord {
+        request_id: format!("openclaw_session:{session_id}:{eid}"),
+        alternate_request_ids: Vec::new(),
+        dedup_namespace: None,
+        semantic_id: None,
+        has_entry_id: true,
+        provider_id: provider,
+        app_type: "openclaw".to_string(),
+        model: model.clone(),
+        request_model: model,
+        fresh_input_tokens: inp,
+        output_tokens: out,
+        cache_read_tokens: cr,
+        cache_creation_tokens: cw,
+        cache_creation_1h_tokens: 0,
+        explicit_cost: if cost_total > 0.0 {
+            Some(CostBreakdown {
+                total: cost_total,
+                ..CostBreakdown::default()
+            })
+        } else {
+            None
+        },
+        status_code: 200,
+        error_message: None,
+        session_id: Some(session_id.to_string()),
+        provider_type: "openclaw_session",
+        data_source: "openclaw_session",
+        is_streaming: true,
+        created_at,
+        update_if_higher_output: false,
+    })
+}
 
 fn ingest_openclaw_jsonl(
     conn: &Connection,
@@ -2805,76 +3692,9 @@ fn ingest_openclaw_jsonl(
             }
             continue;
         }
-        let msg = val.get("message").unwrap_or(&val);
-        let role = msg.get("role").and_then(Value::as_str).unwrap_or("");
-        if role != "assistant" && val.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
+        if let Some(rec) = parse_openclaw_event_record(&val, &session_id, format!("line-{line_num}"), None) {
+            let _ = insert_or_update_record(conn, pricing, &rec, report);
         }
-        let Some(usage) = msg.get("usage").or_else(|| val.get("usage")) else {
-            continue;
-        };
-        let inp = get_u32(usage, &["input", "input_tokens", "prompt_tokens"]);
-        let out = get_u32(usage, &["output", "output_tokens", "completion_tokens"]);
-        let cr = get_u32(usage, &["cacheRead", "cache_read_input_tokens", "cached_tokens"]);
-        let cw = get_u32(usage, &["cacheWrite", "cache_creation_input_tokens"]);
-        let cost_total = usage
-            .get("cost")
-            .and_then(|c| c.get("total"))
-            .and_then(parse_f64)
-            .unwrap_or(0.0);
-        if inp == 0 && out == 0 && cr == 0 && cw == 0 && cost_total <= 0.0 {
-            continue;
-        }
-        let model = nonempty_str(msg.get("model"))
-            .or_else(|| nonempty_str(val.get("model")))
-            .unwrap_or("unknown")
-            .to_string();
-        let provider = nonempty_str(msg.get("provider"))
-            .unwrap_or("_openclaw_session")
-            .to_string();
-        let created_at = val
-            .get("timestamp")
-            .and_then(parse_any_timestamp)
-            .or_else(|| msg.get("timestamp").and_then(parse_any_timestamp))
-            .unwrap_or_else(|| Local::now().timestamp());
-        let eid = nonempty_str(val.get("id"))
-            .or_else(|| nonempty_str(msg.get("id")))
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("line-{line_num}"));
-
-        let rec = UsageRecord {
-            request_id: format!("openclaw_session:{session_id}:{eid}"),
-            alternate_request_ids: Vec::new(),
-            dedup_namespace: None,
-            semantic_id: None,
-            has_entry_id: true,
-            provider_id: provider,
-            app_type: "openclaw".to_string(),
-            model: model.clone(),
-            request_model: model,
-            fresh_input_tokens: inp,
-            output_tokens: out,
-            cache_read_tokens: cr,
-            cache_creation_tokens: cw,
-            cache_creation_1h_tokens: 0,
-            explicit_cost: if cost_total > 0.0 {
-                Some(CostBreakdown {
-                    total: cost_total,
-                    ..CostBreakdown::default()
-                })
-            } else {
-                None
-            },
-            status_code: 200,
-            error_message: None,
-            session_id: Some(session_id.clone()),
-            provider_type: "openclaw_session",
-            data_source: "openclaw_session",
-            is_streaming: true,
-            created_at,
-            update_if_higher_output: false,
-        };
-        let _ = insert_or_update_record(conn, pricing, &rec, report);
     }
 
     line_num
@@ -2890,6 +3710,46 @@ fn ingest_openclaw_sqlite(
         return 0;
     };
     let mut rows_seen: i64 = 0;
+
+    // 1. Current schema: `transcript_events (session_id, seq, event_json, created_at)`
+    if table_has_columns(&oc_conn, "transcript_events", &["session_id", "seq", "event_json"]) {
+        let cols = table_columns(&oc_conn, "transcript_events");
+        let ts_col = if cols.contains("created_at") {
+            "created_at"
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "SELECT session_id, seq, event_json, {ts_col} FROM transcript_events ORDER BY session_id, seq"
+        );
+        if let Ok(mut stmt) = oc_conn.prepare(&sql)
+            && let Ok(rows) = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?.max(0),
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<ValueOrText>>(3)?,
+                ))
+            })
+        {
+            for (sid, seq, json_str, ts_val) in rows.flatten() {
+                rows_seen += 1;
+                let Ok(event) = serde_json::from_str::<Value>(&json_str) else {
+                    continue;
+                };
+                if let Some(rec) = parse_openclaw_event_record(
+                    &event,
+                    &sid,
+                    format!("seq-{seq}"),
+                    ts_val.map(|v| v.to_ts()),
+                ) {
+                    let _ = insert_or_update_record(conn, pricing, &rec, report);
+                }
+            }
+        }
+    }
+
+    // 2. Legacy `messages` table
     if table_has_columns(&oc_conn, "messages", &["id", "session_id"]) {
         let cols = table_columns(&oc_conn, "messages");
         if cols.contains("usage_json") || cols.contains("usage") {
@@ -2967,115 +3827,308 @@ fn ingest_openclaw_sqlite(
 }
 
 // ---------------------------------------------------------------------------
-// 10. Hermes (`~/.hermes/state.db`)
+// 10. Hermes (`<root>/state.db` + `<root>/profiles/*/state.db`)
 // ---------------------------------------------------------------------------
+
+fn hermes_database_paths(root: &Path) -> Vec<(PathBuf, String)> {
+    let mut dbs = Vec::new();
+    let root_db = root.join("state.db");
+    if root_db.is_file() {
+        dbs.push((root_db, String::new()));
+    }
+    if let Ok(entries) = fs::read_dir(root.join("profiles")) {
+        let mut profiles: Vec<(PathBuf, String)> = entries
+            .flatten()
+            .filter_map(|e| {
+                let db = e.path().join("state.db");
+                db.is_file().then(|| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    (db, format!("profile:{name}:"))
+                })
+            })
+            .collect();
+        profiles.sort_by(|a, b| a.0.cmp(&b.0));
+        dbs.extend(profiles);
+    }
+    dbs
+}
+
+struct HermesRow {
+    sid: String,
+    model: String,
+    provider: Option<String>,
+    scope: String,
+    task: String,
+    inp: u32,
+    out: u32,
+    cr: u32,
+    cw: u32,
+    explicit_cost: Option<CostBreakdown>,
+    created_at: i64,
+    is_legacy: bool,
+}
+
+fn read_hermes_table(h_conn: &Connection, table: &str, model_table: bool) -> Vec<HermesRow> {
+    let cols = table_columns(h_conn, table);
+    if cols.is_empty() {
+        return Vec::new();
+    }
+    let sel = |name: &str, default_expr: &str| -> String {
+        if cols.contains(name) {
+            format!("COALESCE({name}, {default_expr})")
+        } else {
+            default_expr.to_string()
+        }
+    };
+    let sid_col = if model_table { "session_id" } else { "id" };
+    if !cols.contains(sid_col) {
+        return Vec::new();
+    }
+    let model_col = if model_table {
+        sel("model", "'hermes-default'")
+    } else if cols.contains("model") {
+        sel("model", "'hermes-default'")
+    } else {
+        "'hermes-default'".to_string()
+    };
+    let ts_col = if model_table {
+        if cols.contains("last_seen") {
+            "last_seen"
+        } else if cols.contains("first_seen") {
+            "first_seen"
+        } else {
+            "NULL"
+        }
+    } else if cols.contains("ended_at") {
+        "COALESCE(ended_at, started_at)"
+    } else if cols.contains("started_at") {
+        "started_at"
+    } else {
+        "NULL"
+    };
+    let sql = format!(
+        "SELECT {sid_col}, {model_col}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {ts_col} FROM {table}",
+        sel("input_tokens", "0"),
+        sel("output_tokens", "0"),
+        sel("cache_read_tokens", "0"),
+        sel("cache_write_tokens", "0"),
+        sel("actual_cost_usd", "0.0"),
+        sel("estimated_cost_usd", "0.0"),
+        sel("cost_status", "''"),
+        sel("billing_provider", "''"),
+        sel("billing_base_url", "''"),
+        sel("billing_mode", "''"),
+        sel("task", "''"),
+    );
+    let mut out = Vec::new();
+    let Ok(mut stmt) = h_conn.prepare(&sql) else {
+        return out;
+    };
+    let Ok(rows) = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, f64>(6)?,
+            r.get::<_, f64>(7)?,
+            r.get::<_, String>(8)?,
+            r.get::<_, String>(9)?,
+            r.get::<_, String>(10)?,
+            r.get::<_, String>(11)?,
+            r.get::<_, String>(12)?,
+            r.get::<_, Option<ValueOrText>>(13)?,
+        ))
+    }) else {
+        return out;
+    };
+    for (sid, model, inp, out_t, cr, cw, actual, estimated, status, provider, route, mode, task, ts_val) in rows.flatten() {
+        let inp_u = inp.max(0) as u32;
+        let out_u = out_t.max(0) as u32;
+        let cr_u = cr.max(0) as u32;
+        let cw_u = cw.max(0) as u32;
+        let cost = if status == "included" {
+            Some(0.0)
+        } else if actual > 0.0 || matches!(status.as_str(), "actual" | "reported" | "known") {
+            Some(actual.max(0.0))
+        } else if estimated > 0.0 || status == "estimated" {
+            Some(estimated.max(0.0))
+        } else {
+            None
+        };
+        if inp_u == 0 && out_u == 0 && cr_u == 0 && cw_u == 0 && cost.unwrap_or(0.0) <= 0.0 {
+            continue;
+        }
+        let m = if model.trim().is_empty() {
+            "hermes-default".to_string()
+        } else {
+            model
+        };
+        let scope = if model_table {
+            sha256_str(
+                serde_json::json!([provider, route, mode, task])
+                    .to_string()
+                    .as_bytes(),
+            )
+        } else {
+            "legacy".to_string()
+        };
+        out.push(HermesRow {
+            sid,
+            model: m,
+            provider: (!provider.trim().is_empty()).then_some(provider),
+            scope,
+            task,
+            inp: inp_u,
+            out: out_u,
+            cr: cr_u,
+            cw: cw_u,
+            explicit_cost: cost.map(|total| CostBreakdown {
+                total,
+                ..CostBreakdown::default()
+            }),
+            created_at: ts_val
+                .map(|v| v.to_ts())
+                .unwrap_or_else(|| Local::now().timestamp()),
+            is_legacy: !model_table,
+        });
+    }
+    out
+}
 
 fn ingest_hermes_db(
     conn: &Connection,
     pricing: &PricingTable,
     db_path: &Path,
+    source_prefix: &str,
     report: &mut SessionSyncResult,
 ) -> i64 {
     let Ok(h_conn) = open_readonly_sqlite(db_path) else {
         return 0;
     };
-    let cols = table_columns(&h_conn, "sessions");
-    if cols.is_empty() {
-        return 0;
-    }
 
-    let sel = |name: &str, default_expr: &str| -> String {
-        if cols.contains(name) {
-            name.to_string()
-        } else {
-            default_expr.to_string()
-        }
-    };
-
-    let sql = format!(
-        "SELECT id, {}, {}, {}, {}, {}, {}, {} FROM sessions",
-        sel("model", "'hermes-default'"),
-        sel("input_tokens", "0"),
-        sel("output_tokens", "0"),
-        sel("cache_read_tokens", "0"),
-        sel("cache_write_tokens", "0"),
-        sel("estimated_cost_usd", "0.0"),
-        sel("started_at", "NULL")
-    );
-
-    let mut rows_seen: i64 = 0;
-    if let Ok(mut stmt) = h_conn.prepare(&sql) {
-        if let Ok(rows) = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, Option<i64>>(2)?,
-                r.get::<_, Option<i64>>(3)?,
-                r.get::<_, Option<i64>>(4)?,
-                r.get::<_, Option<i64>>(5)?,
-                r.get::<_, Option<f64>>(6)?,
-                r.get::<_, Option<ValueOrText>>(7)?,
-            ))
-        }) {
-            for (sid, model, inp, out, cr, cw, cost_usd, ts_val) in rows.flatten() {
-                rows_seen += 1;
-                let inp_u = inp.unwrap_or(0).max(0) as u32;
-                let out_u = out.unwrap_or(0).max(0) as u32;
-                let cr_u = cr.unwrap_or(0).max(0) as u32;
-                let cw_u = cw.unwrap_or(0).max(0) as u32;
-                let cost = cost_usd.unwrap_or(0.0);
-                if inp_u == 0 && out_u == 0 && cr_u == 0 && cw_u == 0 && cost <= 0.0 {
-                    continue;
-                }
-                let m = model
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or_else(|| "hermes-default".to_string());
-                let rec = UsageRecord {
-                    request_id: format!("hermes_session:{sid}"),
-                    alternate_request_ids: Vec::new(),
-                    dedup_namespace: None,
-                    semantic_id: None,
-                    has_entry_id: true,
-                    provider_id: "_hermes_session".to_string(),
-                    app_type: "hermes".to_string(),
-                    model: m.clone(),
-                    request_model: m,
-                    fresh_input_tokens: inp_u,
-                    output_tokens: out_u,
-                    cache_read_tokens: cr_u,
-                    cache_creation_tokens: cw_u,
-                    cache_creation_1h_tokens: 0,
-                    explicit_cost: if cost > 0.0 {
-                        Some(CostBreakdown {
-                            total: cost,
-                            ..CostBreakdown::default()
-                        })
-                    } else {
-                        None
-                    },
-                    status_code: 200,
-                    error_message: None,
-                    session_id: Some(sid),
-                    provider_type: "hermes_session",
-                    data_source: "hermes_session",
-                    is_streaming: false,
-                    created_at: ts_val
-                        .map(|v| v.to_ts())
-                        .unwrap_or_else(|| Local::now().timestamp()),
-                    // Re-sync existing Hermes session rows when active session token counters rise
-                    update_if_higher_output: true,
-                };
-                let _ = insert_or_update_record(conn, pricing, &rec, report);
+    // Prefer per-model breakdown from `session_model_usage_v21` / `session_model_usage`
+    // (taking the row with higher token total when an interrupted v22 migration left both).
+    type HermesKey = (String, String, String, String);
+    let mut model_rows: Vec<(HermesKey, HermesRow)> = Vec::new();
+    for table in ["session_model_usage_v21", "session_model_usage"] {
+        for row in read_hermes_table(&h_conn, table, true) {
+            let key = (
+                row.sid.clone(),
+                row.model.clone(),
+                row.scope.clone(),
+                row.task.clone(),
+            );
+            let total = |r: &HermesRow| {
+                u64::from(r.inp) + u64::from(r.out) + u64::from(r.cr) + u64::from(r.cw)
+            };
+            match model_rows.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, existing)) if total(existing) < total(&row) => *existing = row,
+                Some(_) => {}
+                None => model_rows.push((key, row)),
             }
         }
+    }
+
+    let main_loop_sessions: HashSet<String> = model_rows
+        .iter()
+        .filter(|(_, r)| r.task.is_empty())
+        .map(|(_, r)| r.sid.clone())
+        .collect();
+
+    let mut all_rows: Vec<HermesRow> = model_rows.into_iter().map(|(_, r)| r).collect();
+    for row in read_hermes_table(&h_conn, "sessions", false) {
+        if !main_loop_sessions.contains(&row.sid) {
+            all_rows.push(row);
+        }
+    }
+
+    let rows_seen = all_rows.len() as i64;
+    for row in all_rows {
+        let req_id = if row.is_legacy {
+            format!("hermes_session:{source_prefix}{}", row.sid)
+        } else {
+            format!(
+                "hermes_session:{source_prefix}{}:{}:{}",
+                row.sid, row.model, row.scope
+            )
+        };
+        let rec = UsageRecord {
+            request_id: req_id,
+            alternate_request_ids: Vec::new(),
+            dedup_namespace: None,
+            semantic_id: None,
+            has_entry_id: true,
+            provider_id: row.provider.unwrap_or_else(|| "_hermes_session".to_string()),
+            app_type: "hermes".to_string(),
+            model: row.model.clone(),
+            request_model: row.model,
+            fresh_input_tokens: row.inp,
+            output_tokens: row.out,
+            cache_read_tokens: row.cr,
+            cache_creation_tokens: row.cw,
+            cache_creation_1h_tokens: 0,
+            explicit_cost: row.explicit_cost,
+            status_code: 200,
+            error_message: None,
+            session_id: Some(row.sid),
+            provider_type: "hermes_session",
+            data_source: "hermes_session",
+            is_streaming: false,
+            created_at: row.created_at,
+            update_if_higher_output: true,
+        };
+        let _ = insert_or_update_record(conn, pricing, &rec, report);
     }
 
     rows_seen
 }
 
 // ---------------------------------------------------------------------------
-// 11. Dsh (`~/.dsh/sessions/**/*.jsonl`)
+// 11. Dsh (`~/.dsh/sessions/**/session[.vN].jsonl`)
 // ---------------------------------------------------------------------------
+
+fn dsh_generation(path: &Path) -> Option<u32> {
+    let name = path.file_name()?.to_str()?;
+    let name = name.strip_suffix(".zstd").unwrap_or(name);
+    if name == "session.jsonl" {
+        return Some(0);
+    }
+    let version = name.strip_prefix("session.v")?.strip_suffix(".jsonl")?;
+    if version.is_empty() || version.starts_with('0') {
+        return None;
+    }
+    version.parse().ok()
+}
+
+fn select_dsh_generation_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut best_canonical: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut standalone: Vec<PathBuf> = Vec::new();
+    for file in files {
+        let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
+        if let Some(generation) = dsh_generation(&file) {
+            let replace = best_canonical
+                .get(&dir)
+                .is_none_or(|old| generation > dsh_generation(old).unwrap_or(0));
+            if replace {
+                best_canonical.insert(dir, file);
+            }
+        } else {
+            standalone.push(file);
+        }
+    }
+    let mut out: Vec<PathBuf> = best_canonical.values().cloned().collect();
+    for file in standalone {
+        let dir = file.parent().unwrap_or(Path::new("."));
+        if !best_canonical.contains_key(dir) {
+            out.push(file);
+        }
+    }
+    out.sort();
+    out
+}
 
 fn ingest_dsh_jsonl(
     conn: &Connection,
@@ -3086,11 +4139,27 @@ fn ingest_dsh_jsonl(
     let Ok(file) = File::open(path) else {
         return 0;
     };
-    let session_id = path
-        .file_stem()
+    let stem_is_session = path
+        .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("dsh")
-        .to_string();
+        .is_some_and(|n| n.starts_with("session."));
+    let mut session_id = if stem_is_session {
+        path.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("dsh")
+            .to_string()
+    } else {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("dsh")
+            .to_string()
+    };
+
+    let mut version = dsh_generation(path).unwrap_or(0);
+    let mut has_parent = false;
+    let mut seed_boundary_seen = false;
+    let mut records: Vec<(String, UsageRecord)> = Vec::new();
     let mut line_num: i64 = 0;
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
@@ -3102,45 +4171,148 @@ fn ingest_dsh_jsonl(
         let Ok(val) = serde_json::from_str::<Value>(trimmed) else {
             continue;
         };
-        let Some(usage) = val
-            .get("usage")
-            .or_else(|| val.get("message").and_then(|m| m.get("usage")))
-        else {
+        let kind = val.get("type").and_then(Value::as_str).unwrap_or("");
+        if kind == "session" {
+            if let Some(id) = nonempty_str(val.get("id")) {
+                session_id = id.to_string();
+            }
+            if let Some(v) = val.get("version").and_then(Value::as_u64) {
+                version = v as u32;
+            }
+            has_parent = val.get("parentSession").is_some_and(|v| !v.is_null());
+            continue;
+        }
+        if kind == "session/end-seed" {
+            if val.pointer("/data/inherited").and_then(Value::as_bool) == Some(true)
+                || (version < 2 && has_parent && !seed_boundary_seen)
+            {
+                records.clear();
+            }
+            seed_boundary_seen = true;
+            continue;
+        }
+
+        // Real Dsh event schema vs legacy fallback
+        let (usage_opt, model, provider_id, created_at, eid) = if !kind.is_empty() {
+            if !matches!(
+                kind,
+                "assistant/message" | "assistant/attempt" | "compaction/summary"
+            ) {
+                continue;
+            }
+            if kind == "assistant/message"
+                && val
+                    .get("surfaceOp")
+                    .is_some_and(|op| op.as_str() != Some("append"))
+            {
+                continue;
+            }
+            let Some(data) = val.get("data") else {
+                continue;
+            };
+            let usage_val = data.get("usage").or_else(|| {
+                data.get("stream")?.as_array()?.iter().rev().find_map(|chunk| {
+                    (chunk.get("type").and_then(Value::as_str) == Some("usage"))
+                        .then(|| chunk.get("usage"))
+                        .flatten()
+                })
+            });
+            let model = nonempty_str(data.pointer("/message/source/model"))
+                .or_else(|| nonempty_str(data.pointer("/source/model")))
+                .or_else(|| nonempty_str(data.get("model")))
+                .unwrap_or("deepseek-chat")
+                .to_string();
+            let provider = nonempty_str(data.pointer("/message/source/provider"))
+                .or_else(|| nonempty_str(data.pointer("/source/provider")))
+                .or_else(|| nonempty_str(data.get("provider")))
+                .unwrap_or("_dsh_session")
+                .to_string();
+            let created_at = val
+                .get("time")
+                .or_else(|| val.get("timestamp"))
+                .or_else(|| val.get("created_at"))
+                .and_then(parse_any_timestamp)
+                .unwrap_or_else(|| Local::now().timestamp());
+            let eid = if kind == "compaction/summary" {
+                format!(
+                    "compaction:{}",
+                    nonempty_str(data.get("compactionId"))
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            val.get("seq")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(line_num as u64)
+                                .to_string()
+                        })
+                )
+            } else {
+                nonempty_str(data.pointer("/message/id"))
+                    .or_else(|| nonempty_str(data.get("id")))
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        format!(
+                            "event-{}",
+                            val.get("seq").and_then(Value::as_u64).unwrap_or(line_num as u64)
+                        )
+                    })
+            };
+            (usage_val, model, provider, created_at, eid)
+        } else {
+            let usage_val = val
+                .get("usage")
+                .or_else(|| val.get("message").and_then(|m| m.get("usage")));
+            let model = nonempty_str(val.get("model"))
+                .or_else(|| val.get("message").and_then(|m| nonempty_str(m.get("model"))))
+                .unwrap_or("deepseek-chat")
+                .to_string();
+            let created_at = val
+                .get("timestamp")
+                .or_else(|| val.get("created_at"))
+                .and_then(parse_any_timestamp)
+                .unwrap_or_else(|| Local::now().timestamp());
+            let eid = nonempty_str(val.get("id"))
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("line-{line_num}"));
+            (usage_val, model, "_dsh_session".to_string(), created_at, eid)
+        };
+
+        let Some(usage) = usage_opt else {
             continue;
         };
-        let inp = get_u32(usage, &["prompt_tokens", "input_tokens", "input"]);
-        let out = get_u32(usage, &["completion_tokens", "output_tokens", "output"]);
+        let inp = get_u32(usage, &["inputTokens", "prompt_tokens", "input_tokens", "input"]);
+        let out = get_u32(
+            usage,
+            &["outputTokens", "completion_tokens", "output_tokens", "output"],
+        );
         let cr = get_u32(
             usage,
-            &["prompt_cache_hit_tokens", "cache_read_input_tokens", "cacheRead"],
+            &[
+                "cacheReadTokens",
+                "prompt_cache_hit_tokens",
+                "cache_read_input_tokens",
+                "cacheRead",
+            ],
         );
         let cw = get_u32(
             usage,
-            &["prompt_cache_miss_tokens", "cache_creation_input_tokens", "cacheWrite"],
+            &[
+                "cacheWriteTokens",
+                "prompt_cache_miss_tokens",
+                "cache_creation_input_tokens",
+                "cacheWrite",
+            ],
         );
-        if inp == 0 && out == 0 && cr == 0 {
+        if inp == 0 && out == 0 && cr == 0 && cw == 0 {
             continue;
         }
-        let model = nonempty_str(val.get("model"))
-            .or_else(|| val.get("message").and_then(|m| nonempty_str(m.get("model"))))
-            .unwrap_or("deepseek-chat")
-            .to_string();
-        let created_at = val
-            .get("timestamp")
-            .and_then(parse_any_timestamp)
-            .or_else(|| val.get("created_at").and_then(parse_any_timestamp))
-            .unwrap_or_else(|| Local::now().timestamp());
-        let eid = nonempty_str(val.get("id"))
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("line-{line_num}"));
-
+        let req_id = format!("dsh_session:{session_id}:{eid}");
         let rec = UsageRecord {
-            request_id: format!("dsh_session:{session_id}:{eid}"),
+            request_id: req_id.clone(),
             alternate_request_ids: Vec::new(),
             dedup_namespace: None,
             semantic_id: None,
             has_entry_id: true,
-            provider_id: "_dsh_session".to_string(),
+            provider_id,
             app_type: "dsh".to_string(),
             model: model.clone(),
             request_model: model,
@@ -3159,6 +4331,14 @@ fn ingest_dsh_jsonl(
             created_at,
             update_if_higher_output: false,
         };
+        if let Some(pos) = records.iter().position(|(id, _)| *id == req_id) {
+            records[pos] = (req_id, rec);
+        } else {
+            records.push((req_id, rec));
+        }
+    }
+
+    for (_, rec) in records {
         let _ = insert_or_update_record(conn, pricing, &rec, report);
     }
 
@@ -3714,5 +4894,212 @@ mod tests {
             let s = db.get_usage_summary(None, None, Some(app), None, None).unwrap();
             assert_eq!(s.total_requests, 1, "Expected 1 row for {app}");
         }
+    }
+
+    fn encode_varint(mut v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                out.push(b);
+                return out;
+            }
+            out.push(b | 0x80);
+        }
+    }
+
+    fn pb_field_varint(num: u64, val: u64) -> Vec<u8> {
+        let mut out = encode_varint(num << 3);
+        out.extend(encode_varint(val));
+        out
+    }
+
+    fn pb_field_bytes(num: u64, data: &[u8]) -> Vec<u8> {
+        let mut out = encode_varint((num << 3) | 2);
+        out.extend(encode_varint(data.len() as u64));
+        out.extend_from_slice(data);
+        out
+    }
+
+    #[test]
+    fn sync_session_usage_handles_v2_and_updated_agent_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let app_data = dir.path().join("app");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&app_data).unwrap();
+        let paths = Paths::new(&home, &app_data);
+        let db = UsageDb::open(&paths).unwrap();
+
+        // 1. Grok unified.jsonl (Grok >= 0.2)
+        let grok_logs = home.join(".grok").join("logs");
+        fs::create_dir_all(&grok_logs).unwrap();
+        fs::write(
+            grok_logs.join("unified.jsonl"),
+            r#"{"msg":"shell.turn.inference_done","sid":"grok-u1","timestamp":"2026-11-14T09:00:00Z","ctx":{"prompt_tokens":1000,"cached_prompt_tokens":200,"completion_tokens":150,"reasoning_tokens":30,"loop_index":0,"attempts":1,"model":"grok-4"}}"#,
+        )
+        .unwrap();
+
+        // 2. OpenCode V2 (upgraded DB having BOTH old `message` and live `session_v2`/`session_message` with type column, no role in JSON)
+        let oc_dir = home.join(".local").join("share").join("opencode");
+        fs::create_dir_all(&oc_dir).unwrap();
+        {
+            let oc_conn = Connection::open(oc_dir.join("opencode.db")).unwrap();
+            oc_conn
+                .execute_batch(
+                    "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+                     INSERT INTO message VALUES ('old-v1', 's-old', 1794650000000, '{\"role\":\"assistant\",\"modelID\":\"old\",\"tokens\":{\"input\":10,\"output\":5,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}}}');
+                     CREATE TABLE session_v2 (id TEXT PRIMARY KEY, fork_session_id TEXT, time_created INTEGER);
+                     CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, type TEXT, data TEXT);
+                     INSERT INTO session_v2 VALUES ('oc-s2', NULL, 1794650000000);
+                     INSERT INTO session_message VALUES ('oc-m2', 'oc-s2', 1794651000000, 'assistant', '{\"providerID\":\"openai\",\"modelID\":\"gpt-5\",\"time\":{\"created\":1794651000000,\"completed\":1794651002000},\"tokens\":{\"input\":400,\"output\":80,\"reasoning\":10,\"cache\":{\"read\":50,\"write\":0}}}');",
+                )
+                .unwrap();
+        }
+
+        // 3. Kimi Code (`usage.record` + `trees/*.jsonl`) & SubagentEvent
+        let kimi_tree = home.join(".kimi-code").join("sessions").join("kimi-s2").join("trees");
+        fs::create_dir_all(&kimi_tree).unwrap();
+        fs::write(
+            kimi_tree.join("main.jsonl"),
+            r#"{"type":"usage.record","record":{"messageId":"km-1","time":"2026-11-14T09:05:00Z","model":{"model":"kimi-k2","provider":"moonshot"},"usage":{"inputOther":300,"output":45,"inputCacheRead":50,"inputCacheCreation":10}}}"#,
+        )
+        .unwrap();
+
+        // 4. OpenClaw SQLite `transcript_events` under `agents/main/agent/openclaw-agent.sqlite`
+        let oc_agent_dir = home.join(".openclaw").join("agents").join("main").join("agent");
+        fs::create_dir_all(&oc_agent_dir).unwrap();
+        {
+            let claw_conn = Connection::open(oc_agent_dir.join("openclaw-agent.sqlite")).unwrap();
+            claw_conn
+                .execute_batch(
+                    "CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT, created_at INTEGER);
+                     INSERT INTO transcript_events VALUES ('claw-db-1', 1, '{\"id\":\"ev-1\",\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"provider\":\"anthropic\",\"model\":\"claude-sonnet-4\",\"usage\":{\"input\":250,\"output\":55,\"cacheRead\":25,\"cacheWrite\":0}}}', 1794652000000);",
+                )
+                .unwrap();
+        }
+
+        // 5. Hermes `session_model_usage` + `profiles/work/state.db`
+        let hermes_profile = home.join(".hermes").join("profiles").join("work");
+        fs::create_dir_all(&hermes_profile).unwrap();
+        {
+            let h_conn = Connection::open(hermes_profile.join("state.db")).unwrap();
+            h_conn
+                .execute_batch(
+                    "CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT, input_tokens INTEGER, output_tokens INTEGER);
+                     CREATE TABLE session_model_usage (session_id TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER, api_call_count INTEGER, actual_cost_usd REAL, estimated_cost_usd REAL, billing_provider TEXT, billing_base_url TEXT, billing_mode TEXT, task TEXT, cost_status TEXT, first_seen INTEGER, last_seen INTEGER);
+                     INSERT INTO session_model_usage VALUES ('hs-1', 'qwen3-coder', 900, 180, 100, 0, 2, 0.0042, 0.0, 'openrouter', '', '', '', 'actual', 1794652500, 1794652600);",
+                )
+                .unwrap();
+        }
+
+        // 6. Dsh real event schema + `session.v2.jsonl` generation selection + `session/end-seed` fork cutoff
+        let dsh_sess_dir = home.join(".dsh").join("sessions").join("dsh-uuid-1");
+        fs::create_dir_all(&dsh_sess_dir).unwrap();
+        fs::write(
+            dsh_sess_dir.join("session.jsonl"),
+            "{\"type\":\"session\",\"id\":\"dsh-old\",\"version\":0}\n{\"type\":\"assistant/message\",\"time\":\"2026-11-14T09:10:00Z\",\"data\":{\"id\":\"old-gen\",\"usage\":{\"inputTokens\":9999,\"outputTokens\":9999}}}\n",
+        )
+        .unwrap();
+        fs::write(
+            dsh_sess_dir.join("session.v2.jsonl"),
+            concat!(
+                "{\"type\":\"session\",\"id\":\"dsh-uuid-1\",\"version\":2,\"parentSession\":\"../parent/session.v2.jsonl\"}\n",
+                "{\"type\":\"assistant/message\",\"surfaceOp\":\"append\",\"time\":\"2026-11-14T09:09:00Z\",\"data\":{\"id\":\"inherited-1\",\"message\":{\"source\":{\"model\":\"deepseek-reasoner\",\"provider\":\"deepseek\"}},\"usage\":{\"inputTokens\":5000,\"outputTokens\":500}}}\n",
+                "{\"type\":\"session/end-seed\",\"data\":{\"inherited\":true}}\n",
+                "{\"type\":\"assistant/message\",\"surfaceOp\":\"append\",\"time\":\"2026-11-14T09:11:00Z\",\"data\":{\"id\":\"child-1\",\"message\":{\"source\":{\"model\":\"deepseek-reasoner\",\"provider\":\"deepseek\"}},\"usage\":{\"inputTokens\":320,\"outputTokens\":85,\"cacheReadTokens\":60,\"cacheWriteTokens\":0}}}\n",
+                "{\"type\":\"assistant/message\",\"surfaceOp\":\"replace\",\"time\":\"2026-11-14T09:12:00Z\",\"data\":{\"id\":\"child-1-replay\",\"usage\":{\"inputTokens\":320,\"outputTokens\":85}}}\n"
+            ),
+        )
+        .unwrap();
+
+        // 7. Antigravity conversations/<uuid>.db protobuf fallback
+        let agy_conv = home.join(".gemini").join("antigravity-ide").join("conversations");
+        fs::create_dir_all(&agy_conv).unwrap();
+        {
+            let tokens = [
+                pb_field_varint(2, 1200),
+                pb_field_varint(3, 400),
+                pb_field_varint(5, 300),
+                pb_field_varint(9, 150),
+                pb_field_varint(10, 250),
+            ]
+            .concat();
+            let ts_inner = pb_field_varint(1, 1_794_653_000);
+            let ts_outer = pb_field_bytes(4, &ts_inner);
+            let gen_msg = [
+                pb_field_bytes(19, b"Gemini 4 IDE (High)"),
+                pb_field_bytes(4, &tokens),
+                pb_field_bytes(9, &ts_outer),
+            ]
+            .concat();
+            let outer_blob = pb_field_bytes(1, &gen_msg);
+            let agy_conn = Connection::open(agy_conv.join("agy-ide-uuid-1.db")).unwrap();
+            agy_conn
+                .execute_batch(
+                    "CREATE TABLE steps (idx INTEGER PRIMARY KEY, metadata BLOB);
+                     CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);",
+                )
+                .unwrap();
+            agy_conn
+                .execute("INSERT INTO gen_metadata (idx, data) VALUES (0, ?1)", params![outer_blob])
+                .unwrap();
+        }
+
+        // 8. Claude Desktop audit.jsonl fallback (when no sibling .claude/projects transcript covers it)
+        let cd_space = home
+            .join(".config")
+            .join("Claude")
+            .join("local-agent-mode-sessions")
+            .join("proj")
+            .join("space-1");
+        fs::create_dir_all(&cd_space).unwrap();
+        fs::write(
+            cd_space.join("audit.jsonl"),
+            r#"{"type":"result","uuid":"cd-audit-1","session_id":"cd-s1","timestamp":"2026-11-14T09:15:00Z","total_cost_usd":0.0033,"modelUsage":{"claude-sonnet-4":{}},"usage":{"input_tokens":450,"output_tokens":95,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}"#,
+        )
+        .unwrap();
+
+        let rep = db.sync_session_usage(&paths).unwrap();
+        assert_eq!(rep.imported, 8, "1 Grok + 1 OpenCode V2 + 1 Kimi Tree + 1 OpenClaw DB + 1 Hermes Profile + 1 Dsh + 1 Agy DB + 1 ClaudeDesktop audit");
+
+        let grok = db.get_usage_summary(None, None, Some("grok"), None, None).unwrap();
+        assert_eq!(grok.total_input_tokens, 800); // 1000 - 200 cached
+        assert_eq!(grok.total_output_tokens, 150);
+        assert_eq!(grok.total_cache_read_tokens, 200);
+
+        let oc = db.get_usage_summary(None, None, Some("opencode"), None, None).unwrap();
+        assert_eq!(oc.total_requests, 1);
+        assert_eq!(oc.total_input_tokens, 400);
+        assert_eq!(oc.total_output_tokens, 90);
+
+        let kimi = db.get_usage_summary(None, None, Some("kimi"), None, None).unwrap();
+        assert_eq!(kimi.total_requests, 1);
+        assert_eq!(kimi.total_input_tokens, 300);
+
+        let claw = db.get_usage_summary(None, None, Some("openclaw"), None, None).unwrap();
+        assert_eq!(claw.total_requests, 1);
+        assert_eq!(claw.total_input_tokens, 250);
+
+        let hermes = db.get_usage_summary(None, None, Some("hermes"), None, None).unwrap();
+        assert_eq!(hermes.total_requests, 1);
+        assert_eq!(hermes.total_input_tokens, 900);
+        assert_eq!(hermes.total_cost, "0.004200");
+
+        let dsh = db.get_usage_summary(None, None, Some("dsh"), None, None).unwrap();
+        assert_eq!(dsh.total_requests, 1);
+        assert_eq!(dsh.total_input_tokens, 320);
+        assert_eq!(dsh.total_output_tokens, 85);
+
+        let agy = db.get_usage_summary(None, None, Some("agy"), None, None).unwrap();
+        assert_eq!(agy.total_requests, 1);
+        assert_eq!(agy.total_input_tokens, 1200);
+        assert_eq!(agy.total_output_tokens, 250); // exact response size
+        assert_eq!(agy.total_cache_read_tokens, 300);
+
+        let cd = db.get_usage_summary(None, None, Some("claude_desktop"), None, None).unwrap();
+        assert_eq!(cd.total_requests, 1);
+        assert_eq!(cd.total_cost, "0.003300");
     }
 }

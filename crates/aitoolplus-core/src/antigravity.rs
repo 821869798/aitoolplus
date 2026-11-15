@@ -4102,7 +4102,7 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
                 last_active_at: ts,
                 step_count: 0,
                 source_path: source_path.to_string_lossy().to_string(),
-                resume_command: Some(format!("agy resume {cid}")),
+                resume_command: Some(format!("agy --conversation={cid}")),
             });
         }
     }
@@ -4136,7 +4136,7 @@ fn scan_cli_sessions(cli_dir: &Path, out: &mut Vec<AntigravitySessionMeta>) {
             last_active_at: ts,
             step_count: 0,
             source_path: db_path.to_string_lossy().to_string(),
-            resume_command: Some(format!("agy resume {cid}")),
+            resume_command: Some(format!("agy --conversation={cid}")),
         });
     }
 }
@@ -4530,7 +4530,7 @@ mod tests {
         assert_eq!(cli_sess.session_id, "cli-sess-1");
         assert_eq!(cli_sess.title, "CLI prompt test");
         assert_eq!(cli_sess.project_dir.as_deref(), Some("/test/project"));
-        assert_eq!(cli_sess.resume_command.as_deref(), Some("agy resume cli-sess-1"));
+        assert_eq!(cli_sess.resume_command.as_deref(), Some("agy --conversation=cli-sess-1"));
 
         let ide_sess = sessions.iter().find(|s| s.source == "app").unwrap();
         assert_eq!(ide_sess.session_id, "ide-sess-1");
