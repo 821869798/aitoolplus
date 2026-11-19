@@ -26,6 +26,7 @@ pub enum Page {
     Tool(ToolId),
     Mcp,
     Skills,
+    Usage,
     Antigravity,
     Gateway,
     Apps,
@@ -38,6 +39,7 @@ impl Page {
             Page::Tool(t) => t.key(),
             Page::Mcp => "mcp",
             Page::Skills => "skills",
+            Page::Usage => "usage",
             Page::Antigravity => "antigravity",
             Page::Gateway => "gateway",
             Page::Apps => "apps",
@@ -384,7 +386,9 @@ pub struct WorkspaceState {
     pub usage_logs: aitoolplus_core::usage::PaginatedLogs,
     pub usage_pricing: Vec<aitoolplus_core::usage::ModelPricingInfo>,
     pub usage_pricing_search: Option<gpui::Entity<TextInput>>,
-    pub usage_editing_pricing: Option<(aitoolplus_core::usage::ModelPricingInfo, gpui::Entity<TextInput>, gpui::Entity<TextInput>, gpui::Entity<TextInput>, gpui::Entity<TextInput>)>,
+    pub usage_editing_pricing: Option<UsagePricingDialogState>,
+    pub usage_models_dev_syncing: bool,
+    pub usage_unpriced_models: Vec<String>,
     pub usage_app_pricing_configs: Vec<aitoolplus_core::usage::AppPricingConfig>,
     pub usage_app_pricing_inputs: std::collections::BTreeMap<String, gpui::Entity<TextInput>>,
     pub usage_app_pricing_sources: std::collections::BTreeMap<String, String>,
@@ -779,6 +783,17 @@ pub struct SessionCleanupDialogState {
 }
 
 #[derive(Clone)]
+pub struct UsagePricingDialogState {
+    pub is_new: bool,
+    pub model_id: gpui::Entity<TextInput>,
+    pub display_name: gpui::Entity<TextInput>,
+    pub input_cost: gpui::Entity<TextInput>,
+    pub output_cost: gpui::Entity<TextInput>,
+    pub cache_read_cost: gpui::Entity<TextInput>,
+    pub cache_write_cost: gpui::Entity<TextInput>,
+}
+
+#[derive(Clone)]
 pub enum ConfirmAction {
     DeleteProvider { tool: ToolId, id: String },
     DeletePrompt { tool: ToolId, id: String },
@@ -787,6 +802,7 @@ pub enum ConfirmAction {
     DeleteSkill { id: String },
     DeleteAntigravityAccount { id: String },
     DeleteAntigravitySession { session: aitoolplus_core::antigravity::AntigravitySessionMeta },
+    DeleteModelPricing { model_id: String, display_name: String },
     RestoreSkillsToPlain,
 }
 
@@ -1225,6 +1241,8 @@ impl WorkspaceState {
             usage_pricing: Vec::new(),
             usage_pricing_search: None,
             usage_editing_pricing: None,
+            usage_models_dev_syncing: false,
+            usage_unpriced_models: Vec::new(),
             usage_app_pricing_configs: Vec::new(),
             usage_app_pricing_inputs: std::collections::BTreeMap::new(),
             usage_app_pricing_sources: std::collections::BTreeMap::new(),
@@ -1470,6 +1488,7 @@ impl WorkspaceState {
             || self.update_install_confirm_dialog.is_some()
             || self.codex_unify_dialog.is_some()
             || self.gateway_selected_request.is_some()
+            || self.usage_editing_pricing.is_some()
     }
 
     /// Resolve or lazily create the common-config editor for a tool.
@@ -1620,6 +1639,7 @@ pub fn modal_scaffold_sized(
                         ws.ui.skill_adding_tag = None;
                         ws.ui.skill_git_modal = None;
                         ws.ui.runtime_edit_dialog = None;
+                        ws.ui.usage_editing_pricing = None;
                         on_close_button(ws, ev, window, cx);
                         cx.notify();
                     },
@@ -2268,6 +2288,28 @@ fn execute_confirm(action: ConfirmAction, ws: &mut Workspace, cx: &mut Context<W
                 ws.ui.toast(msg, false);
             }
         }
+        ConfirmAction::DeleteModelPricing { model_id, display_name } => {
+            if let Some(db) = ws.ensure_usage_db() {
+                match db.delete_model_pricing(&model_id) {
+                    Ok(()) => {
+                        let label = if display_name.trim().is_empty() {
+                            model_id.as_str()
+                        } else {
+                            display_name.as_str()
+                        };
+                        let msg = i.raw(
+                            &format!("已删除模型定价：{label}"),
+                            &format!("Deleted model pricing: {label}"),
+                        ).to_string();
+                        ws.ui.toast(msg, false);
+                        ws.refresh_usage_data(cx);
+                    }
+                    Err(e) => {
+                        ws.ui.toast(e, true);
+                    }
+                }
+            }
+        }
         ConfirmAction::RestoreSkillsToPlain => {
             let mut store = ws.store.store().skills.clone();
             let (restored, errors) = aitoolplus_core::skills::restore_all_to_plain(&mut store, &ws.paths);
@@ -2415,6 +2457,7 @@ pub fn render_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::Any
         Page::Tool(tool) => tool_page::render_tool_page(tool, ws, cx),
         Page::Mcp => mcp_page::render_mcp_page(ws, cx),
         Page::Skills => skills_page::render_skills_page(ws, cx),
+        Page::Usage => usage_page::render_usage_page(ws, cx),
         Page::Antigravity => antigravity_page::render_antigravity_page(ws, cx),
         Page::Gateway => gateway_page::render_gateway_page(ws, cx),
         Page::Apps => local_env_page::local_env_tab(ws, cx),
@@ -2551,5 +2594,14 @@ mod tests {
         assert_eq!(new_p0_id, "A");
         let p0_changed = candidates.first() != Some(new_p0_id);
         assert!(!p0_changed, "P0 should not change when reordering backups");
+    }
+
+    #[test]
+    fn test_usage_page_key_and_i18n_term() {
+        assert_eq!(Page::Usage.key(), "usage");
+        let zh = crate::i18n::I18n::new(aitoolplus_core::settings::Language::Zh);
+        let en = crate::i18n::I18n::new(aitoolplus_core::settings::Language::En);
+        assert_eq!(zh.t("layout.usage"), "用量统计");
+        assert_eq!(en.t("layout.usage"), "Usage");
     }
 }

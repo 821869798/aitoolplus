@@ -129,7 +129,7 @@ pub struct PaginatedLogs {
 }
 
 /// Model pricing record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPricingInfo {
     pub model_id: String,
@@ -170,6 +170,31 @@ pub struct CcSwitchUsageImportReport {
     pub rollups_imported: usize,
 }
 
+/// Flattened pricing item parsed from `https://models.dev/api.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsDevEntry {
+    pub key: String,
+    pub provider_id: String,
+    pub provider_name: String,
+    pub raw_model_id: String,
+    pub normalized_id: String,
+    pub display_name: String,
+    pub release_date: String,
+    pub pricing: ModelPricingInfo,
+}
+
+/// Result summary for a `models.dev` pricing sync run.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsDevSyncReport {
+    pub catalog_models: usize,
+    pub selected_models: usize,
+    pub added_models: usize,
+    pub updated_models: usize,
+    pub backfilled_rows: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Database Service
 // ---------------------------------------------------------------------------
@@ -204,6 +229,7 @@ impl UsageDb {
         let instance = Self { db_path };
         instance.init_tables()?;
         instance.ensure_default_pricing()?;
+        let _ = instance.backfill_missing_costs();
 
         Ok(instance)
     }
@@ -357,39 +383,124 @@ impl UsageDb {
         Ok(())
     }
 
-    /// Seed default model pricing rows if the table is empty.
+    /// Seed missing built-in model pricing and app defaults without overwriting user edits.
     fn ensure_default_pricing(&self) -> Result<(), String> {
         let conn = self.connect()?;
-        let count: i64 = conn
-            .query_row("SELECT count(*) FROM model_pricing", [], |r| r.get(0))
-            .unwrap_or(0);
-        if count > 0 {
-            return Ok(());
-        }
 
         let seed_data = [
+            // Claude 4.x / 5.x / Fable / Mythos / Legacy
+            ("claude-fable-5-2", "Claude Fable 5.2", "8", "40", "0.20", "10"),
+            ("claude-fable-5-1", "Claude Fable 5.1", "10", "50", "0.25", "12.50"),
+            ("claude-mythos-5-1", "Claude Mythos 5.1", "10", "50", "0.25", "12.50"),
+            ("claude-fable-5", "Claude Fable 5", "10", "50", "1.00", "12.50"),
+            ("claude-mythos-5", "Claude Mythos 5", "10", "50", "1.00", "12.50"),
+            ("claude-opus-5-5", "Claude Opus 5.5", "4", "20", "0.20", "5"),
+            ("claude-opus-5.5", "Claude Opus 5.5", "4", "20", "0.20", "5"),
+            ("claude-opus-5", "Claude Opus 5", "5", "25", "0.50", "6.25"),
+            ("claude-opus-4-8", "Claude Opus 4.8", "5", "25", "0.50", "6.25"),
+            ("claude-sonnet-5-5", "Claude Sonnet 5.5", "2", "10", "0.10", "2.50"),
+            ("claude-sonnet-5.5", "Claude Sonnet 5.5", "2", "10", "0.10", "2.50"),
+            ("claude-haiku-5-5", "Claude Haiku 5.5", "0.10", "0.50", "0.01", "0.125"),
+            ("claude-sonnet-5", "Claude Sonnet 5", "2", "10", "0.20", "2.50"),
+            ("claude-opus-4-7", "Claude Opus 4.7", "5", "25", "0.50", "6.25"),
+            ("claude-opus-4-6", "Claude Opus 4.6", "5", "25", "0.50", "6.25"),
+            ("claude-sonnet-4-6", "Claude Sonnet 4.6", "3", "15", "0.30", "3.75"),
+            ("claude-opus-4-6-20260206", "Claude Opus 4.6", "5", "25", "0.50", "6.25"),
+            ("claude-sonnet-4-6-20260217", "Claude Sonnet 4.6", "3", "15", "0.30", "3.75"),
+            ("claude-opus-4-5-20251101", "Claude Opus 4.5", "5", "25", "0.50", "6.25"),
+            ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", "3", "15", "0.30", "3.75"),
+            ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "1", "5", "0.10", "1.25"),
+            ("claude-opus-4-20250514", "Claude Opus 4", "15", "75", "1.50", "18.75"),
+            ("claude-opus-4-1-20250805", "Claude Opus 4.1", "15", "75", "1.50", "18.75"),
+            ("claude-sonnet-4-20250514", "Claude Sonnet 4", "3", "15", "0.30", "3.75"),
             ("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "3.0", "15.0", "0.30", "3.75"),
             ("claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "0.80", "4.0", "0.08", "1.0"),
             ("claude-3-opus-20240229", "Claude 3 Opus", "15.0", "75.0", "1.50", "18.75"),
-            ("claude-sonnet-4-6", "Claude Sonnet 4.6", "3.0", "15.0", "0.30", "3.75"),
-            ("claude-opus-4-6", "Claude Opus 4.6", "5.0", "25.0", "0.50", "6.25"),
+            // Gemini 2.0 / 2.5 / 3.x / 4.x (including Antigravity Argon / Carbon / Hydrogen / Neon)
+            ("gemini-4-neon", "Gemini 4 Neon", "3.00", "15.00", "0.15", "0"),
+            ("gemini-4-argon", "Gemini 4 Argon", "2.00", "10.00", "0.10", "0"),
+            ("gemini-4-carbon", "Gemini 4 Carbon", "2.00", "10.00", "0.10", "0"),
+            ("gemini-4-hydrogen", "Gemini 4 Hydrogen", "1.50", "7.50", "0.075", "0"),
+            ("gemini-3.8-flash", "Gemini 3.8 Flash", "0.75", "3.75", "0.075", "0"),
+            ("gemini-3.7-flash", "Gemini 3.7 Flash", "0.75", "3.75", "0.075", "0"),
+            ("gemini-3.6-flash", "Gemini 3.6 Flash", "0.75", "3.75", "0.075", "0"),
+            ("gemini-3.5-flash", "Gemini 3.5 Flash", "1.50", "9.00", "0.15", "0"),
+            ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite", "0.30", "2.50", "0.03", "0"),
+            ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "2", "12", "0.20", "0"),
+            ("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", "0.25", "1.50", "0.025", "0"),
+            ("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite Preview", "0.25", "1.50", "0.025", "0"),
+            ("gemini-3-pro-preview", "Gemini 3 Pro Preview", "2", "12", "0.2", "0"),
+            ("gemini-3-flash-preview", "Gemini 3 Flash Preview", "0.5", "3", "0.05", "0"),
+            ("gemini-2.5-pro", "Gemini 2.5 Pro", "1.25", "10", "0.125", "0"),
+            ("gemini-2.5-flash", "Gemini 2.5 Flash", "0.3", "2.5", "0.03", "0"),
+            ("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite", "0.10", "0.40", "0.01", "0"),
+            ("gemini-2.0-flash", "Gemini 2.0 Flash", "0.10", "0.40", "0.025", "0"),
+            ("gemini-2.0-pro-exp", "Gemini 2.0 Pro", "1.25", "5.0", "0.3125", "0"),
+            // OpenAI / GPT-5.x / 6.x
+            ("gpt-6.2-sol", "GPT-6.2 Sol", "2", "10", "0.10", "2.50"),
+            ("gpt-6.2-astra", "GPT-6.2 Astra", "8", "40", "0.40", "10"),
+            ("gpt-6.1-sol", "GPT-6.1 Sol", "2", "10", "0.10", "2.50"),
+            ("gpt-6.1-terra", "GPT-6.1 Terra", "1", "5", "0.05", "1.25"),
+            ("gpt-6-astra", "GPT-6 Astra", "10", "50", "1", "12.5"),
+            ("gpt-6-sol", "GPT-6 Sol", "2", "10", "0.20", "2.50"),
+            ("gpt-6-luna", "GPT-6 Luna", "0.10", "0.50", "0.01", "0.125"),
+            ("gpt-5.6-sol", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            ("gpt-5.6-terra", "GPT-5.6 Terra", "2", "12", "0.20", "2.50"),
+            ("gpt-5.6-luna", "GPT-5.6 Luna", "0.20", "1.20", "0.02", "0.25"),
+            ("gpt-5.6", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            ("gpt-5.5", "GPT-5.5", "5", "30", "0.50", "0"),
+            ("gpt-5.4", "GPT-5.4", "2.50", "15", "0.25", "0"),
+            ("gpt-5.4-mini", "GPT-5.4 Mini", "0.75", "4.50", "0.075", "0"),
+            ("gpt-5.3-codex", "GPT-5.3 Codex", "1.75", "14", "0.175", "0"),
+            ("gpt-5.2", "GPT-5.2", "1.75", "14", "0.175", "0"),
+            ("gpt-5.2-codex", "GPT-5.2 Codex", "1.75", "14", "0.175", "0"),
+            ("gpt-5.1", "GPT-5.1", "1.25", "10", "0.125", "0"),
+            ("gpt-5.1-codex", "GPT-5.1 Codex", "1.25", "10", "0.125", "0"),
+            ("gpt-5", "GPT-5", "1.25", "10", "0.125", "0"),
+            ("gpt-5-codex", "GPT-5 Codex", "1.25", "10", "0.125", "0"),
+            ("gpt-5-mini", "GPT-5 Mini", "0.25", "2", "0.025", "0"),
+            ("gpt-4.1", "GPT-4.1", "2", "8", "0.50", "0"),
             ("gpt-4o", "GPT-4o", "2.50", "10.0", "1.25", "0"),
             ("gpt-4o-mini", "GPT-4o Mini", "0.15", "0.60", "0.075", "0"),
             ("o1", "OpenAI o1", "15.0", "60.0", "7.50", "0"),
-            ("o1-mini", "OpenAI o1 Mini", "3.0", "12.0", "1.50", "0"),
+            ("o1-mini", "OpenAI o1 Mini", "0.55", "2.20", "0.55", "0"),
+            ("o3", "OpenAI o3", "2", "8", "0.50", "0"),
             ("o3-mini", "OpenAI o3 Mini", "1.10", "4.40", "0.55", "0"),
-            ("gemini-2.0-flash", "Gemini 2.0 Flash", "0.10", "0.40", "0.025", "0"),
-            ("gemini-2.0-pro-exp", "Gemini 2.0 Pro", "1.25", "5.0", "0.3125", "0"),
-            ("gemini-3.8-flash", "Gemini 3.8 Flash", "0.75", "3.75", "0.075", "0"),
-            ("gemini-4-argon", "Gemini 4 Argon", "2.00", "10.00", "0.10", "0"),
-            ("claude-sonnet-5-5", "Claude Sonnet 5.5", "2.0", "10.0", "0.10", "2.50"),
-            ("claude-sonnet-5.5", "Claude Sonnet 5.5", "2.0", "10.0", "0.10", "2.50"),
-            ("claude-opus-5-5", "Claude Opus 5.5", "4.0", "20.0", "0.20", "5.0"),
-            ("claude-opus-5.5", "Claude Opus 5.5", "4.0", "20.0", "0.20", "5.0"),
-            ("deepseek-chat", "DeepSeek V3", "0.14", "0.28", "0.014", "0"),
-            ("deepseek-reasoner", "DeepSeek R1", "0.55", "2.19", "0.14", "0"),
+            ("o4-mini", "OpenAI o4-mini", "1.10", "4.40", "0.275", "0"),
+            // DeepSeek / Grok / Kimi / MiniMax / GLM / Qwen
+            ("deepseek-chat", "DeepSeek Chat", "0.44", "1.32", "0.014", "0"),
+            ("deepseek-reasoner", "DeepSeek Reasoner", "0.44", "1.32", "0.014", "0"),
+            ("deepseek-flash", "DeepSeek V4.1 Flash", "0.3", "1.2", "0.006", "0"),
+            ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", "0.3", "1.2", "0.006", "0"),
+            ("deepseek-v4-flash", "DeepSeek V4 Flash", "0.3", "1.2", "0.006", "0"),
+            ("deepseek-v4-pro", "DeepSeek V4 Pro", "1.32", "3.96", "0.044", "0"),
+            ("deepseek-v3.2", "DeepSeek V3.2", "0.28", "0.42", "0.028", "0"),
             ("grok-2", "Grok 2", "2.0", "10.0", "0", "0"),
-            ("grok-3", "Grok 3", "3.0", "15.0", "0.30", "0"),
+            ("grok-3", "Grok 3", "3.0", "15.0", "0.75", "0"),
+            ("grok-4", "Grok 4", "3", "15", "0.75", "0"),
+            ("grok-4.5", "Grok 4.5", "2", "6", "0.30", "0"),
+            ("grok-4.5-build", "Grok 4.5 Build", "2", "6", "0.30", "0"),
+            ("grok-4.6", "Grok 4.6", "2", "6", "0.50", "0"),
+            ("grok-4.6-build", "Grok 4.6 Build", "2", "6", "0.50", "0"),
+            ("grok-4.7", "Grok 4.7", "2", "6", "0.50", "0"),
+            ("grok-4.7-build", "Grok 4.7 Build", "2", "6", "0.50", "0"),
+            ("kimi-k2.5", "Kimi K2.5", "0.60", "3.00", "0.10", "0"),
+            ("kimi-k2.6", "Kimi K2.6", "0.95", "4.00", "0.16", "0"),
+            ("kimi-k2.7-code", "Kimi K2.7 Code", "0.95", "4.00", "0.19", "0"),
+            ("kimi-k3", "Kimi K3", "3.00", "15.00", "0.30", "3.00"),
+            ("k3", "Kimi K3", "3.00", "15.00", "0.30", "3.00"),
+            ("kimi-k3.1-pro", "Kimi K3.1 Pro", "2.00", "10.00", "0.20", "2.00"),
+            ("k3.1-pro", "Kimi K3.1 Pro", "2.00", "10.00", "0.20", "2.00"),
+            ("minimax-m2.5", "MiniMax M2.5", "0.30", "1.20", "0.03", "0.375"),
+            ("minimax-m2.7", "MiniMax M2.7", "0.30", "1.20", "0.06", "0.375"),
+            ("minimax-m3", "MiniMax M3", "0.30", "1.20", "0.06", "0"),
+            ("minimax-m3.1-flash", "MiniMax M3.1 Flash", "0.15", "0.60", "0.015", "0"),
+            ("glm-5", "GLM-5", "1", "3.2", "0.2", "0"),
+            ("glm-5.3", "GLM-5.3", "1.4", "4.4", "0.26", "0"),
+            ("glm-5.3-flash", "GLM-5.3-Flash", "0.15", "0.50", "0.03", "0"),
+            ("qwen4-max", "Qwen4 Max", "1.50", "4.50", "0.075", "1.875"),
+            ("qwen3.8-max", "Qwen3.8 Max", "2", "6", "0.25", "2.50"),
+            ("qwen3-coder-plus", "Qwen3 Coder Plus", "0.65", "3.25", "0.13", "0"),
             ("qwen-max", "Qwen Max", "2.40", "9.60", "0.60", "0"),
             ("qwen-plus", "Qwen Plus", "0.40", "1.20", "0.10", "0"),
         ];
@@ -430,6 +541,12 @@ impl UsageDb {
         }
 
         Ok(())
+    }
+
+    /// Backfill stored zero-cost usage rows once pricing becomes available.
+    pub fn backfill_missing_costs(&self) -> Result<u64, String> {
+        let conn = self.connect()?;
+        crate::session_usage::backfill_missing_usage_costs_on_conn(&conn, None)
     }
 
     /// Import all data from CC-Switch database into this usage database using ATTACH DATABASE.
@@ -476,6 +593,9 @@ impl UsageDb {
                 guard.insert(cc_switch_db_path.to_path_buf(), mtime_stamp);
             }
         }
+        drop(conn);
+        let _ = self.ensure_default_pricing();
+        let _ = self.backfill_missing_costs();
 
         Ok(CcSwitchUsageImportReport {
             logs_imported: logs_count,
@@ -1256,6 +1376,7 @@ impl UsageDb {
                 info.cache_creation_cost_per_million,
             ],
         ).map_err(|e| format!("更新模型定价失败: {e}"))?;
+        let _ = crate::session_usage::backfill_missing_usage_costs_on_conn(&conn, Some(&info.model_id));
         Ok(())
     }
 
@@ -1323,6 +1444,467 @@ impl UsageDb {
         let conn = self.connect()?;
         crate::session_usage::sync_all(&conn, paths)
     }
+
+    /// Return distinct model identifiers present in `proxy_request_logs` that currently lack
+    /// a matching pricing rule in `model_pricing`.
+    pub fn get_unpriced_used_models(&self) -> Result<Vec<String>, String> {
+        let conn = self.connect()?;
+        get_unpriced_used_models_on_conn(&conn)
+    }
+
+    /// Apply a parsed `models.dev` catalog to `model_pricing` (inserting newly released canonical
+    /// models and any unpriced models found in local request logs, plus updating 0-cost placeholder
+    /// rules without overwriting customized non-zero prices) and backfill historical `$0` rows.
+    pub fn sync_from_models_dev_entries(
+        &self,
+        entries: &[ModelsDevEntry],
+    ) -> Result<ModelsDevSyncReport, String> {
+        let mut conn = self.connect()?;
+        let unpriced_used = get_unpriced_used_models_on_conn(&conn)?;
+        let selected = select_models_dev_sync_candidates(entries, &unpriced_used);
+        if selected.is_empty() {
+            return Ok(ModelsDevSyncReport {
+                catalog_models: entries.len(),
+                ..Default::default()
+            });
+        }
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("开启 models.dev 同步事务失败: {e}"))?;
+        let mut added_models = 0usize;
+        let mut updated_models = 0usize;
+
+        for item in &selected {
+            let p = &item.pricing;
+            let existing_costs: Option<(f64, f64)> = tx
+                .query_row(
+                    "SELECT COALESCE(CAST(input_cost_per_million AS REAL), 0),
+                            COALESCE(CAST(output_cost_per_million AS REAL), 0)
+                     FROM model_pricing WHERE model_id = ?1",
+                    params![p.model_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok();
+
+            match existing_costs {
+                None => {
+                    tx.execute(
+                        "INSERT INTO model_pricing (
+                            model_id, display_name, input_cost_per_million, output_cost_per_million,
+                            cache_read_cost_per_million, cache_creation_cost_per_million
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            p.model_id,
+                            p.display_name,
+                            p.input_cost_per_million,
+                            p.output_cost_per_million,
+                            p.cache_read_cost_per_million,
+                            p.cache_creation_cost_per_million,
+                        ],
+                    )
+                    .map_err(|e| format!("写入 models.dev 模型定价失败: {e}"))?;
+                    added_models += 1;
+                }
+                Some((in_cost, out_cost)) if in_cost <= 0.0 && out_cost <= 0.0 => {
+                    let new_in = p.input_cost_per_million.parse::<f64>().unwrap_or(0.0);
+                    let new_out = p.output_cost_per_million.parse::<f64>().unwrap_or(0.0);
+                    if new_in > 0.0 || new_out > 0.0 {
+                        tx.execute(
+                            "UPDATE model_pricing SET
+                                display_name = ?2,
+                                input_cost_per_million = ?3,
+                                output_cost_per_million = ?4,
+                                cache_read_cost_per_million = ?5,
+                                cache_creation_cost_per_million = ?6
+                             WHERE model_id = ?1",
+                            params![
+                                p.model_id,
+                                p.display_name,
+                                p.input_cost_per_million,
+                                p.output_cost_per_million,
+                                p.cache_read_cost_per_million,
+                                p.cache_creation_cost_per_million,
+                            ],
+                        )
+                        .map_err(|e| format!("更新零成本模型定价失败: {e}"))?;
+                        updated_models += 1;
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| format!("提交 models.dev 同步事务失败: {e}"))?;
+
+        let backfilled_rows = if added_models > 0 || updated_models > 0 {
+            crate::session_usage::backfill_missing_usage_costs_on_conn(&conn, None).unwrap_or(0)
+        } else {
+            0
+        };
+
+        Ok(ModelsDevSyncReport {
+            catalog_models: entries.len(),
+            selected_models: selected.len(),
+            added_models,
+            updated_models,
+            backfilled_rows,
+        })
+    }
+
+    /// Fetch the latest catalog from `https://models.dev/api.json`, sync new/unpriced models
+    /// into `model_pricing`, backfill historical `$0` rows, and return both the sync report
+    /// and the full parsed catalog for interactive browsing.
+    pub fn sync_from_models_dev(&self) -> Result<(ModelsDevSyncReport, Vec<ModelsDevEntry>), String> {
+        let entries = fetch_models_dev_catalog()?;
+        let report = self.sync_from_models_dev_entries(&entries)?;
+        Ok((report, entries))
+    }
+}
+
+pub const MODELS_DEV_API_URL: &str = "https://models.dev/api.json";
+const MODELS_DEV_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+const MODELS_DEV_FAMILY_LIMIT: usize = 10;
+
+const NON_TEXT_MODEL_MARKERS: &[&str] = &[
+    "audio",
+    "deprecated",
+    "embedding",
+    "image",
+    "moderation",
+    "realtime",
+    "transcribe",
+    "tts",
+    "video",
+];
+
+/// Normalize a `models.dev` model identifier (strips `vendor/`, `:variant`, `@`, `[1m]`).
+pub fn normalize_models_dev_model_id(model_id: &str) -> String {
+    let after_slash = model_id
+        .rsplit_once('/')
+        .map(|(_, tail)| tail)
+        .unwrap_or(model_id);
+    let before_colon = after_slash
+        .split_once(':')
+        .map(|(head, _)| head)
+        .unwrap_or(after_slash);
+    let mut normalized = before_colon.trim().replace('@', "-").to_ascii_lowercase();
+    if let Some(stripped) = normalized.strip_suffix("[1m]") {
+        normalized = stripped.trim().to_string();
+    }
+    normalized
+}
+
+/// Format a per-1M USD price value cleanly (up to 6 decimal places, trimming trailing zeros).
+pub fn format_models_dev_price(value: f64) -> String {
+    if !value.is_finite() || value <= 0.0 || value >= 1e12 {
+        return "0".to_string();
+    }
+    let formatted = format!("{value:.6}");
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn is_text_pricing_model(raw_model_id: &str, model_obj: &serde_json::Value) -> bool {
+    if model_obj
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(|s| s.eq_ignore_ascii_case("deprecated"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    if let Some(outputs) = model_obj
+        .get("modalities")
+        .and_then(|m| m.get("output"))
+        .and_then(|o| o.as_array())
+    {
+        let modalities: Vec<String> = outputs
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| s.to_ascii_lowercase())
+            .collect();
+        if !modalities.is_empty()
+            && (!modalities.iter().any(|m| m == "text")
+                || modalities
+                    .iter()
+                    .any(|m| matches!(m.as_str(), "audio" | "image" | "video")))
+        {
+            return false;
+        }
+    }
+
+    let model_name = model_obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let searchable = format!("{raw_model_id} {model_name}").to_ascii_lowercase();
+    !NON_TEXT_MODEL_MARKERS
+        .iter()
+        .any(|marker| searchable.contains(marker))
+}
+
+/// Parse a `https://models.dev/api.json` payload into a sorted list of text model pricing entries.
+pub fn parse_models_dev_catalog(json: &str) -> Result<Vec<ModelsDevEntry>, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("解析 models.dev JSON 失败: {e}"))?;
+    let providers = root
+        .as_object()
+        .ok_or_else(|| "models.dev 响应格式无效（顶层应为对象）".to_string())?;
+
+    let mut entries = Vec::new();
+    for (provider_id, provider_val) in providers {
+        let Some(provider_obj) = provider_val.as_object() else {
+            continue;
+        };
+        let provider_name = provider_obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(provider_id.as_str())
+            .to_string();
+        let Some(models_obj) = provider_obj.get("models").and_then(|v| v.as_object()) else {
+            continue;
+        };
+
+        for (raw_model_id, model_val) in models_obj {
+            if !is_text_pricing_model(raw_model_id, model_val) {
+                continue;
+            }
+            let Some(cost_obj) = model_val.get("cost").and_then(|v| v.as_object()) else {
+                continue;
+            };
+            let input_opt = cost_obj.get("input").and_then(|v| v.as_f64());
+            let output_opt = cost_obj.get("output").and_then(|v| v.as_f64());
+            if input_opt.is_none() && output_opt.is_none() {
+                continue;
+            }
+
+            let normalized_id = normalize_models_dev_model_id(raw_model_id);
+            if normalized_id.is_empty() {
+                continue;
+            }
+
+            let display_name = model_val
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(raw_model_id.as_str())
+                .to_string();
+            let release_date = model_val
+                .get("release_date")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let input = input_opt.unwrap_or(0.0);
+            let output = output_opt.unwrap_or(0.0);
+            let cache_read = cost_obj
+                .get("cache_read")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let cache_write = cost_obj
+                .get("cache_write")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+
+            entries.push(ModelsDevEntry {
+                key: format!("{provider_id}/{raw_model_id}"),
+                provider_id: provider_id.clone(),
+                provider_name: provider_name.clone(),
+                raw_model_id: raw_model_id.clone(),
+                normalized_id: normalized_id.clone(),
+                display_name: display_name.clone(),
+                release_date,
+                pricing: ModelPricingInfo {
+                    model_id: normalized_id,
+                    display_name,
+                    input_cost_per_million: format_models_dev_price(input),
+                    output_cost_per_million: format_models_dev_price(output),
+                    cache_read_cost_per_million: format_models_dev_price(cache_read),
+                    cache_creation_cost_per_million: format_models_dev_price(cache_write),
+                },
+            });
+        }
+    }
+
+    entries.sort_by(|a, b| {
+        b.release_date
+            .cmp(&a.release_date)
+            .then_with(|| a.display_name.cmp(&b.display_name))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    Ok(entries)
+}
+
+/// Fetch and parse the public `https://models.dev/api.json` catalog via the global/system proxy agent.
+pub fn fetch_models_dev_catalog() -> Result<Vec<ModelsDevEntry>, String> {
+    use std::io::Read;
+
+    let agent = crate::skills::skills_http_agent(45);
+    let response = agent
+        .get(MODELS_DEV_API_URL)
+        .set("Accept", "application/json")
+        .set("User-Agent", "AIToolPlus-ModelsDevSync")
+        .call()
+        .map_err(|e| crate::skills::map_skills_request_error(&e, "拉取 models.dev 模型定价"))?;
+
+    let mut buf = Vec::new();
+    response
+        .into_reader()
+        .take((MODELS_DEV_MAX_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("读取 models.dev 响应失败: {e}"))?;
+
+    if buf.len() > MODELS_DEV_MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "models.dev 响应体积超过上限 ({} bytes)",
+            MODELS_DEV_MAX_RESPONSE_BYTES
+        ));
+    }
+
+    let body = String::from_utf8(buf).map_err(|e| format!("models.dev 响应非 UTF-8: {e}"))?;
+    parse_models_dev_catalog(&body)
+}
+
+fn is_official_family_match(provider_id: &str, model_id_lower: &str) -> Option<&'static str> {
+    match provider_id {
+        "anthropic" if model_id_lower.starts_with("claude-") => Some("claude"),
+        "openai"
+            if model_id_lower.starts_with("gpt-")
+                || model_id_lower.starts_with("o1-")
+                || model_id_lower.starts_with("o3-")
+                || model_id_lower.starts_with("o4-") =>
+        {
+            Some("gpt")
+        }
+        "google" if model_id_lower.starts_with("gemini-") => Some("gemini"),
+        "xai" if model_id_lower.starts_with("grok-") => Some("grok"),
+        "deepseek" if model_id_lower.starts_with("deepseek-") => Some("deepseek"),
+        "alibaba" if model_id_lower.starts_with("qwen") => Some("qwen"),
+        "xiaomi" if model_id_lower.starts_with("mimo-") => Some("mimo"),
+        "longcat" if model_id_lower.starts_with("longcat-") => Some("longcat"),
+        "moonshotai" if model_id_lower.starts_with("kimi-") => Some("kimi"),
+        "minimax" | "minimax-cn" if model_id_lower.starts_with("minimax-m") => Some("minimax"),
+        "zai" | "zhipuai" if model_id_lower.starts_with("glm-") => Some("glm"),
+        "mistral" if model_id_lower.starts_with("mistral-") || model_id_lower.starts_with("codestral") => {
+            Some("mistral")
+        }
+        _ => None,
+    }
+}
+
+/// Select canonical recent models per official provider family PLUS any `models.dev` entries
+/// that match unpriced models already used in the user's `proxy_request_logs`.
+pub fn select_models_dev_sync_candidates(
+    entries: &[ModelsDevEntry],
+    unpriced_used_models: &[String],
+) -> Vec<ModelsDevEntry> {
+    let mut selected_by_norm_id: std::collections::BTreeMap<String, ModelsDevEntry> =
+        std::collections::BTreeMap::new();
+    let mut family_counts: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::new();
+
+    // 1. Official provider recent releases per family (entries are already sorted by release_date desc).
+    for entry in entries {
+        let raw_lower = entry.raw_model_id.to_ascii_lowercase();
+        if let Some(family) = is_official_family_match(&entry.provider_id, &raw_lower) {
+            let count = family_counts.entry(family).or_insert(0);
+            if *count < MODELS_DEV_FAMILY_LIMIT {
+                selected_by_norm_id
+                    .entry(entry.normalized_id.clone())
+                    .or_insert_with(|| entry.clone());
+                *count += 1;
+            }
+        }
+    }
+
+    // 2. Any unpriced model present in the user's local usage logs matched against all providers
+    //    (preferring official family providers first, then newest release_date).
+    if !unpriced_used_models.is_empty() {
+        let mut needed_candidates = std::collections::HashSet::new();
+        for raw_used in unpriced_used_models {
+            let norm = normalize_models_dev_model_id(raw_used);
+            if !norm.is_empty() {
+                needed_candidates.insert(norm);
+            }
+            for cand in crate::session_usage::model_pricing_candidates(raw_used) {
+                if !cand.is_empty() {
+                    needed_candidates.insert(cand);
+                }
+            }
+        }
+
+        // First pass: official providers matching needed candidates
+        for entry in entries {
+            let raw_lower = entry.raw_model_id.to_ascii_lowercase();
+            if is_official_family_match(&entry.provider_id, &raw_lower).is_some()
+                && needed_candidates.contains(&entry.normalized_id)
+            {
+                selected_by_norm_id
+                    .entry(entry.normalized_id.clone())
+                    .or_insert_with(|| entry.clone());
+            }
+        }
+        // Second pass: any provider in models.dev matching needed candidates
+        for entry in entries {
+            if needed_candidates.contains(&entry.normalized_id) {
+                selected_by_norm_id
+                    .entry(entry.normalized_id.clone())
+                    .or_insert_with(|| entry.clone());
+            }
+        }
+    }
+
+    selected_by_norm_id.into_values().collect()
+}
+
+fn get_unpriced_used_models_on_conn(conn: &Connection) -> Result<Vec<String>, String> {
+    let pricing_table = crate::session_usage::PricingTable::load(conn);
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT model, request_model, pricing_model
+             FROM proxy_request_logs
+             WHERE COALESCE(CAST(total_cost_usd AS REAL), 0) <= 0",
+        )
+        .map_err(|e| format!("查询未定价模型失败: {e}"))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|e| format!("读取未定价模型失败: {e}"))?;
+
+    let mut unpriced = std::collections::BTreeSet::new();
+    for r in rows.flatten() {
+        for candidate in [Some(r.0.as_str()), r.1.as_deref(), r.2.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty()
+                || trimmed.starts_with('<')
+                || trimmed.eq_ignore_ascii_case("unknown")
+                || trimmed.eq_ignore_ascii_case("auto")
+                || trimmed.eq_ignore_ascii_case("default")
+            {
+                continue;
+            }
+            if pricing_table.find_price(trimmed).is_none() {
+                unpriced.insert(trimmed.to_string());
+            }
+        }
+    }
+    Ok(unpriced.into_iter().collect())
 }
 
 /// Map a sidebar `visible_tools` key to its canonical `proxy_request_logs.app_type`.
@@ -1715,6 +2297,97 @@ mod tests {
             .unwrap();
         assert_eq!(logs.total, 2);
         assert!(logs.data.iter().all(|r| r.app_type != "gemini"));
+    }
+
+    #[test]
+    fn test_models_dev_catalog_sync_and_backfill() {
+        let sample_json = r#"{
+            "anthropic": {
+                "name": "Anthropic",
+                "models": {
+                    "claude-sonnet-6-0[1m]": {
+                        "name": "Claude Sonnet 6.0",
+                        "release_date": "2027-03-01",
+                        "modalities": { "input": ["text"], "output": ["text"] },
+                        "cost": { "input": 3.5, "output": 17.5, "cache_read": 0.35, "cache_write": 4.375 }
+                    },
+                    "claude-old-deprecated": {
+                        "name": "Claude Old",
+                        "status": "deprecated",
+                        "cost": { "input": 10.0, "output": 30.0 }
+                    }
+                }
+            },
+            "openai": {
+                "name": "OpenAI",
+                "models": {
+                    "text-embedding-4": {
+                        "name": "Text Embedding 4",
+                        "cost": { "input": 0.02, "output": 0.0 }
+                    },
+                    "gpt-audio-next": {
+                        "name": "GPT Audio Next",
+                        "modalities": { "input": ["text"], "output": ["text", "audio"] },
+                        "cost": { "input": 5.0, "output": 20.0 }
+                    }
+                }
+            },
+            "openrouter": {
+                "name": "OpenRouter",
+                "models": {
+                    "stepfun/step-4-pro:thinking": {
+                        "name": "Step 4 Pro",
+                        "release_date": "2027-02-15",
+                        "cost": { "input": 1.2, "output": 4.8, "cache_read": 0.12 }
+                    }
+                }
+            }
+        }"#;
+
+        let catalog = parse_models_dev_catalog(sample_json).expect("parse models.dev json");
+        assert_eq!(catalog.len(), 2, "Should filter deprecated, embedding, and audio output models");
+        assert_eq!(catalog[0].normalized_id, "claude-sonnet-6-0");
+        assert_eq!(catalog[0].pricing.input_cost_per_million, "3.5");
+        assert_eq!(catalog[1].normalized_id, "step-4-pro");
+
+        let tmp = tempdir().unwrap();
+        let paths = Paths::new(tmp.path().join("home"), tmp.path().join("appdata"));
+        let db = UsageDb::open(&paths).expect("open usage db");
+        let now = chrono::Utc::now().timestamp();
+        {
+            let conn = db.connect().unwrap();
+            for (req_id, model) in [
+                ("req-future-claude", "claude-sonnet-6-0-20270301"),
+                ("req-future-step", "stepfun/step-4-pro"),
+            ] {
+                conn.execute(
+                    "INSERT INTO proxy_request_logs (
+                        request_id, provider_id, app_type, model, input_tokens, output_tokens,
+                        cache_read_tokens, cache_creation_tokens, total_cost_usd, latency_ms,
+                        status_code, created_at, data_source
+                    ) VALUES (?1, '_session', 'claude', ?2, 1000000, 1000000, 0, 0, '0', 100, 200, ?3, 'session')",
+                    params![req_id, model, now],
+                )
+                .unwrap();
+            }
+        }
+
+        let unpriced_before = db.get_unpriced_used_models().unwrap();
+        assert!(unpriced_before.contains(&"claude-sonnet-6-0-20270301".to_string()));
+        assert!(unpriced_before.contains(&"stepfun/step-4-pro".to_string()));
+
+        let report = db.sync_from_models_dev_entries(&catalog).expect("sync models.dev");
+        assert_eq!(report.added_models, 2);
+        assert_eq!(report.backfilled_rows, 2);
+        assert!(db.get_unpriced_used_models().unwrap().is_empty());
+
+        let summary = db.get_usage_summary(None, None, None, None, None).unwrap();
+        let total_cost: f64 = summary.total_cost.parse().unwrap_or(0.0);
+        // (3.5 + 17.5) + (1.2 + 4.8) = 21.0 + 6.0 = 27.0
+        assert!(
+            (total_cost - 27.0).abs() < 1e-4,
+            "Expected historical $0 logs for future models to backfill to $27.0, got {total_cost}"
+        );
     }
 }
 

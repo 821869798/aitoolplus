@@ -230,20 +230,26 @@ impl Workspace {
             start_tab = ?std::env::var("AITOOLPLUS_START_TAB").ok(),
             "resolved workspace start route"
         );
+        let requested_tab = std::env::var("AITOOLPLUS_START_TAB")
+            .or_else(|_| std::env::var("AITOOLPLUS_TAB"))
+            .ok();
         let page = match requested_page.as_str() {
             "apps" | "local_env" => Page::Apps,
             "mcp" => Page::Mcp,
             "skills" => Page::Skills,
+            "usage" | "stats" => Page::Usage,
             "antigravity" => Page::Antigravity,
             "gateway" => Page::Gateway,
+            "settings"
+                if matches!(requested_tab.as_deref(), Some("usage" | "stats")) =>
+            {
+                Page::Usage
+            }
             "settings" => Page::Settings,
             key => ToolId::from_key(key)
                 .map(Page::Tool)
                 .unwrap_or(Page::Tool(ToolId::ClaudeCode)),
         };
-        let requested_tab = std::env::var("AITOOLPLUS_START_TAB")
-            .or_else(|_| std::env::var("AITOOLPLUS_TAB"))
-            .ok();
         if let Some(tab) = requested_tab {
             ui.tool_tab = match tab.as_str() {
                 "common" => pages::ToolTab::Common,
@@ -767,6 +773,13 @@ impl Workspace {
         self.settings.last_page = page.key().to_string();
         (self.callbacks.save_settings)(&self.settings);
         self.ui.on_page_change(page, cx);
+        if page == Page::Usage {
+            self.ui.usage_load_failed = false;
+            self.refresh_usage_data(cx);
+            if self.settings.usage_auto_scan_sessions {
+                self.trigger_session_sync(cx, false);
+            }
+        }
         cx.notify();
     }
 
@@ -1623,6 +1636,7 @@ impl Render for Workspace {
             let update_install_confirm = self.ui.update_install_confirm_dialog.clone();
             let codex_unify = self.ui.codex_unify_dialog.clone();
             let gateway_selected_req = self.ui.gateway_selected_request.clone();
+            let usage_editing_pricing = self.ui.usage_editing_pricing.clone();
             let mut out = vec![];
             if let Some(d) = dialogs {
                 out.push(pages::tool_page::render_provider_dialog(d, self, cx));
@@ -1734,6 +1748,9 @@ impl Render for Workspace {
             if let Some(req_detail) = gateway_selected_req {
                 out.push(pages::gateway_page::render_request_detail_modal(&req_detail, self, cx));
             }
+            if let Some(d) = usage_editing_pricing {
+                out.push(pages::usage_page::render_usage_pricing_dialog(d, self, cx));
+            }
             out
         } else {
             vec![]
@@ -1761,6 +1778,7 @@ struct UsageSnapshot {
     logs: Option<aitoolplus_core::usage::PaginatedLogs>,
     pricing: Option<Vec<aitoolplus_core::usage::ModelPricingInfo>>,
     configs: Option<Vec<aitoolplus_core::usage::AppPricingConfig>>,
+    unpriced_models: Option<Vec<String>>,
 }
 
 impl Workspace {
@@ -1906,6 +1924,7 @@ impl Workspace {
                             .ok(),
                         pricing: db.get_model_pricing().ok(),
                         configs: db.get_app_pricing_configs().ok(),
+                        unpriced_models: db.get_unpriced_used_models().ok(),
                     }
                 })
                 .await;
@@ -1956,6 +1975,15 @@ impl Workspace {
                 }
                 if let Some(configs) = snap.configs {
                     ws.ui.usage_app_pricing_configs = configs;
+                }
+                if let Some(unpriced) = snap.unpriced_models {
+                    ws.ui.usage_unpriced_models = unpriced;
+                }
+                if ws.settings.usage_models_dev_auto_sync && !ws.ui.usage_models_dev_syncing {
+                    let now = chrono::Utc::now().timestamp();
+                    if now.saturating_sub(ws.settings.usage_models_dev_last_sync_at) >= 6 * 3600 {
+                        ws.trigger_models_dev_sync(cx, false);
+                    }
                 }
                 cx.notify();
             });
@@ -2010,6 +2038,63 @@ impl Workspace {
                     Err(e) => {
                         if notify_toast {
                             ws.ui.toast(format!("同步失败: {e}"), true);
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn trigger_models_dev_sync(&mut self, cx: &mut Context<Self>, notify_toast: bool) {
+        if self.ui.usage_models_dev_syncing {
+            return;
+        }
+        self.ui.usage_models_dev_syncing = true;
+        cx.notify();
+
+        let db_opt = self.ensure_usage_db();
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            let res = cx
+                .background_spawn(async move {
+                    if let Some(db) = db_opt {
+                        db.sync_from_models_dev()
+                    } else {
+                        Err("数据库未初始化".to_string())
+                    }
+                })
+                .await;
+
+            let _ = weak.update(cx, |ws: &mut Workspace, cx| {
+                ws.ui.usage_models_dev_syncing = false;
+                match res {
+                    Ok((rep, _entries)) => {
+                        ws.settings.usage_models_dev_last_sync_at = chrono::Utc::now().timestamp();
+                        ws.persist_settings();
+                        if notify_toast || rep.added_models > 0 || rep.updated_models > 0 || rep.backfilled_rows > 0 {
+                            ws.refresh_usage_data(cx);
+                        }
+                        if notify_toast || rep.added_models > 0 || rep.backfilled_rows > 0 {
+                            let msg = ws.i18n.raw(
+                                &format!(
+                                    "models.dev 定价同步完成：新增 {} 个模型，更新 {} 个模型，回填 {} 条历史零成本记录",
+                                    rep.added_models, rep.updated_models, rep.backfilled_rows
+                                ),
+                                &format!(
+                                    "models.dev pricing synced: +{} added, {} updated, {} historical $0 rows backfilled",
+                                    rep.added_models, rep.updated_models, rep.backfilled_rows
+                                ),
+                            ).to_string();
+                            ws.ui.toast(msg, false);
+                        }
+                    }
+                    Err(e) => {
+                        if notify_toast {
+                            ws.ui.toast(format!("models.dev 同步失败: {e}"), true);
+                        } else {
+                            tracing::warn!("Auto models.dev pricing sync failed: {e}");
                         }
                     }
                 }

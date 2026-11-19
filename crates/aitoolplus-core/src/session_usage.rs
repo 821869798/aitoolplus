@@ -40,6 +40,7 @@ pub(crate) struct PricingTable {
     exact: HashMap<String, ModelPrice>,
     sorted_keys: Vec<(String, ModelPrice)>,
     app_multipliers: HashMap<String, f64>,
+    app_sources: HashMap<String, String>,
     has_any_proxy_logs: bool,
     pi_parent_cache: std::cell::RefCell<HashMap<PathBuf, HashSet<String>>>,
     codex_parent_cache: std::cell::RefCell<HashMap<PathBuf, Vec<(i64, CodexTokenSig)>>>,
@@ -76,18 +77,23 @@ impl PricingTable {
         sorted_keys.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
 
         let mut app_multipliers = HashMap::new();
-        if let Ok(mut stmt) =
-            conn.prepare("SELECT app_type, cost_multiplier FROM app_pricing_config")
-        {
+        let mut app_sources = HashMap::new();
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT app_type, cost_multiplier, COALESCE(pricing_model_source, 'response') FROM app_pricing_config",
+        ) {
             if let Ok(rows) = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?.to_ascii_lowercase(),
                     r.get::<_, String>(1)?.parse::<f64>().unwrap_or(1.0),
+                    r.get::<_, String>(2)?.trim().to_ascii_lowercase(),
                 ))
             }) {
-                for (app, mult) in rows.flatten() {
+                for (app, mult, src) in rows.flatten() {
                     if mult.is_finite() && mult >= 0.0 {
-                        app_multipliers.insert(app, mult);
+                        app_multipliers.insert(app.clone(), mult);
+                    }
+                    if !src.is_empty() {
+                        app_sources.insert(app, src);
                     }
                 }
             }
@@ -105,10 +111,36 @@ impl PricingTable {
             exact,
             sorted_keys,
             app_multipliers,
+            app_sources,
             has_any_proxy_logs,
             pi_parent_cache: std::cell::RefCell::new(HashMap::new()),
             codex_parent_cache: std::cell::RefCell::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn pricing_model_for<'a>(
+        &self,
+        app_type: &str,
+        model: &'a str,
+        request_model: &'a str,
+    ) -> &'a str {
+        let prefer_request = self
+            .app_sources
+            .get(&app_type.to_ascii_lowercase())
+            .is_some_and(|s| s == "request");
+        if prefer_request {
+            if !is_placeholder_pricing_model(request_model) {
+                return request_model;
+            }
+            return model;
+        }
+        if !is_placeholder_pricing_model(model) && !model_needs_repair(model) {
+            return model;
+        }
+        if !is_placeholder_pricing_model(request_model) && !model_needs_repair(request_model) {
+            return request_model;
+        }
+        model
     }
 
     pub(crate) fn find_price(&self, model: &str) -> Option<&ModelPrice> {
@@ -208,6 +240,38 @@ pub(crate) struct CostBreakdown {
     pub total: f64,
 }
 
+fn is_placeholder_pricing_model(model: &str) -> bool {
+    let norm = model.trim().to_ascii_lowercase();
+    norm.is_empty() || matches!(norm.as_str(), "unknown" | "null" | "none")
+}
+
+fn model_needs_repair(model: &str) -> bool {
+    let trimmed = model.trim();
+    trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("unknown")
+        || trimmed.len() > 96
+        || trimmed.contains('\n')
+        || trimmed.contains('{')
+        || trimmed.contains("-{-")
+}
+
+fn format_cost_str(value: f64) -> String {
+    if !value.is_finite() || value <= 0.0 {
+        return "0.000000".to_string();
+    }
+    let fixed6 = format!("{value:.6}");
+    if fixed6 != "0.000000" {
+        return fixed6;
+    }
+    let s = format!("{value:.12}");
+    let trimmed = s.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "0" {
+        "0.000000".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn push_candidate(out: &mut Vec<String>, s: &str) {
     let s = s.trim().to_ascii_lowercase();
     if !s.is_empty() && !out.contains(&s) {
@@ -215,7 +279,7 @@ fn push_candidate(out: &mut Vec<String>, s: &str) {
     }
 }
 
-fn model_pricing_candidates(raw: &str) -> Vec<String> {
+pub(crate) fn model_pricing_candidates(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -237,6 +301,9 @@ fn model_pricing_candidates(raw: &str) -> Vec<String> {
 
     push_candidate(&mut out, trimmed);
     push_candidate(&mut out, base_no_bracket);
+    if trimmed.contains(' ') || trimmed.contains('(') || trimmed.contains(')') {
+        push_candidate(&mut out, &normalize_agy_model_slug(trimmed));
+    }
 
     // Strip provider prefixes (e.g. `openrouter/anthropic/claude-sonnet-4-6` -> `claude-sonnet-4-6`)
     for source in [trimmed, base_no_bracket] {
@@ -300,23 +367,34 @@ fn insert_or_update_record(
     let model = clamp_label(&rec.model, "unknown");
     let request_model = clamp_label(&rec.request_model, &model);
     let provider_id = clamp_label(&rec.provider_id, "_session");
+    let pricing_model = pricing.pricing_model_for(&rec.app_type, &model, &request_model);
 
     // 1. Check primary request_id & alternate request_ids (cross-tool compatibility with cc-switch/legacy)
-    let mut existing: Option<(String, i64)> = conn
-        .prepare_cached("SELECT request_id, output_tokens FROM proxy_request_logs WHERE request_id = ?1")
+    let mut existing: Option<(String, i64, String, f64)> = conn
+        .prepare_cached(
+            "SELECT request_id, output_tokens, model, CAST(total_cost_usd AS REAL)
+             FROM proxy_request_logs WHERE request_id = ?1",
+        )
         .and_then(|mut s| {
-            s.query_row(params![rec.request_id], |r| Ok((r.get(0)?, r.get(1)?)))
-                .optional()
+            s.query_row(params![rec.request_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .optional()
         })
         .map_err(|e| format!("查询 request_id 失败: {e}"))?;
 
     if existing.is_none() {
         for alt in &rec.alternate_request_ids {
             existing = conn
-                .prepare_cached("SELECT request_id, output_tokens FROM proxy_request_logs WHERE request_id = ?1")
+                .prepare_cached(
+                    "SELECT request_id, output_tokens, model, CAST(total_cost_usd AS REAL)
+                     FROM proxy_request_logs WHERE request_id = ?1",
+                )
                 .and_then(|mut s| {
-                    s.query_row(params![alt], |r| Ok((r.get(0)?, r.get(1)?)))
-                        .optional()
+                    s.query_row(params![alt], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })
+                    .optional()
                 })
                 .map_err(|e| format!("查询 alternate request_id 失败: {e}"))?;
             if existing.is_some() {
@@ -325,22 +403,33 @@ fn insert_or_update_record(
         }
     }
 
-    if let Some((stored_id, stored_out)) = existing {
-        if rec.update_if_higher_output && (rec.output_tokens as i64) > stored_out {
-            let costs = pricing.calculate_costs(
-                &rec.app_type,
-                &request_model,
-                rec.fresh_input_tokens,
-                rec.output_tokens,
-                rec.cache_read_tokens,
-                rec.cache_creation_tokens,
-                rec.cache_creation_1h_tokens,
-                rec.explicit_cost,
-            );
+    if let Some((stored_id, stored_out, stored_model, stored_cost)) = existing {
+        let should_update_tokens =
+            rec.update_if_higher_output && (rec.output_tokens as i64) > stored_out;
+        let should_repair_model = !model_needs_repair(&model)
+            && !is_agy_orchestrator(&model)
+            && (model_needs_repair(&stored_model) || is_agy_orchestrator(&stored_model));
+        let costs = pricing.calculate_costs(
+            &rec.app_type,
+            pricing_model,
+            rec.fresh_input_tokens,
+            rec.output_tokens,
+            rec.cache_read_tokens,
+            rec.cache_creation_tokens,
+            rec.cache_creation_1h_tokens,
+            rec.explicit_cost,
+        );
+        let should_fill_cost = stored_cost <= 0.0 && costs.total > 0.0;
+        if should_update_tokens || should_repair_model || should_fill_cost {
             conn.prepare_cached(
                 "UPDATE proxy_request_logs SET
-                    input_tokens = ?1, output_tokens = ?2, cache_read_tokens = ?3,
-                    cache_creation_tokens = ?4, input_cost_usd = ?5, output_cost_usd = ?6,
+                    model = CASE WHEN ?13 = 1 THEN ?14 ELSE model END,
+                    request_model = CASE WHEN ?13 = 1 THEN ?15 ELSE request_model END,
+                    input_tokens = CASE WHEN ?16 = 1 THEN ?1 ELSE input_tokens END,
+                    output_tokens = CASE WHEN ?16 = 1 THEN ?2 ELSE output_tokens END,
+                    cache_read_tokens = CASE WHEN ?16 = 1 THEN ?3 ELSE cache_read_tokens END,
+                    cache_creation_tokens = CASE WHEN ?16 = 1 THEN ?4 ELSE cache_creation_tokens END,
+                    input_cost_usd = ?5, output_cost_usd = ?6,
                     cache_read_cost_usd = ?7, cache_creation_cost_usd = ?8, total_cost_usd = ?9,
                     input_token_semantics = ?10,
                     session_id = COALESCE(session_id, ?11)
@@ -352,14 +441,18 @@ fn insert_or_update_record(
                     rec.output_tokens as i64,
                     rec.cache_read_tokens as i64,
                     rec.cache_creation_tokens as i64,
-                    format!("{:.6}", costs.input),
-                    format!("{:.6}", costs.output),
-                    format!("{:.6}", costs.cache_read),
-                    format!("{:.6}", costs.cache_creation),
-                    format!("{:.6}", costs.total),
+                    format_cost_str(costs.input),
+                    format_cost_str(costs.output),
+                    format_cost_str(costs.cache_read),
+                    format_cost_str(costs.cache_creation),
+                    format_cost_str(costs.total),
                     INPUT_TOKEN_SEMANTICS_FRESH,
                     rec.session_id,
                     stored_id,
+                    if should_repair_model { 1i64 } else { 0i64 },
+                    model,
+                    request_model,
+                    if should_update_tokens { 1i64 } else { 0i64 },
                 ])
             })
             .map_err(|e| format!("更新增量会话记录失败: {e}"))?;
@@ -407,7 +500,7 @@ fn insert_or_update_record(
 
     let costs = pricing.calculate_costs(
         &rec.app_type,
-        &request_model,
+        pricing_model,
         rec.fresh_input_tokens,
         rec.output_tokens,
         rec.cache_read_tokens,
@@ -439,11 +532,11 @@ fn insert_or_update_record(
                 rec.cache_read_tokens as i64,
                 rec.cache_creation_tokens as i64,
                 INPUT_TOKEN_SEMANTICS_FRESH,
-                format!("{:.6}", costs.input),
-                format!("{:.6}", costs.output),
-                format!("{:.6}", costs.cache_read),
-                format!("{:.6}", costs.cache_creation),
-                format!("{:.6}", costs.total),
+                format_cost_str(costs.input),
+                format_cost_str(costs.output),
+                format_cost_str(costs.cache_read),
+                format_cost_str(costs.cache_creation),
+                format_cost_str(costs.total),
                 rec.status_code,
                 rec.error_message,
                 rec.session_id,
@@ -478,6 +571,157 @@ fn insert_or_update_record(
         report.skipped += 1;
     }
     Ok(())
+}
+
+/// Recalculate zero-cost rows once pricing becomes available (or after display-model slug repair).
+/// Skips zero-multiplier and zero-priced (free) rows, and preserves sub-micro-dollar precision.
+pub(crate) fn backfill_missing_usage_costs_on_conn(
+    conn: &Connection,
+    only_model_id: Option<&str>,
+) -> Result<u64, String> {
+    let pricing = PricingTable::load(conn);
+    let target_candidates: Option<Vec<String>> = only_model_id.map(model_pricing_candidates);
+
+    let mut rows_to_update: Vec<(String, String, String, String, String, String, u32, u32, u32, u32, i64, f64)> =
+        Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT request_id, app_type, model, COALESCE(request_model, model),
+                        COALESCE(cost_multiplier, '1.0'),
+                        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                        COALESCE(input_token_semantics, 0)
+                 FROM proxy_request_logs
+                 WHERE CAST(total_cost_usd AS REAL) <= 0
+                   AND (input_tokens > 0 OR output_tokens > 0
+                        OR cache_read_tokens > 0 OR cache_creation_tokens > 0)",
+            )
+            .map_err(|e| format!("查询待回填零成本记录失败: {e}"))?;
+        let mapped = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?.max(0) as u32,
+                    r.get::<_, i64>(6)?.max(0) as u32,
+                    r.get::<_, i64>(7)?.max(0) as u32,
+                    r.get::<_, i64>(8)?.max(0) as u32,
+                    r.get::<_, i64>(9)?,
+                ))
+            })
+            .map_err(|e| format!("读取待回填零成本记录失败: {e}"))?;
+
+        for (req_id, app_type, model, req_model, mult_str, inp, out, cr, cw, semantics) in
+            mapped.flatten()
+        {
+            let mult = mult_str.trim().parse::<f64>().unwrap_or(1.0);
+            if !mult.is_finite() || mult <= 0.0 {
+                continue;
+            }
+            if let Some(ref targets) = target_candidates {
+                let mut matches = false;
+                for field in [model.as_str(), req_model.as_str()] {
+                    for cand in model_pricing_candidates(field) {
+                        if targets.iter().any(|t| {
+                            t == &cand
+                                || (cand.len() >= 4
+                                    && t.strip_prefix(cand.as_str())
+                                        .is_some_and(|rest| rest.starts_with('-')))
+                        }) {
+                            matches = true;
+                            break;
+                        }
+                    }
+                    if matches {
+                        break;
+                    }
+                }
+                if !matches {
+                    continue;
+                }
+            }
+
+            let billing_model = pricing.pricing_model_for(&app_type, &model, &req_model);
+            let Some(p) = pricing.find_price(billing_model) else {
+                continue;
+            };
+
+            let app_lower = app_type.to_ascii_lowercase();
+            let cache_inclusive_app = matches!(app_lower.as_str(), "claude" | "codex");
+            let fresh_input = if !cache_inclusive_app || semantics == INPUT_TOKEN_SEMANTICS_FRESH {
+                inp
+            } else if semantics == 1 {
+                inp.saturating_sub(cr).saturating_sub(cw)
+            } else {
+                inp.saturating_sub(cr)
+            };
+
+            let input_cost = (fresh_input as f64 * p.input_per_m) / 1_000_000.0;
+            let output_cost = (out as f64 * p.output_per_m) / 1_000_000.0;
+            let cache_read_cost = (cr as f64 * p.cache_read_per_m) / 1_000_000.0;
+            let cache_creation_cost = (cw as f64 * p.cache_creation_per_m) / 1_000_000.0;
+            let base_total = input_cost + output_cost + cache_read_cost + cache_creation_cost;
+            let total_cost = base_total * mult;
+            if !total_cost.is_finite() || total_cost <= 0.0 {
+                continue;
+            }
+
+            rows_to_update.push((
+                req_id,
+                format_cost_str(input_cost),
+                format_cost_str(output_cost),
+                format_cost_str(cache_read_cost),
+                format_cost_str(cache_creation_cost),
+                format_cost_str(total_cost),
+                inp,
+                out,
+                cr,
+                cw,
+                semantics,
+                total_cost,
+            ));
+        }
+    }
+
+    if rows_to_update.is_empty() {
+        return Ok(0);
+    }
+
+    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+        .map_err(|e| format!("开启成本回填事务失败: {e}"))?;
+    let mut updated = 0u64;
+    let res: Result<(), String> = (|| {
+        let mut stmt = conn
+            .prepare_cached(
+                "UPDATE proxy_request_logs
+                 SET input_cost_usd = ?1,
+                     output_cost_usd = ?2,
+                     cache_read_cost_usd = ?3,
+                     cache_creation_cost_usd = ?4,
+                     total_cost_usd = ?5
+                 WHERE request_id = ?6",
+            )
+            .map_err(|e| format!("准备更新回填成本失败: {e}"))?;
+        for (req_id, in_c, out_c, cr_c, cw_c, tot_c, ..) in &rows_to_update {
+            updated += stmt
+                .execute(params![in_c, out_c, cr_c, cw_c, tot_c, req_id])
+                .map_err(|e| format!("执行更新回填成本失败: {e}"))? as u64;
+        }
+        Ok(())
+    })();
+    match res {
+        Ok(()) => conn
+            .execute_batch("COMMIT;")
+            .map_err(|e| format!("提交成本回填事务失败: {e}"))?,
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            return Err(e);
+        }
+    }
+    Ok(updated)
 }
 
 fn has_matching_proxy_log(conn: &Connection, rec: &UsageRecord, model: &str) -> Result<bool, String> {
@@ -792,12 +1036,13 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
                 } else {
                     continue;
                 };
+                let combined_stamp = agy_combined_stamp(&target);
                 sync_file_step(
                     conn,
                     &cursors,
                     &mut in_tx,
                     &target,
-                    None,
+                    Some(combined_stamp),
                     &mut report,
                     |_, _, rep| {
                         ingest_antigravity_jsonl(
@@ -984,6 +1229,9 @@ pub(crate) fn sync_all(conn: &Connection, paths: &Paths) -> Result<SessionSyncRe
     if in_tx {
         let _ = conn.execute_batch("COMMIT;");
     }
+
+    // Backfill any previously stored zero-cost rows that now match available pricing.
+    let _ = backfill_missing_usage_costs_on_conn(conn, None);
 
     Ok(report)
 }
@@ -2230,6 +2478,185 @@ fn normalize_agy_model_slug(display_model: &str) -> String {
         .join("-")
 }
 
+fn is_agy_orchestrator(model: &str) -> bool {
+    matches!(
+        normalize_agy_model_slug(model).as_str(),
+        "orchestrator-carbon"
+            | "gemini-pro-orchestrator"
+            | "orchestrator-argon"
+            | "gemini-pro-orchestrator-argon"
+    )
+}
+
+fn agy_model_from_settings_change(content: &str) -> Option<String> {
+    let start = content.find("Model Selection")?;
+    let rest = &content[start..];
+    let to_pos = rest.find(" to ")? + 4;
+    let tail = &rest[to_pos..];
+    // Preserve decimal model names (e.g. `Gemini 3.8 Flash`); only stop at `. `, `\n`, or backtick.
+    let end = tail
+        .find(". ")
+        .or_else(|| tail.find('\n'))
+        .or_else(|| tail.find('`'))
+        .unwrap_or(tail.len());
+    let model = tail[..end].trim().trim_matches('.').trim();
+    if model.is_empty() || model.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(model.to_string())
+    }
+}
+
+fn agy_native_db_path(transcript: &Path) -> Option<PathBuf> {
+    // brain/<id>/.system_generated/logs/transcript*.jsonl -> conversations/<id>.db
+    let session_dir = transcript.parent()?.parent()?.parent()?;
+    let brain_dir = session_dir.parent()?;
+    if brain_dir.file_name().and_then(|n| n.to_str()) != Some("brain") {
+        return None;
+    }
+    let root = brain_dir.parent()?;
+    let id = session_dir.file_name()?;
+    let db = root.join("conversations").join(id).with_extension("db");
+    db.is_file().then_some(db)
+}
+
+/// Bump this constant whenever Antigravity transcript/native model resolution changes
+/// so existing DB cursors re-scan stale corrupted / orchestrator rows once automatically.
+const AGY_PARSER_EPOCH_SALT: i64 = 3;
+
+fn agy_combined_stamp(transcript: &Path) -> FileStamp {
+    let mut stamp = FileStamp::from_path(transcript);
+    if let Some(native_db) = agy_native_db_path(transcript) {
+        let native = FileStamp::from_sqlite_path(&native_db);
+        stamp.mtime_nanos = stamp.mtime_nanos.max(native.mtime_nanos);
+        stamp.mtime_millis = stamp.mtime_millis.max(native.mtime_millis);
+        stamp.mtime_secs = stamp.mtime_secs.max(native.mtime_secs);
+        stamp.byte_size = stamp
+            .byte_size
+            .saturating_add(native.byte_size)
+            .saturating_add(AGY_PARSER_EPOCH_SALT);
+    } else {
+        stamp.byte_size = stamp.byte_size.saturating_add(AGY_PARSER_EPOCH_SALT);
+    }
+    stamp
+}
+
+fn agy_resolve_native_step_models(transcript: &Path) -> HashMap<u64, String> {
+    let mut resolved = HashMap::new();
+    let Some(db_path) = agy_native_db_path(transcript) else {
+        return resolved;
+    };
+    let Ok(agy_conn) = open_readonly_sqlite(&db_path) else {
+        return resolved;
+    };
+
+    // Map generation idx -> resolved model string from `gen_metadata`
+    let mut gen_models: HashMap<u64, String> = HashMap::new();
+    if let Ok(mut stmt) = agy_conn.prepare("SELECT idx, data FROM gen_metadata")
+        && let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+    {
+        for (gen_idx, data) in rows.flatten() {
+            if gen_idx < 0 {
+                continue;
+            }
+            for top in agy_parse_proto_fields(&data) {
+                if top.number != 1 {
+                    continue;
+                }
+                let Some(resp_bytes) = top.bytes else { continue };
+                let mut field19: Option<String> = None;
+                let mut field21: Option<String> = None;
+                for sub in agy_parse_proto_fields(&resp_bytes) {
+                    match sub.number {
+                        19 => {
+                            if let Some(b) = sub.bytes
+                                && let Ok(s) = String::from_utf8(b)
+                            {
+                                let t = s.trim();
+                                if !t.is_empty() && t.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+                                    field19 = Some(t.to_string());
+                                }
+                            }
+                        }
+                        21 => {
+                            if let Some(b) = sub.bytes
+                                && let Ok(s) = String::from_utf8(b)
+                            {
+                                let t = s.trim();
+                                if !t.is_empty() && t.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+                                    field21 = Some(t.to_string());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let orch_mapped = match field19.as_deref() {
+                    Some("gemini-pro-orchestrator") => Some("gemini-4-carbon"),
+                    Some("gemini-pro-orchestrator-argon") => Some("gemini-4-argon"),
+                    Some("gemini-flash-worker-agy") => Some("gemini-4-hydrogen"),
+                    _ => None,
+                };
+                let tiered = field21.filter(|m| {
+                    let slug = normalize_agy_model_slug(m);
+                    !(orch_mapped.is_some()
+                        && (is_agy_orchestrator(&slug)
+                            || matches!(slug.as_str(), "gemini-flash" | "gemini-flash-worker-agy")))
+                });
+                let picked = [tiered, orch_mapped.map(str::to_string), field19]
+                    .into_iter()
+                    .flatten()
+                    .find(|m| !m.trim().is_empty() && !m.eq_ignore_ascii_case("unknown"));
+                if let Some(m) = picked {
+                    gen_models.insert(gen_idx as u64, m);
+                    break;
+                }
+            }
+        }
+    }
+    if gen_models.is_empty() {
+        return resolved;
+    }
+
+    // Map step_idx -> generation_idx via `steps (step_type = 15, metadata field 20 -> field 3)`
+    let query_with_type = agy_conn
+        .prepare("SELECT idx, metadata FROM steps WHERE step_type = 15")
+        .is_ok();
+    let sql = if query_with_type {
+        "SELECT idx, metadata FROM steps WHERE step_type = 15"
+    } else {
+        "SELECT idx, metadata FROM steps"
+    };
+    if let Ok(mut stmt) = agy_conn.prepare(sql)
+        && let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+    {
+        for (step_idx, meta) in rows.flatten() {
+            if step_idx < 0 {
+                continue;
+            }
+            for top in agy_parse_proto_fields(&meta) {
+                if top.number != 20 {
+                    continue;
+                }
+                let Some(gen_ref_bytes) = top.bytes else { continue };
+                // Proto3 omits field 3 when generation index is 0.
+                let mut gen_idx = 0u64;
+                for f in agy_parse_proto_fields(&gen_ref_bytes) {
+                    if f.number == 3
+                        && let Some(v) = f.varint
+                    {
+                        gen_idx = v;
+                    }
+                }
+                if let Some(model) = gen_models.get(&gen_idx) {
+                    resolved.insert(step_idx as u64, model.clone());
+                }
+            }
+        }
+    }
+    resolved
+}
+
 fn ingest_antigravity_jsonl(
     conn: &Connection,
     pricing: &PricingTable,
@@ -2248,8 +2675,8 @@ fn ingest_antigravity_jsonl(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let mut current_request_model = default_display_model.to_string();
-    let mut current_model_slug = normalize_agy_model_slug(&current_request_model);
+    let native_models = agy_resolve_native_step_models(path);
+    let mut current_request_model: Option<String> = None;
     let mut line_num: i64 = 0;
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
@@ -2265,24 +2692,14 @@ fn ingest_antigravity_jsonl(
         let Ok(val) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if has_model_change {
-            if let Some(content) = val.get("content").and_then(Value::as_str) {
-                if let Some(idx) = content.find("Model Selection` from ") {
-                    let after = &content[idx + "Model Selection` from ".len()..];
-                    if let Some(to_idx) = after.find(" to ") {
-                        let rest = &after[to_idx + 4..];
-                        let new_model = rest
-                            .split(". No need to comment")
-                            .next()
-                            .unwrap_or(rest)
-                            .trim_end_matches('.')
-                            .trim();
-                        if !new_model.is_empty() {
-                            current_request_model = new_model.to_string();
-                            current_model_slug = normalize_agy_model_slug(&current_request_model);
-                        }
-                    }
-                }
+        let ev_type = val.get("type").and_then(Value::as_str).unwrap_or("");
+        if has_model_change && matches!(ev_type, "USER_INPUT" | "SYSTEM_MESSAGE") {
+            if let Some(content) = val.get("content").and_then(Value::as_str)
+                && (content.contains("changed setting `Model Selection`")
+                    || content.contains("<USER_SETTINGS_CHANGE>"))
+                && let Some(new_model) = agy_model_from_settings_change(content)
+            {
+                current_request_model = Some(new_model);
             }
         }
         if has_tokens {
@@ -2304,6 +2721,22 @@ fn ingest_antigravity_jsonl(
                 .and_then(parse_any_timestamp)
                 .unwrap_or_else(|| Local::now().timestamp());
 
+            let row_model = nonempty_str(val.get("model")).map(str::to_string);
+            let native_model = (step_idx > 0).then(|| native_models.get(&step_idx)).flatten().cloned();
+            let chosen_display = row_model
+                .filter(|m| !is_agy_orchestrator(m))
+                .or_else(|| {
+                    current_request_model
+                        .clone()
+                        .filter(|m| !is_agy_orchestrator(m))
+                })
+                .or_else(|| native_model.clone())
+                .or_else(|| current_request_model.clone())
+                .unwrap_or_else(|| {
+                    native_model.unwrap_or_else(|| default_display_model.to_string())
+                });
+            let model_slug = normalize_agy_model_slug(&chosen_display);
+
             let rec = UsageRecord {
                 request_id: req_id,
                 alternate_request_ids: Vec::new(),
@@ -2312,8 +2745,8 @@ fn ingest_antigravity_jsonl(
                 has_entry_id: step_idx > 0,
                 provider_id: "_agy_session".to_string(),
                 app_type: "agy".to_string(),
-                model: current_model_slug.clone(),
-                request_model: current_request_model.clone(),
+                model: model_slug,
+                request_model: chosen_display,
                 fresh_input_tokens: inp,
                 output_tokens: out,
                 cache_read_tokens: cr,
@@ -2430,7 +2863,8 @@ fn agy_step_timestamp(metadata: &[u8]) -> Option<u64> {
 }
 
 fn agy_decode_generation(data: &[u8], fallback_ts: Option<u64>) -> Option<(String, u32, u32, u32, i64)> {
-    let mut model = String::new();
+    let mut base_model = String::new();
+    let mut tiered_model = String::new();
     let mut input = 0u64;
     let mut output = 0u64;
     let mut cached = 0u64;
@@ -2444,7 +2878,15 @@ fn agy_decode_generation(data: &[u8], fallback_ts: Option<u64>) -> Option<(Strin
                     && let Ok(name) = String::from_utf8(bytes)
                     && name.chars().all(|c| c.is_ascii_graphic() || c == ' ')
                 {
-                    model = name;
+                    base_model = name;
+                }
+            }
+            21 => {
+                if let Some(bytes) = field.bytes
+                    && let Ok(name) = String::from_utf8(bytes)
+                    && name.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+                {
+                    tiered_model = name;
                 }
             }
             4 => {
@@ -2487,13 +2929,24 @@ fn agy_decode_generation(data: &[u8], fallback_ts: Option<u64>) -> Option<(Strin
     if input == 0 && final_out == 0 && cached == 0 {
         return None;
     }
-    let model = if model.trim().is_empty() {
-        "unknown".to_string()
-    } else {
-        model
+    let orch_mapped = match base_model.trim() {
+        "gemini-pro-orchestrator" => Some("gemini-4-carbon"),
+        "gemini-pro-orchestrator-argon" => Some("gemini-4-argon"),
+        "gemini-flash-worker-agy" => Some("gemini-4-hydrogen"),
+        _ => None,
     };
+    let tiered_ok = (!tiered_model.trim().is_empty()).then_some(tiered_model.trim()).filter(|m| {
+        let slug = normalize_agy_model_slug(m);
+        !(orch_mapped.is_some()
+            && (is_agy_orchestrator(&slug)
+                || matches!(slug.as_str(), "gemini-flash" | "gemini-flash-worker-agy")))
+    });
+    let chosen = tiered_ok
+        .or(orch_mapped)
+        .or_else(|| (!base_model.trim().is_empty()).then_some(base_model.trim()))
+        .unwrap_or("unknown");
     Some((
-        model,
+        chosen.to_string(),
         input.min(u32::MAX as u64) as u32,
         final_out.min(u32::MAX as u64) as u32,
         cached.min(u32::MAX as u64) as u32,
@@ -5101,5 +5554,116 @@ mod tests {
         let cd = db.get_usage_summary(None, None, Some("claude_desktop"), None, None).unwrap();
         assert_eq!(cd.total_requests, 1);
         assert_eq!(cd.total_cost, "0.003300");
+    }
+
+    #[test]
+    fn test_antigravity_display_model_pricing_orchestrator_native_repair_and_backfill() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let app_data = dir.path().join("app");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&app_data).unwrap();
+        let paths = Paths::new(&home, &app_data);
+        let db = UsageDb::open(&paths).unwrap();
+
+        let agy_root = home.join(".gemini").join("antigravity-cli");
+        let cid = "agy-fix-uuid-1";
+        let logs_dir = agy_root.join("brain").join(cid).join(".system_generated").join("logs");
+        let conv_dir = agy_root.join("conversations");
+        fs::create_dir_all(&logs_dir).unwrap();
+        fs::create_dir_all(&conv_dir).unwrap();
+
+        // Write companion conversations/<cid>.db resolving Orchestrator step 3 -> gemini-4-carbon
+        // and subagent/worker step 4 -> gemini-4-hydrogen (from gemini-flash-worker-agy).
+        {
+            let step3_ref = pb_field_varint(3, 0);
+            let step3_meta = pb_field_bytes(20, &step3_ref);
+            let step4_ref = pb_field_varint(3, 1);
+            let step4_meta = pb_field_bytes(20, &step4_ref);
+            let gen0_resp = pb_field_bytes(19, b"gemini-pro-orchestrator");
+            let gen0_data = pb_field_bytes(1, &gen0_resp);
+            let gen1_resp = pb_field_bytes(19, b"gemini-flash-worker-agy");
+            let gen1_data = pb_field_bytes(1, &gen1_resp);
+
+            let agy_conn = Connection::open(conv_dir.join(format!("{cid}.db"))).unwrap();
+            agy_conn
+                .execute_batch(
+                    "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB);
+                     CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);",
+                )
+                .unwrap();
+            agy_conn
+                .execute("INSERT INTO steps VALUES (3, 15, ?1)", params![step3_meta])
+                .unwrap();
+            agy_conn
+                .execute("INSERT INTO steps VALUES (4, 15, ?1)", params![step4_meta])
+                .unwrap();
+            agy_conn
+                .execute("INSERT INTO gen_metadata VALUES (0, ?1)", params![gen0_data])
+                .unwrap();
+            agy_conn
+                .execute("INSERT INTO gen_metadata VALUES (1, ?1)", params![gen1_data])
+                .unwrap();
+        }
+
+        // Write transcript with:
+        // - Step 1: USER_INPUT switching to Gemini 4 Hydrogen (XHigh)
+        // - Step 2: GENERIC tool result containing source code `changed setting \`Model Selection\` from X to Y` (MUST NOT corrupt model!)
+        // - Step 2 also logs PLANNER_RESPONSE tokens under Gemini 4 Hydrogen (XHigh)
+        // - Step 3: USER_INPUT switching to Orchestrator (Carbon) -> PLANNER_RESPONSE resolved via native DB to gemini-4-carbon
+        // - Step 4: USER_INPUT switching to Gemini 4 Neon (High) -> PLANNER_RESPONSE (wait: put step 4 BEFORE Neon switch or test Neon on step 5)
+        let transcript_path = logs_dir.join("transcript_full.jsonl");
+        fs::write(
+            &transcript_path,
+            concat!(
+                r#"{"step_index":1,"type":"USER_INPUT","content":"The user changed setting `Model Selection` from Gemini 4 Argon (High) to Gemini 4 Hydrogen (XHigh). No need to comment on this change","created_at":"2026-11-18T10:00:00Z"}"#, "\n",
+                r#"{"step_index":2,"type":"GENERIC","content":"line 2270: if let Some(idx) = content.find(\"Model Selection` from \") { let rest = \" to \" + fake; }","created_at":"2026-11-18T10:00:01Z"}"#, "\n",
+                r#"{"step_index":2,"type":"PLANNER_RESPONSE","status":"DONE","input_tokens":1000000,"output_tokens":100000,"cache_read_tokens":0,"created_at":"2026-11-18T10:00:02Z"}"#, "\n",
+                r#"{"step_index":3,"type":"USER_INPUT","content":"The user changed setting `Model Selection` from Gemini 4 Hydrogen (XHigh) to Orchestrator (Carbon). No need to comment","created_at":"2026-11-18T10:00:03Z"}"#, "\n",
+                r#"{"step_index":3,"type":"PLANNER_RESPONSE","status":"DONE","input_tokens":1000000,"output_tokens":100000,"cache_read_tokens":0,"created_at":"2026-11-18T10:00:04Z"}"#, "\n",
+                r#"{"step_index":5,"type":"USER_INPUT","content":"The user changed setting `Model Selection` from Orchestrator (Carbon) to Gemini 4 Neon (High). No need to comment","created_at":"2026-11-18T10:00:05Z"}"#, "\n",
+                r#"{"step_index":5,"type":"PLANNER_RESPONSE","status":"DONE","input_tokens":1000000,"output_tokens":100000,"cache_read_tokens":0,"created_at":"2026-11-18T10:00:06Z"}"#, "\n"
+            ),
+        )
+        .unwrap();
+
+        // Seed a corrupted historical row (`step_index:2`) & zero-cost orchestrator row (`step_index:3`)
+        // to simulate existing v0.1.27 DB state and confirm re-sync repairs them automatically!
+        {
+            let conn = db.connect().unwrap();
+            conn.execute(
+                "INSERT INTO proxy_request_logs (request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens, total_cost_usd, status_code, session_id, data_source, created_at)
+                 VALUES (?1, '_agy_session', 'agy', '\"-{-2110:-fake-code', 'bad code', 1000000, 100000, '0.000000', 200, ?2, 'agy_session', 1794996002)",
+                params![format!("agy:{cid}:2"), cid],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO proxy_request_logs (request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens, total_cost_usd, status_code, session_id, data_source, created_at)
+                 VALUES (?1, '_agy_session', 'agy', 'orchestrator-carbon', 'Orchestrator (Carbon)', 1000000, 100000, '0.000000', 200, ?2, 'agy_session', 1794996004)",
+                params![format!("agy:{cid}:3"), cid],
+            ).unwrap();
+            // Seed another legacy zero-cost row for backfill_missing_usage_costs verification
+            conn.execute(
+                "INSERT INTO proxy_request_logs (request_id, provider_id, app_type, model, request_model, input_tokens, output_tokens, total_cost_usd, status_code, session_id, data_source, created_at)
+                 VALUES ('agy:legacy:zero', '_agy_session', 'agy', 'gemini-4-argon-high', 'Gemini 4 Argon (High)', 1000000, 100000, '0.000000', 200, 'legacy', 'agy_session', 1794996000)",
+                [],
+            ).unwrap();
+        }
+
+        let _ = db.sync_session_usage(&paths).unwrap();
+
+        let agy = db.get_usage_summary(None, None, Some("agy"), None, None).unwrap();
+        assert_eq!(agy.total_requests, 4);
+        // Expected costs:
+        // - Step 2 (Hydrogen: 1.50 in + 7.50*0.1 out = $2.25)
+        // - Step 3 (Carbon via native DB: 2.00 in + 10.00*0.1 out = $3.00)
+        // - Step 5 (Neon: 3.00 in + 15.00*0.1 out = $4.50)
+        // - Legacy backfill (Argon: 2.00 in + 10.00*0.1 out = $3.00)
+        // Total = $12.75
+        let total: f64 = agy.total_cost.parse().unwrap();
+        assert!(
+            (total - 12.75).abs() < 0.01,
+            "expected $12.75 total Antigravity cost across repaired + backfilled rows, got ${total} ({:?})",
+            db.get_model_stats(None, None, Some("agy"), None, None).unwrap()
+        );
     }
 }

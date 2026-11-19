@@ -409,6 +409,10 @@ pub struct AppSettings {
     pub window_bounds: Option<(i32, i32, u32, u32)>,
     #[serde(default = "default_true")]
     pub usage_auto_scan_sessions: bool,
+    #[serde(default = "default_true")]
+    pub usage_models_dev_auto_sync: bool,
+    #[serde(default)]
+    pub usage_models_dev_last_sync_at: i64,
     #[serde(default)]
     pub disabled_builtin_extensions: Vec<String>,
     #[serde(default)]
@@ -480,6 +484,8 @@ impl Default for AppSettings {
             last_antigravity_refresh_time: None,
             window_bounds: None,
             usage_auto_scan_sessions: true,
+            usage_models_dev_auto_sync: true,
+            usage_models_dev_last_sync_at: 0,
             disabled_builtin_extensions: Vec::new(),
             enabled_builtin_extensions: Vec::new(),
             last_page: String::new(),

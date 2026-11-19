@@ -676,31 +676,6 @@ fn render_top_header(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui::A
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .child(
-                            div()
-                                .text_size(px(20.0))
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(t.text_primary)
-                                .child(i.t("usage.usage_statistics")),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.5))
-                                .text_color(t.text_muted)
-                                .child(i.t("usage.complete_parity_with_cc")),
-                        ),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
                 .gap(px(10.0))
                 .child(
                     div()
@@ -2312,8 +2287,263 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                 .children(global_rows),
         );
 
-    // 2. Model Pricing Rules Table
-    let pricing = &ws.ui.usage_pricing;
+    // 2. models.dev Online Pricing Sync & Unpriced Models Banner
+    let is_models_dev_syncing = ws.ui.usage_models_dev_syncing;
+    let models_dev_auto = ws.settings.usage_models_dev_auto_sync;
+    let last_sync_ts = ws.settings.usage_models_dev_last_sync_at;
+    let last_sync_label = if last_sync_ts > 0 {
+        i.raw(
+            &format!("上次同步：{}", format_timestamp(last_sync_ts)),
+            &format!("Last synced: {}", format_timestamp(last_sync_ts)),
+        )
+        .to_string()
+    } else {
+        i.raw("尚未执行在线同步", "Not synced yet").to_string()
+    };
+
+    let models_dev_toggle = toggle(
+        "models-dev-auto-sync-toggle",
+        models_dev_auto,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.settings.usage_models_dev_auto_sync = !ws.settings.usage_models_dev_auto_sync;
+            ws.persist_settings();
+            if ws.settings.usage_models_dev_auto_sync {
+                ws.trigger_models_dev_sync(cx, true);
+            }
+            cx.notify();
+        },
+    );
+
+    let models_dev_sync_btn = button_with_icon_loading_l(
+        "models-dev-sync-now-btn",
+        crate::icons::GLOBE_SVG,
+        i.raw("从 models.dev 同步", "Sync models.dev"),
+        ButtonVariant::Secondary,
+        is_models_dev_syncing,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            ws.trigger_models_dev_sync(cx, true);
+        },
+    );
+
+    let models_dev_card = div()
+        .p(px(16.0))
+        .rounded(px(12.0))
+        .bg(t.card_bg)
+        .border_1()
+        .border_color(t.card_border)
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(16.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .p(px(8.0))
+                        .rounded(px(8.0))
+                        .bg(crate::rgba_const(0x10b98120))
+                        .child(crate::icons::svg_icon(
+                            crate::icons::GLOBE_SVG,
+                            px(18.0),
+                            crate::rgba_const(0x10b981ff),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .text_size(px(13.5))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(t.text_primary)
+                                        .child(i.raw(
+                                            "models.dev 在线新模型价格同步",
+                                            "models.dev Online Model Pricing Sync",
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(t.text_muted)
+                                        .child(last_sync_label),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(t.text_muted)
+                                .child(i.raw(
+                                    "自动拉取 models.dev 最新发布的官方模型与本地未定价模型单价，并自动回填历史 $0 记录",
+                                    "Automatically sync newly released models and unpriced local models from models.dev and backfill $0 history",
+                                )),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(t.text_secondary)
+                        .child(i.raw("自动同步", "Auto Sync")),
+                )
+                .child(models_dev_toggle)
+                .child(models_dev_sync_btn),
+        );
+
+    let unpriced_models = ws.ui.usage_unpriced_models.clone();
+    let unpriced_banner = if !unpriced_models.is_empty() {
+        let chips: Vec<gpui::AnyElement> = unpriced_models
+            .iter()
+            .take(12)
+            .enumerate()
+            .map(|(idx, m)| {
+                let model_for_click = m.clone();
+                div()
+                    .id(gpui::ElementId::Name(format!("unpriced-chip-{idx}").into()))
+                    .cursor_pointer()
+                    .px(px(8.0))
+                    .py(px(3.0))
+                    .rounded(px(5.0))
+                    .bg(t.card_bg)
+                    .border_1()
+                    .border_color(crate::rgba_const(0xf59e0b66))
+                    .hover(|s| s.border_color(crate::rgba_const(0xf59e0bff)))
+                    .text_size(px(11.0))
+                    .font_family(".AppleSystemUIFontMonospaced")
+                    .text_color(t.text_primary)
+                    .child(format!("+ {m}"))
+                    .on_click(cx.listener(move |ws, _, _, cx| {
+                        open_usage_pricing_dialog(ws, None, Some(model_for_click.clone()), cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+
+        Some(
+            div()
+                .p(px(12.0))
+                .rounded(px(10.0))
+                .bg(crate::rgba_const(0xf59e0b14))
+                .border_1()
+                .border_color(crate::rgba_const(0xf59e0b55))
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(crate::rgba_const(0xf59e0bff))
+                        .child(i.raw(
+                            &format!(
+                                "检测到 {} 个已使用但未匹配定价的模型（点击可一键配置单价并回填历史成本）：",
+                                unpriced_models.len()
+                            ),
+                            &format!(
+                                "Detected {} used models without pricing rules (click to configure price and backfill historical costs):",
+                                unpriced_models.len()
+                            ),
+                        )),
+                )
+                .child(div().flex().flex_wrap().gap(px(6.0)).children(chips)),
+        )
+    } else {
+        None
+    };
+
+    // 3. Model Pricing Rules Table
+    let search_input = if let Some(inp) = &ws.ui.usage_pricing_search {
+        inp.clone()
+    } else {
+        let placeholder = i
+            .raw("搜索模型 ID 或名称…", "Search model ID or name…")
+            .to_string();
+        let inp = cx.new(|cx| TextInput::new(placeholder, cx));
+        cx.subscribe(
+            &inp,
+            |ws, emitter, event: &crate::text_input::TextInputEvent, cx| match event {
+                crate::text_input::TextInputEvent::Change(_) => {
+                    cx.notify();
+                }
+                crate::text_input::TextInputEvent::Enter => {
+                    let q = emitter.read(cx).text().trim().to_string();
+                    if q.is_empty() {
+                        return;
+                    }
+                    let q_lower = q.to_ascii_lowercase();
+                    let exact_or_first = ws
+                        .ui
+                        .usage_pricing
+                        .iter()
+                        .find(|p| p.model_id.eq_ignore_ascii_case(&q_lower))
+                        .or_else(|| {
+                            ws.ui.usage_pricing.iter().find(|p| {
+                                p.model_id.to_ascii_lowercase().contains(&q_lower)
+                                    || p.display_name.to_ascii_lowercase().contains(&q_lower)
+                            })
+                        })
+                        .cloned();
+                    if let Some(existing) = exact_or_first {
+                        open_usage_pricing_dialog(ws, Some(existing), None, cx);
+                    } else {
+                        open_usage_pricing_dialog(ws, None, Some(q), cx);
+                    }
+                }
+                _ => {}
+            },
+        )
+        .detach();
+        ws.ui.usage_pricing_search = Some(inp.clone());
+        inp
+    };
+    let search_query = search_input.read(cx).text().trim().to_string();
+    let search_needle = search_query.to_ascii_lowercase();
+
+    let total_pricing_count = ws.ui.usage_pricing.len();
+    let mut filtered_pricing: Vec<aitoolplus_core::usage::ModelPricingInfo> = ws
+        .ui
+        .usage_pricing
+        .iter()
+        .filter(|p| {
+            if search_needle.is_empty() {
+                return true;
+            }
+            p.model_id.to_ascii_lowercase().contains(&search_needle)
+                || p.display_name.to_ascii_lowercase().contains(&search_needle)
+        })
+        .cloned()
+        .collect();
+    if !search_needle.is_empty() {
+        filtered_pricing.sort_by_key(|p| {
+            if p.model_id.eq_ignore_ascii_case(&search_needle) {
+                0usize
+            } else if p.model_id.to_ascii_lowercase().starts_with(&search_needle)
+                || p.display_name.to_ascii_lowercase().starts_with(&search_needle)
+            {
+                1usize
+            } else {
+                2usize
+            }
+        });
+    }
 
     let thead = div()
         .flex()
@@ -2326,12 +2556,18 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(t.text_secondary)
         .child(div().flex_1().child(i.t("usage.model_name")))
-        .child(div().w(px(120.0)).text_right().child(i.t("usage.input_1m")))
-        .child(div().w(px(120.0)).text_right().child(i.t("usage.output_1m")))
-        .child(div().w(px(120.0)).text_right().child(i.t("usage.cache_read_1m")))
-        .child(div().w(px(120.0)).text_right().child(i.t("usage.cache_write_1m")));
+        .child(div().w(px(110.0)).text_right().child(i.t("usage.input_1m")))
+        .child(div().w(px(110.0)).text_right().child(i.t("usage.output_1m")))
+        .child(div().w(px(110.0)).text_right().child(i.t("usage.cache_read_1m")))
+        .child(div().w(px(110.0)).text_right().child(i.t("usage.cache_write_1m")))
+        .child(
+            div()
+                .w(px(72.0))
+                .text_right()
+                .child(i.raw("操作", "Actions")),
+        );
 
-    let tbody = if pricing.is_empty() {
+    let tbody = if total_pricing_count == 0 {
         div()
             .py(px(40.0))
             .flex()
@@ -2341,14 +2577,95 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
             .text_color(t.text_muted)
             .child(i.t("usage.no_pricing_models_registered"))
             .into_any_element()
+    } else if filtered_pricing.is_empty() {
+        let query_for_add = search_query.clone();
+        div()
+            .py(px(32.0))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .text_color(t.text_muted)
+                    .child(i.raw(
+                        &format!("未找到匹配 \"{search_query}\" 的模型定价"),
+                        &format!("No model pricing matches \"{search_query}\""),
+                    )),
+            )
+            .child(button_with_icon_l(
+                "add-pricing-for-search-btn",
+                crate::icons::PLUS_SVG,
+                i.raw(
+                    &format!("为 \"{search_query}\" 添加定价"),
+                    &format!("Add pricing for \"{search_query}\""),
+                ),
+                ButtonVariant::Secondary,
+                &t,
+                cx,
+                move |ws, _, _, cx| {
+                    open_usage_pricing_dialog(ws, None, Some(query_for_add.clone()), cx);
+                },
+            ))
+            .into_any_element()
     } else {
         div()
             .id("pricing-rows-scroll")
             .flex()
             .flex_col()
-            .max_h(px(400.0))
+            .max_h(px(420.0))
             .overflow_y_scroll()
-            .children(pricing.iter().map(|p| {
+            .children(filtered_pricing.iter().enumerate().map(|(idx, p)| {
+                let item_for_edit = p.clone();
+                let model_id_for_del = p.model_id.clone();
+                let display_for_del = p.display_name.clone();
+                let edit_btn = crate::components::icon_button_svg(
+                    gpui::ElementId::Name(format!("edit-pricing-{idx}").into()),
+                    crate::icons::PENCIL_SVG,
+                    "Edit",
+                    true,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        open_usage_pricing_dialog(ws, Some(item_for_edit.clone()), None, cx);
+                    },
+                );
+                let del_btn = crate::components::icon_button_svg(
+                    gpui::ElementId::Name(format!("del-pricing-{idx}").into()),
+                    crate::icons::TRASH_SVG,
+                    "Delete",
+                    true,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let label = if display_for_del.trim().is_empty() {
+                            model_id_for_del.as_str()
+                        } else {
+                            display_for_del.as_str()
+                        };
+                        ws.ui.confirm = Some(super::ConfirmState {
+                            title: ws
+                                .i18n
+                                .raw("删除模型定价", "Delete Model Pricing")
+                                .to_string(),
+                            message: ws
+                                .i18n
+                                .raw(
+                                    &format!("确定要删除模型 \"{label}\" ({model_id_for_del}) 的定价规则吗？"),
+                                    &format!("Are you sure you want to delete pricing for \"{label}\" ({model_id_for_del})?"),
+                                )
+                                .to_string(),
+                            action: super::ConfirmAction::DeleteModelPricing {
+                                model_id: model_id_for_del.clone(),
+                                display_name: display_for_del.clone(),
+                            },
+                        });
+                        cx.notify();
+                    },
+                );
+
                 div()
                     .flex()
                     .items_center()
@@ -2365,14 +2682,65 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
                             .flex()
                             .flex_col()
                             .child(div().font_weight(gpui::FontWeight::MEDIUM).child(p.display_name.clone()))
-                            .child(div().text_size(px(10.5)).font_family(".AppleSystemUIFontMonospaced").text_color(t.text_muted).child(p.model_id.clone())),
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .font_family(".AppleSystemUIFontMonospaced")
+                                    .text_color(t.text_muted)
+                                    .child(p.model_id.clone()),
+                            ),
                     )
-                    .child(div().w(px(120.0)).text_right().child(format!("${}", p.input_cost_per_million)))
-                    .child(div().w(px(120.0)).text_right().child(format!("${}", p.output_cost_per_million)))
-                    .child(div().w(px(120.0)).text_right().text_color(crate::rgba_const(0x10b981ff)).child(format!("${}", p.cache_read_cost_per_million)))
-                    .child(div().w(px(120.0)).text_right().text_color(crate::rgba_const(0xf59e0bff)).child(format!("${}", p.cache_creation_cost_per_million)))
+                    .child(div().w(px(110.0)).text_right().child(format!("${}", p.input_cost_per_million)))
+                    .child(div().w(px(110.0)).text_right().child(format!("${}", p.output_cost_per_million)))
+                    .child(
+                        div()
+                            .w(px(110.0))
+                            .text_right()
+                            .text_color(crate::rgba_const(0x10b981ff))
+                            .child(format!("${}", p.cache_read_cost_per_million)),
+                    )
+                    .child(
+                        div()
+                            .w(px(110.0))
+                            .text_right()
+                            .text_color(crate::rgba_const(0xf59e0bff))
+                            .child(format!("${}", p.cache_creation_cost_per_million)),
+                    )
+                    .child(
+                        div()
+                            .w(px(72.0))
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap(px(4.0))
+                            .child(edit_btn)
+                            .child(del_btn),
+                    )
             }))
             .into_any_element()
+    };
+
+    let add_pricing_btn = button_with_icon_l(
+        "add-model-pricing-btn",
+        crate::icons::PLUS_SVG,
+        i.raw("添加模型定价", "Add Model Pricing"),
+        ButtonVariant::Primary,
+        &t,
+        cx,
+        |ws, _, _, cx| {
+            open_usage_pricing_dialog(ws, None, None, cx);
+        },
+    );
+
+    let count_title = if search_needle.is_empty() {
+        format!("{}: {} 个已配置", i.t("usage.model_pricing_rules"), total_pricing_count)
+    } else {
+        format!(
+            "{}: {} / {} 个已配置",
+            i.t("usage.model_pricing_rules"),
+            filtered_pricing.len(),
+            total_pricing_count
+        )
     };
 
     let model_pricing_card = div()
@@ -2383,30 +2751,325 @@ fn render_pricing_table(ws: &mut Workspace, cx: &mut Context<Workspace>) -> gpui
         .border_color(t.card_border)
         .flex()
         .flex_col()
-        .gap(px(8.0))
+        .gap(px(10.0))
         .child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
+                .gap(px(12.0))
                 .child(
                     div()
                         .text_size(px(13.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(t.text_primary)
-                        .child(format!("{}: {} 个已配置", i.t("usage.model_pricing_rules"), pricing.len())),
+                        .child(count_title),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .w(px(230.0))
+                                .h(px(30.0))
+                                .px(px(8.0))
+                                .rounded(px(6.0))
+                                .bg(t.input_bg)
+                                .border_1()
+                                .border_color(t.card_border)
+                                .flex()
+                                .items_center()
+                                .child(search_input),
+                        )
+                        .child(add_pricing_btn),
                 ),
         )
         .child(thead)
         .child(tbody);
 
-    div()
+    let mut stack = div()
         .flex()
         .flex_col()
         .gap(px(16.0))
+        .child(models_dev_card);
+    if let Some(banner) = unpriced_banner {
+        stack = stack.child(banner);
+    }
+    stack
         .child(global_pricing_card)
         .child(model_pricing_card)
         .into_any_element()
+}
+
+pub fn open_usage_pricing_dialog(
+    ws: &mut Workspace,
+    existing: Option<aitoolplus_core::usage::ModelPricingInfo>,
+    prefill_model_id: Option<String>,
+    cx: &mut Context<Workspace>,
+) {
+    let is_new = existing.is_none();
+    let (mid, dname, in_c, out_c, cr_c, cw_c) = if let Some(p) = existing {
+        (
+            p.model_id,
+            p.display_name,
+            p.input_cost_per_million,
+            p.output_cost_per_million,
+            p.cache_read_cost_per_million,
+            p.cache_creation_cost_per_million,
+        )
+    } else {
+        let raw_id = prefill_model_id.unwrap_or_default();
+        let norm_id = aitoolplus_core::usage::normalize_models_dev_model_id(&raw_id);
+        let init_id = if norm_id.is_empty() { raw_id.clone() } else { norm_id };
+        (
+            init_id,
+            raw_id,
+            "0".to_string(),
+            "0".to_string(),
+            "0".to_string(),
+            "0".to_string(),
+        )
+    };
+
+    let model_id = cx.new(|cx| {
+        let mut inp = TextInput::new("e.g. claude-sonnet-4-6 / gemini-4-neon", cx);
+        inp.set_text_silent(mid, cx);
+        inp
+    });
+    let display_name = cx.new(|cx| {
+        let mut inp = TextInput::new("e.g. Claude Sonnet 4.6", cx);
+        inp.set_text_silent(dname, cx);
+        inp
+    });
+    let input_cost = cx.new(|cx| {
+        let mut inp = TextInput::new("0", cx);
+        inp.set_text_silent(in_c, cx);
+        inp
+    });
+    let output_cost = cx.new(|cx| {
+        let mut inp = TextInput::new("0", cx);
+        inp.set_text_silent(out_c, cx);
+        inp
+    });
+    let cache_read_cost = cx.new(|cx| {
+        let mut inp = TextInput::new("0", cx);
+        inp.set_text_silent(cr_c, cx);
+        inp
+    });
+    let cache_write_cost = cx.new(|cx| {
+        let mut inp = TextInput::new("0", cx);
+        inp.set_text_silent(cw_c, cx);
+        inp
+    });
+
+    ws.ui.usage_editing_pricing = Some(super::UsagePricingDialogState {
+        is_new,
+        model_id,
+        display_name,
+        input_cost,
+        output_cost,
+        cache_read_cost,
+        cache_write_cost,
+    });
+    cx.notify();
+}
+
+pub fn render_usage_pricing_dialog(
+    state: super::UsagePricingDialogState,
+    ws: &mut Workspace,
+    cx: &mut Context<Workspace>,
+) -> gpui::AnyElement {
+    let t = ws.theme.clone();
+    let i = ws.i18n;
+    let title = if state.is_new {
+        i.raw("添加模型定价", "Add Model Pricing")
+    } else {
+        i.raw("编辑模型定价", "Edit Model Pricing")
+    };
+
+    let field_box = |label: gpui::SharedString, hint: Option<gpui::SharedString>, input: gpui::Entity<TextInput>| {
+        let mut col = div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(t.text_primary)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .h(px(32.0))
+                    .px(px(10.0))
+                    .rounded(px(6.0))
+                    .bg(t.input_bg)
+                    .border_1()
+                    .border_color(t.card_border)
+                    .flex()
+                    .items_center()
+                    .child(input),
+            );
+        if let Some(h) = hint {
+            col = col.child(div().text_size(px(11.0)).text_color(t.text_muted).child(h));
+        }
+        col
+    };
+
+    let state_for_save = state.clone();
+    let body = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(field_box(
+            i.raw("模型 ID (Normalized ID)", "Model ID (Normalized)"),
+            Some(i.raw(
+                "用于匹配请求与会话日志中的模型标识（会自动匹配同前缀日期/思考变体）",
+                "Matches model IDs in gateway and session logs (prefix/date variants match automatically)",
+            )),
+            state.model_id,
+        ))
+        .child(field_box(
+            i.raw("显示名称", "Display Name"),
+            None,
+            state.display_name,
+        ))
+        .child(
+            div()
+                .flex()
+                .gap(px(12.0))
+                .child(field_box(i.t("usage.input_1m"), None, state.input_cost))
+                .child(field_box(i.t("usage.output_1m"), None, state.output_cost)),
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(12.0))
+                .child(field_box(i.t("usage.cache_read_1m"), None, state.cache_read_cost))
+                .child(field_box(i.t("usage.cache_write_1m"), None, state.cache_write_cost)),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(8.0))
+                .pt(px(8.0))
+                .border_t_1()
+                .border_color(t.card_border)
+                .child(button_l(
+                    "usage-pricing-cancel-btn",
+                    i.t("pages.cancel"),
+                    ButtonVariant::Secondary,
+                    &t,
+                    cx,
+                    |ws, _, _, cx| {
+                        ws.ui.usage_editing_pricing = None;
+                        cx.notify();
+                    },
+                ))
+                .child(button_l(
+                    "usage-pricing-save-btn",
+                    i.t("pages.save"),
+                    ButtonVariant::Primary,
+                    &t,
+                    cx,
+                    move |ws, _, _, cx| {
+                        let raw_id = state_for_save.model_id.read(cx).text().trim().to_string();
+                        let model_id = aitoolplus_core::usage::normalize_models_dev_model_id(&raw_id);
+                        let model_id = if model_id.is_empty() { raw_id } else { model_id };
+                        if model_id.is_empty() {
+                            let msg = ws
+                                .i18n
+                                .raw("模型 ID 不能为空", "Model ID cannot be empty")
+                                .to_string();
+                            ws.ui.toast(msg, true);
+                            cx.notify();
+                            return;
+                        }
+                        let raw_display = state_for_save.display_name.read(cx).text().trim().to_string();
+                        let display_name = if raw_display.is_empty() {
+                            model_id.clone()
+                        } else {
+                            raw_display
+                        };
+
+                        let parse_cost = |entity: &gpui::Entity<TextInput>| -> Result<String, ()> {
+                            let txt = entity.read(cx).text().trim().trim_start_matches('$').to_string();
+                            if txt.is_empty() {
+                                return Ok("0".to_string());
+                            }
+                            let val = txt.parse::<f64>().map_err(|_| ())?;
+                            if !val.is_finite() || val < 0.0 {
+                                return Err(());
+                            }
+                            Ok(aitoolplus_core::usage::format_models_dev_price(val))
+                        };
+
+                        let (Ok(in_c), Ok(out_c), Ok(cr_c), Ok(cw_c)) = (
+                            parse_cost(&state_for_save.input_cost),
+                            parse_cost(&state_for_save.output_cost),
+                            parse_cost(&state_for_save.cache_read_cost),
+                            parse_cost(&state_for_save.cache_write_cost),
+                        ) else {
+                            let msg = ws
+                                .i18n
+                                .raw("单价必须是非负有效数字", "Unit prices must be valid non-negative numbers")
+                                .to_string();
+                            ws.ui.toast(msg, true);
+                            cx.notify();
+                            return;
+                        };
+
+                        let info = aitoolplus_core::usage::ModelPricingInfo {
+                            model_id: model_id.clone(),
+                            display_name: display_name.clone(),
+                            input_cost_per_million: in_c,
+                            output_cost_per_million: out_c,
+                            cache_read_cost_per_million: cr_c,
+                            cache_creation_cost_per_million: cw_c,
+                        };
+
+                        if let Some(db) = ws.ensure_usage_db() {
+                            match db.update_model_pricing(&info) {
+                                Ok(()) => {
+                                    ws.ui.usage_editing_pricing = None;
+                                    let msg = ws
+                                        .i18n
+                                        .raw(
+                                            &format!("已保存模型定价 \"{display_name}\" 并自动回填历史零成本记录"),
+                                            &format!("Saved pricing for \"{display_name}\" and backfilled $0 historical records"),
+                                        )
+                                        .to_string();
+                                    ws.ui.toast(msg, false);
+                                    ws.refresh_usage_data(cx);
+                                }
+                                Err(e) => {
+                                    ws.ui.toast(e, true);
+                                }
+                            }
+                        }
+                        cx.notify();
+                    },
+                )),
+        );
+
+    super::modal_scaffold_sized(
+        &t,
+        &title,
+        px(480.0),
+        None,
+        body.into_any_element(),
+        cx,
+        |ws, _, _, cx| {
+            ws.ui.usage_editing_pricing = None;
+            cx.notify();
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -73,6 +73,7 @@ impl Workspace {
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Gateway));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Mcp));
         nav_list = nav_list.child(self.sidebar_item(cx, Page::Skills));
+        nav_list = nav_list.child(self.sidebar_item(cx, Page::Usage));
 
         // 3. Docked Apps & Settings at Bottom (parity with cc-switch dual-grid bottom bar)
         let apps_update = self.ui.local_env_tools.iter().any(|t| {
@@ -225,6 +226,7 @@ impl Workspace {
             Page::Tool(tool) => (crate::icons::tool_icon(tool), i.raw(tool.name_zh(), tool.name_en())),
             Page::Mcp => (crate::icons::MCP_SVG, i.t("layout.mcp_servers")),
             Page::Skills => (crate::icons::SPARKLES_SVG, i.t("layout.skills")),
+            Page::Usage => (crate::icons::BAR_CHART_SVG, i.t("layout.usage")),
             Page::Antigravity => (crate::icons::GEMINI_SVG, i.t("layout.antigravity")),
             Page::Gateway => (crate::icons::SERVER_SVG, i.raw("本地网关", "Gateway")),
             Page::Apps => (crate::icons::LAYOUT_GRID_SVG, i.t("layout.apps")),
@@ -321,6 +323,10 @@ impl Workspace {
             Page::Skills => (
                 i.t("layout.skills"),
                 i.t("layout.system_prompts_agent_tool"),
+            ),
+            Page::Usage => (
+                i.t("layout.usage"),
+                i.t("usage.complete_parity_with_cc"),
             ),
             Page::Antigravity => {
                 if self.ui.antigravity_tab == crate::pages::AntigravityPageTab::Sessions {

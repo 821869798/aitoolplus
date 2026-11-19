@@ -219,13 +219,13 @@ pub(super) fn cc_switch_migration_card(ws: &mut Workspace, cx: &mut Context<Work
                                             ws.refresh_usage_data(cx);
                                             ws.ui.toast(
                                                 format!(
-                                                    "使用统计迁移完成：导入 {} 条请求日志、{} 条模型定价、{} 条汇总数据",
+                                                    "用量统计迁移完成：导入 {} 条请求日志、{} 条模型定价、{} 条汇总数据",
                                                     rep.logs_imported, rep.pricing_imported, rep.rollups_imported
                                                 ),
                                                 false,
                                             );
                                         }
-                                        Err(e) => ws.ui.toast(format!("导入使用统计失败: {e}"), true),
+                                        Err(e) => ws.ui.toast(format!("导入用量统计失败: {e}"), true),
                                     }
                                     cx.notify();
                                 },

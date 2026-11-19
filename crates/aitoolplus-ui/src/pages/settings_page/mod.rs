@@ -27,13 +27,16 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
     let tabs = vec![
         (SettingsTab::General, i.t("settings_tab.general"), false),
         (SettingsTab::DataImport, i.t("settings_tab.data_import"), false),
-        (SettingsTab::Usage, i.t("settings_tab.usage_statistics"), false),
         (SettingsTab::Backup, i.t("settings_tab.backup"), false),
         (SettingsTab::Advanced, i.t("settings_tab.advanced"), false),
         (SettingsTab::About, i.t("settings_tab.about"), has_update),
     ];
 
-    let current_tab = ws.ui.settings_tab;
+    let current_tab = if ws.ui.settings_tab == SettingsTab::Usage {
+        SettingsTab::General
+    } else {
+        ws.ui.settings_tab
+    };
     let tab_bar = crate::components::segmented_tab_bar_with_dots(
         "settings",
         tabs,
@@ -46,7 +49,7 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         },
     );
 
-    let body = match ws.ui.settings_tab {
+    let body = match current_tab {
         SettingsTab::General => general::general_tab(ws, cx),
         SettingsTab::DataImport => data_import::data_import_tab(ws, cx),
         SettingsTab::Usage => crate::pages::usage_page::render_usage_page(ws, cx),
@@ -56,11 +59,7 @@ pub fn render_settings_page(ws: &mut Workspace, cx: &mut Context<Workspace>) -> 
         SettingsTab::About => about::about_tab(ws, cx),
     };
 
-    let max_width = if ws.ui.settings_tab == SettingsTab::Usage {
-        px(1040.0)
-    } else {
-        px(880.0)
-    };
+    let max_width = px(880.0);
 
     div()
         .flex()

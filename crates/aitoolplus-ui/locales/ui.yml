@@ -376,6 +376,9 @@ layout:
   antigravity:
     zh-CN: Antigravity
     en: Antigravity
+  usage:
+    zh-CN: 用量统计
+    en: Usage
   shared_resources:
     zh-CN: 共享资源
     en: Shared Resources
@@ -1585,7 +1588,7 @@ settings_import:
     zh-CN: Antigravity Manager 迁移
     en: Antigravity Manager Import
   migrate_model_providers_usage:
-    zh-CN: 从本地 CC-Switch (cc-switch.db) 自动同步迁移模型供应商、使用统计与模型定价配置
+    zh-CN: 从本地 CC-Switch (cc-switch.db) 自动同步迁移模型供应商、用量统计与模型定价配置
     en: Migrate model providers, usage analytics, and pricing from local CC-Switch
       (cc-switch.db)
   cc_switch_data_migration:
@@ -1607,7 +1610,7 @@ settings_import:
     zh-CN: 数据库文件：
     en: 'Database file: '
   import_usage_pricing:
-    zh-CN: 导入使用统计与定价
+    zh-CN: 导入用量统计与定价
     en: Import Usage & Pricing
   import_providers:
     zh-CN: 导入供应商配置
@@ -1638,8 +1641,8 @@ settings_tab:
     zh-CN: 备份
     en: Backup
   usage_statistics:
-    zh-CN: 使用统计
-    en: Usage Statistics
+    zh-CN: 用量统计
+    en: Usage
   data_import:
     zh-CN: 数据导入
     en: Data Import
@@ -3307,12 +3310,11 @@ usage:
     zh-CN: 全部工具
     en: All Tools
   complete_parity_with_cc:
-    zh-CN: 全面对标 CC-Switch：实时统计各 AI 工具的 Token 消耗、缓存命中与调用成本
-    en: 'Complete parity with CC-Switch: real-time analytics of token consumption,
-      cache hits, and costs'
+    zh-CN: 实时统计各 AI 工具的 Token 消耗、缓存命中与调用成本
+    en: Real-time analytics of token consumption, cache hits, and costs
   usage_statistics:
-    zh-CN: 使用统计
-    en: Usage Statistics
+    zh-CN: 用量统计
+    en: Usage
   all_models:
     zh-CN: 全部模型
     en: All Models
