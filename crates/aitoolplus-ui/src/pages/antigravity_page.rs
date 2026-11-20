@@ -2212,8 +2212,8 @@ fn render_account_card(
                         0x10b9811f,
                         0x10b98159,
                         i.raw(
-                            "当前 Antigravity CLI (agy) 正在使用此账号",
-                            "Currently active in Antigravity CLI (agy)",
+                            "当前 Antigravity CLI (agy) 系统凭据实际生效的账号（新开终端将使用此账号）",
+                            "Currently active in Antigravity CLI (agy) system credential store",
                         ),
                     ))
                 })
@@ -4677,14 +4677,11 @@ fn switch_account_target_action(
     cx.notify();
 
     cx.spawn(async move |_this, cx| {
-        let is_agy_or_classic = !matches!(target_owned.as_deref(), Some("ide"));
         let result = cx.background_spawn(async move {
             switch_account_target(&home, &app_data, &mut store, &account_id_str, target_owned.as_deref())?;
-            let running_agy_count = if is_agy_or_classic {
-                count_running_agy_processes()
-            } else {
-                0
-            };
+            // agy, Classic 2.0+, and IDE 2.6.0+ all share the `gemini:antigravity` Keyring entry,
+            // so any running `agy` CLI process may overwrite Keyring when its token refreshes.
+            let running_agy_count = count_running_agy_processes();
             Ok::<(AntigravityStore, String, usize), String>((store, account_email, running_agy_count))
         }).await;
 

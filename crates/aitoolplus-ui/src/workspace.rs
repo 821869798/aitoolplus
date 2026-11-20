@@ -780,7 +780,36 @@ impl Workspace {
                 self.trigger_session_sync(cx, false);
             }
         }
+        if page == Page::Antigravity && self.settings.antigravity_auto_sync {
+            self.trigger_antigravity_active_sync(cx);
+        }
         cx.notify();
+    }
+
+    pub fn trigger_antigravity_active_sync(&mut self, cx: &mut Context<Self>) {
+        let app_data = self.paths.app_data.clone();
+        let home_dir = self.paths.home.clone();
+        let weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            let synced = cx
+                .background_spawn(async move {
+                    let mut store = aitoolplus_core::antigravity::load_store(&app_data);
+                    let changed = aitoolplus_core::antigravity::auto_sync_active_account(
+                        &home_dir,
+                        &mut store,
+                    );
+                    if changed {
+                        let _ = aitoolplus_core::antigravity::save_store(&app_data, &store);
+                    }
+                    store
+                })
+                .await;
+            let _ = weak.update(cx, |ws, cx| {
+                ws.ui.antigravity_store = Some(synced);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn cycle_theme(&mut self, cx: &mut Context<Self>) {

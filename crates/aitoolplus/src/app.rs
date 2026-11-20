@@ -482,6 +482,18 @@ pub fn open_main_window(
             }
         });
         window.focus(&workspace.read(cx).focus_handle(cx), cx);
+        // Antigravity-Manager Parity (`Accounts.tsx:271-275`): re-sync active clients on window focus.
+        workspace.update(cx, |_ws, cx| {
+            cx.observe_window_activation(window, |ws, window, cx| {
+                if window.is_window_active()
+                    && ws.page == aitoolplus_ui::pages::Page::Antigravity
+                    && ws.settings.antigravity_auto_sync
+                {
+                    ws.trigger_antigravity_active_sync(cx);
+                }
+            })
+            .detach();
+        });
 
         // CC-Switch & Antigravity-Manager Parity: Background maintenance timer running while the app is alive
         let periodic_workspace = workspace.downgrade();

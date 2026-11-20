@@ -1068,28 +1068,77 @@ pub fn write_to_system_keyring(account: &AntigravityAccount) -> Result<(), Strin
 
     #[cfg(target_os = "linux")]
     {
-        use std::process::Command;
         use std::io::Write;
-        let mut cmd = Command::new("secret-tool");
-        cmd.args(["store", "--label=gemini", "service", "gemini", "username", "antigravity"]);
-        cmd.stdin(std::process::Stdio::piped());
-        if let Ok(mut child) = cmd.spawn() {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(payload_json.as_bytes());
+        use std::process::Command;
+        use std::sync::mpsc;
+
+        // Antigravity-Manager [FIX #3418]: agy CLI reads from the 'login' collection.
+        // Without --collection, secret-tool writes to 'default' and agy keeps reading stale 'login'.
+        let store_to_collection = |collection_opt: Option<&str>, payload: &[u8]| -> Result<(), String> {
+            let mut cmd = Command::new("secret-tool");
+            cmd.arg("store");
+            if let Some(col) = collection_opt {
+                cmd.arg(format!("--collection={}", col));
+                cmd.arg("--label=Password for 'antigravity' on 'gemini'");
+            } else {
+                cmd.arg("--label=gemini");
             }
-            let _ = child.wait();
+            cmd.args(["service", "gemini", "username", "antigravity"]);
+            cmd.stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to spawn secret-tool: {}", e))?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(payload)
+                    .map_err(|e| format!("Failed to write to secret-tool stdin: {}", e))?;
+            }
+
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(child.wait_with_output());
+            });
+            let output = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|_| "Keyring write timed out (10s) waiting for secret-tool".to_string())?
+                .map_err(|e| format!("Failed to wait for secret-tool: {}", e))?;
+
+            if !output.status.success() {
+                let err_msg = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Linux secret-tool failed: {}", err_msg.trim()));
+            }
+            Ok(())
+        };
+
+        let login_res = store_to_collection(
+            Some("/org/freedesktop/secrets/collection/login"),
+            payload_json.as_bytes(),
+        );
+        let default_res = store_to_collection(None, payload_json.as_bytes());
+        if login_res.is_err() && default_res.is_err() {
+            return login_res;
         }
     }
 
     Ok(())
 }
 
-/// Read refresh token from system keyring.
-pub fn read_from_system_keyring() -> Result<String, String> {
+/// Extracted credential fields from system keyring or `antigravity-oauth-token` JSON payloads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyringCredential {
+    pub refresh_token: String,
+    pub id_token_email: Option<String>,
+}
+
+/// Read only from system keyring (no file fallback), returning both refresh token and optional email.
+pub fn read_from_system_keyring_only_detail() -> Result<KeyringCredential, String> {
     #[cfg(target_os = "windows")]
     {
         let payload_str = win_cred::read_keyring()?;
-        extract_refresh_token_from_payload(&payload_str)
+        extract_credential_from_payload(&payload_str)
     }
 
     #[cfg(target_os = "macos")]
@@ -1111,7 +1160,7 @@ pub fn read_from_system_keyring() -> Result<String, String> {
         } else {
             secret_str
         };
-        extract_refresh_token_from_payload(&payload_str)
+        extract_credential_from_payload(&payload_str)
     }
 
     #[cfg(target_os = "linux")]
@@ -1125,7 +1174,7 @@ pub fn read_from_system_keyring() -> Result<String, String> {
             return Err("No credential in Linux secret-tool".to_string());
         }
         let payload_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        extract_refresh_token_from_payload(&payload_str)
+        extract_credential_from_payload(&payload_str)
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -1134,23 +1183,46 @@ pub fn read_from_system_keyring() -> Result<String, String> {
     }
 }
 
-fn extract_refresh_token_from_payload(payload_str: &str) -> Result<String, String> {
+/// Read refresh token from system keyring (strictly OS keyring, no stale file fallback).
+pub fn read_from_system_keyring() -> Result<String, String> {
+    read_from_system_keyring_only_detail().map(|c| c.refresh_token)
+}
+
+fn extract_credential_from_payload(payload_str: &str) -> Result<KeyringCredential, String> {
     let json: serde_json::Value = serde_json::from_str(payload_str)
         .map_err(|e| format!("Failed to parse keyring JSON: {}", e))?;
 
-    json.get("token")
+    let refresh_token = json
+        .get("token")
         .and_then(|t| t.get("refresh_token"))
         .and_then(|v| v.as_str())
         .or_else(|| json.get("refresh_token").and_then(|v| v.as_str()))
         .map(|s| s.to_string())
-        .ok_or_else(|| "Refresh token not found in keyring payload".to_string())
+        .ok_or_else(|| "Refresh token not found in keyring payload".to_string())?;
+
+    let id_token_email = json
+        .get("id_token_email")
+        .and_then(|v| v.as_str())
+        .or_else(|| json.get("email").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    Ok(KeyringCredential {
+        refresh_token,
+        id_token_email,
+    })
+}
+
+fn extract_refresh_token_from_payload(payload_str: &str) -> Result<String, String> {
+    extract_credential_from_payload(payload_str).map(|c| c.refresh_token)
 }
 
 /// Verify that the system keyring currently holds the expected refresh token (matching Antigravity-Manager `verify_agy_credentials`).
 pub fn verify_agy_credentials(expected_rt: &str) -> Result<(), String> {
-    let stored_rt = read_from_system_keyring()
+    let stored = read_from_system_keyring_only_detail()
         .map_err(|e| format!("Verification failed (read back from keyring): {}", e))?;
-    if stored_rt != expected_rt {
+    if expected_rt.is_empty() || stored.refresh_token != expected_rt {
         return Err("Verification failed: stored refresh token in system keyring does not match written token".to_string());
     }
     Ok(())
@@ -1193,17 +1265,33 @@ pub fn count_running_agy_processes() -> usize {
     }
 }
 
-/// Write Antigravity CLI (agy) file credentials:
-/// `~/.gemini/antigravity-cli/antigravity-oauth-token`, `.antigravity.bak`, and `.bak`
-/// matching Antigravity-Manager `write_antigravity_cli_credentials`.
-pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
-    let cli_dir = home_dir.join(".gemini").join("antigravity-cli");
-    if !cli_dir.exists() {
-        std::fs::create_dir_all(&cli_dir)
-            .map_err(|e| format!("Failed to create antigravity-cli directory: {}", e))?;
+#[cfg(unix)]
+fn set_owner_only_perms(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+/// Write file-based credentials matching `Antigravity-Manager` (`write_to_file_credentials_to_dir`):
+/// 1. `~/.gemini/jetski-standalone-oauth-token` (primary fallback for `agy` 1.5+ and Standalone)
+/// 2. `~/.gemini/antigravity-cli/antigravity-oauth-token` ONLY when `sync_agy_cli == true` (`[FIX #3728]`)
+/// 3. `~/.gemini/oauth_creds.json` and `~/.gemini/google_accounts.json`
+pub fn write_file_credentials_for_target(
+    home_dir: &Path,
+    account: &AntigravityAccount,
+    sync_agy_cli: bool,
+) -> Result<(), String> {
+    let gemini_dir = home_dir.join(".gemini");
+    if !gemini_dir.exists() {
+        std::fs::create_dir_all(&gemini_dir)
+            .map_err(|e| format!("Failed to create .gemini directory: {}", e))?;
     }
 
-    let expiry_iso = chrono::DateTime::<Utc>::from_timestamp(account.expiry_timestamp, 0)
+    let expiry_secs = if account.expiry_timestamp > 10_000_000_000 {
+        account.expiry_timestamp / 1000
+    } else {
+        account.expiry_timestamp
+    };
+    let expiry_iso = chrono::DateTime::<Utc>::from_timestamp(expiry_secs, 0)
         .unwrap_or_else(Utc::now)
         .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
 
@@ -1213,6 +1301,7 @@ pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) 
         token_type: String,
         refresh_token: String,
         expiry: String,
+        expires_in: i64,
     }
 
     #[derive(Serialize)]
@@ -1228,62 +1317,44 @@ pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) 
             token_type: "Bearer".to_string(),
             refresh_token: account.refresh_token.clone(),
             expiry: expiry_iso,
+            expires_in: 3599,
         },
         auth_method: "consumer".to_string(),
         id_token_email: account.email.clone(),
     };
 
-    let json_str = serde_json::to_string(&payload)
-        .map_err(|e| format!("Failed to serialize agy cli token: {}", e))?;
+    let json_str = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("Failed to serialize agy token: {}", e))?;
 
-    for filename in &[
-        "antigravity-oauth-token",
-        "antigravity-oauth-token.antigravity.bak",
-        "antigravity-oauth-token.bak",
-    ] {
-        let path = cli_dir.join(filename);
-        std::fs::write(&path, &json_str)
-            .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
+    // 1. Standalone / agy 1.5+ native fallback credential
+    let standalone_path = gemini_dir.join("jetski-standalone-oauth-token");
+    if let Err(e) = std::fs::write(&standalone_path, &json_str) {
+        tracing::warn!("Failed to write jetski-standalone-oauth-token: {}", e);
+    } else {
+        #[cfg(unix)]
+        set_owner_only_perms(&standalone_path);
     }
 
-    info!(
-        "Synced credentials to ~/.gemini/antigravity-cli/antigravity-oauth-token for: {}",
-        account.email
-    );
-    Ok(())
-}
-
-/// Read refresh token from `~/.gemini/antigravity-cli/antigravity-oauth-token` (or `.antigravity.bak` / `.bak`).
-pub fn read_antigravity_cli_credentials(home_dir: &Path) -> Option<String> {
-    let cli_dir = home_dir.join(".gemini").join("antigravity-cli");
-    for filename in &[
-        "antigravity-oauth-token",
-        "antigravity-oauth-token.antigravity.bak",
-        "antigravity-oauth-token.bak",
-    ] {
-        let path = cli_dir.join(filename);
-        if !path.exists() {
-            continue;
+    // 2. CLI-specific credential file: strictly gated by sync_agy_cli ([FIX #3728]).
+    // Never overwrite stale `.bak` backups or stomp CLI when switching Classic/IDE.
+    if sync_agy_cli {
+        let cli_dir = gemini_dir.join("antigravity-cli");
+        if !cli_dir.exists() {
+            std::fs::create_dir_all(&cli_dir)
+                .map_err(|e| format!("Failed to create antigravity-cli directory: {}", e))?;
         }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(rt) = extract_refresh_token_from_payload(&content) {
-                if !rt.trim().is_empty() {
-                    return Some(rt);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Write file credentials: `~/.gemini/oauth_creds.json` and `~/.gemini/google_accounts.json`.
-pub fn write_file_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
-    let gemini_dir = home_dir.join(".gemini");
-    if !gemini_dir.exists() {
-        std::fs::create_dir_all(&gemini_dir)
-            .map_err(|e| format!("Failed to create .gemini directory: {}", e))?;
+        let agy_token_path = cli_dir.join("antigravity-oauth-token");
+        std::fs::write(&agy_token_path, &json_str)
+            .map_err(|e| format!("Failed to write antigravity-oauth-token: {}", e))?;
+        #[cfg(unix)]
+        set_owner_only_perms(&agy_token_path);
+        info!(
+            "Synced credentials to ~/.gemini/antigravity-cli/antigravity-oauth-token for: {}",
+            account.email
+        );
     }
 
+    // 3. Gemini CLI / OAuth fallback files (`oauth_creds.json` + `google_accounts.json`)
     let expiry_ms = if account.expiry_timestamp > 10_000_000_000 {
         account.expiry_timestamp
     } else {
@@ -1308,10 +1379,12 @@ pub fn write_file_credentials(home_dir: &Path, account: &AntigravityAccount) -> 
     };
 
     let creds_path = gemini_dir.join("oauth_creds.json");
-    let json_str = serde_json::to_string_pretty(&creds)
+    let creds_str = serde_json::to_string_pretty(&creds)
         .map_err(|e| format!("Failed to serialize oauth_creds: {}", e))?;
-    std::fs::write(&creds_path, json_str)
+    std::fs::write(&creds_path, creds_str)
         .map_err(|e| format!("Failed to write oauth_creds.json: {}", e))?;
+    #[cfg(unix)]
+    set_owner_only_perms(&creds_path);
 
     #[derive(Serialize)]
     struct GoogleAccountsFile {
@@ -1327,10 +1400,73 @@ pub fn write_file_credentials(home_dir: &Path, account: &AntigravityAccount) -> 
     let accounts_path = gemini_dir.join("google_accounts.json");
     if let Ok(accounts_str) = serde_json::to_string_pretty(&accounts_info) {
         let _ = std::fs::write(&accounts_path, accounts_str);
+        #[cfg(unix)]
+        set_owner_only_perms(&accounts_path);
     }
 
     info!("Synced credentials to ~/.gemini/oauth_creds.json for: {}", account.email);
     Ok(())
+}
+
+/// Write Antigravity CLI (agy) file credentials:
+/// `~/.gemini/antigravity-cli/antigravity-oauth-token` and `~/.gemini/jetski-standalone-oauth-token`.
+pub fn write_agy_cli_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
+    write_file_credentials_for_target(home_dir, account, true)
+}
+
+/// Read ONLY live active CLI file credentials (`jetski-standalone-oauth-token` or
+/// `~/.gemini/antigravity-cli/antigravity-oauth-token`).
+/// Never treats stale `.bak` backup files as the live active CLI account.
+pub fn read_live_agy_file_credentials(home_dir: &Path) -> Option<KeyringCredential> {
+    let gemini_dir = home_dir.join(".gemini");
+    let live_paths = [
+        gemini_dir.join("jetski-standalone-oauth-token"),
+        gemini_dir.join("antigravity-cli").join("antigravity-oauth-token"),
+    ];
+    for path in live_paths {
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(cred) = extract_credential_from_payload(&content) {
+                if !cred.refresh_token.trim().is_empty() {
+                    return Some(cred);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Scan Antigravity CLI native and backup credential files (used for account import/discovery only).
+pub fn read_antigravity_cli_credentials(home_dir: &Path) -> Option<String> {
+    if let Some(live) = read_live_agy_file_credentials(home_dir) {
+        return Some(live.refresh_token);
+    }
+    let cli_dir = home_dir.join(".gemini").join("antigravity-cli");
+    for filename in [
+        "antigravity-oauth-token.antigravity.bak",
+        "antigravity-oauth-token.bak",
+    ] {
+        let path = cli_dir.join(filename);
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(rt) = extract_refresh_token_from_payload(&content) {
+                if !rt.trim().is_empty() {
+                    return Some(rt);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Write file credentials (`sync_agy_cli = false`): `~/.gemini/jetski-standalone-oauth-token`,
+/// `~/.gemini/oauth_creds.json`, and `~/.gemini/google_accounts.json`.
+pub fn write_file_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
+    write_file_credentials_for_target(home_dir, account, false)
 }
 
 /// Read refresh token from `~/.gemini/oauth_creds.json`.
@@ -2466,6 +2602,25 @@ fn find_account_id_by_refresh_token(store: &AntigravityStore, rt: &str) -> Optio
         .map(|a| a.id.clone())
 }
 
+fn find_account_id_by_credential(store: &AntigravityStore, cred: &KeyringCredential) -> Option<String> {
+    if let Some(id) = find_account_id_by_refresh_token(store, &cred.refresh_token) {
+        return Some(id);
+    }
+    if let Some(email) = cred.id_token_email.as_deref() {
+        let email_trimmed = email.trim();
+        if !email_trimmed.is_empty() {
+            if let Some(acc) = store
+                .accounts
+                .iter()
+                .find(|a| a.email.eq_ignore_ascii_case(email_trimmed))
+            {
+                return Some(acc.id.clone());
+            }
+        }
+    }
+    None
+}
+
 fn read_antigravity_manager_active_ids(
     home_dir: &Path,
     store: &AntigravityStore,
@@ -2518,23 +2673,33 @@ fn read_antigravity_manager_active_ids(
 }
 
 /// Detect active account IDs across all 3 Antigravity clients (`APP`, `IDE`, `CLI`),
-/// combining live credential detection on disk/keyring with tracked store IDs and `~/.antigravity_tools`.
+/// using the actual OS Keyring (`gemini:antigravity`) and live non-backup files as truth sources
+/// so the `CLI` indicator matches what `agy` will actually authenticate with.
 pub fn detect_active_clients_status(home_dir: &Path, store: &AntigravityStore) -> ActiveClientsStatus {
+    let keyring_cred = read_from_system_keyring_only_detail().ok();
+    detect_active_clients_status_with_keyring(home_dir, store, keyring_cred.as_ref())
+}
+
+/// Core detection helper accepting an explicit keyring snapshot for deterministic unit tests.
+pub fn detect_active_clients_status_with_keyring(
+    home_dir: &Path,
+    store: &AntigravityStore,
+    keyring_cred: Option<&KeyringCredential>,
+) -> ActiveClientsStatus {
     // 1. Live detection from IDE state.vscdb (`%APPDATA%\Antigravity IDE\...`)
     let live_ide_id = get_refresh_token_from_db(Some("ide"))
         .ok()
         .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
 
-    // 2. Live detection from System Keyring (`gemini:antigravity` - primary credential store for `agy` CLI & Classic 2.0+)
-    let live_keyring_id = read_from_system_keyring()
-        .ok()
-        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+    // 2. Live detection from System Keyring (`gemini:antigravity` - primary truth source for `agy` CLI & Classic 2.0+)
+    let live_keyring_id = keyring_cred.and_then(|cred| find_account_id_by_credential(store, cred));
 
-    // 3. Live detection from CLI fallback token file (`~/.gemini/antigravity-cli/antigravity-oauth-token`)
-    let live_agy_file_id = read_antigravity_cli_credentials(home_dir)
-        .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
+    // 3. Live detection from CLI active files ONLY (`jetski-standalone-oauth-token` / `antigravity-oauth-token`)
+    //    Never fall back to `.bak` backups here so stale backups cannot hijack the active CLI badge.
+    let live_agy_file_id = read_live_agy_file_credentials(home_dir)
+        .and_then(|cred| find_account_id_by_credential(store, &cred));
 
-    // 4. Live detection from Classic DB (`%APPDATA%\Antigravity\...`) or `oauth_creds.json`
+    // 4. Live detection from Classic DB (`%APPDATA%\Antigravity\...` < 2.0.0) or `oauth_creds.json`
     let live_classic_db_id = get_refresh_token_from_db(Some("classic"))
         .ok()
         .and_then(|rt| find_account_id_by_refresh_token(store, &rt));
@@ -2555,16 +2720,26 @@ pub fn detect_active_clients_status(home_dir: &Path, store: &AntigravityStore) -
         .or_else(|| valid_store_id(&store.current_ide_account_id))
         .or(mgr_ide);
 
-    // Note: `agy` CLI uses `gemini:antigravity` in system keyring as its primary credential store on Windows/macOS/Linux
-    // and only falls back to `antigravity-oauth-token` when keyring is unavailable. Checking `live_keyring_id` first
-    // ensures we immediately detect if a background `agy` session refreshed and wrote back an older account to keyring.
+    // `agy` CLI always reads OS Keyring (`gemini:antigravity`) first, and only falls back to live
+    // file credentials when Keyring is unavailable. Never hide live Keyring changes behind a stale
+    // `current_agy_account_id` even if APP/IDE/background `agy` overwrote Keyring.
     let agy_account_id = live_keyring_id
         .clone()
         .or(live_agy_file_id)
         .or_else(|| valid_store_id(&store.current_agy_account_id))
         .or(mgr_agy);
 
+    // Classic `< 2.0` uses its own `state.vscdb`; Classic `>= 2.0` shares `gemini:antigravity` Keyring.
+    let keyring_belongs_to_classic = store.current_target_ide.as_deref() != Some("agy")
+        || store.current_classic_account_id == live_keyring_id;
     let classic_account_id = live_classic_db_id
+        .or_else(|| {
+            if keyring_belongs_to_classic {
+                live_keyring_id.clone()
+            } else {
+                None
+            }
+        })
         .or_else(|| valid_store_id(&store.current_classic_account_id))
         .or(mgr_classic)
         .or(live_keyring_id)
@@ -2608,52 +2783,81 @@ pub fn auto_sync_active_account(home_dir: &Path, store: &mut AntigravityStore) -
     let prev_active_vec: Vec<bool> = store.accounts.iter().map(|a| a.is_active).collect();
     let mut added_new = false;
 
-    // Collect candidate refresh tokens currently active on this machine
-    let mut local_tokens: Vec<(String, &'static str)> = Vec::new();
+    // Collect candidate credentials currently active on this machine (NEVER `.bak` backups).
+    let mut local_creds: Vec<(KeyringCredential, &'static str)> = Vec::new();
     if let Ok(rt) = get_refresh_token_from_db(Some("ide")) {
         if !rt.trim().is_empty() {
-            local_tokens.push((rt, "Antigravity IDE"));
+            local_creds.push((
+                KeyringCredential {
+                    refresh_token: rt,
+                    id_token_email: None,
+                },
+                "Antigravity IDE",
+            ));
         }
     }
-    if let Some(rt) = read_antigravity_cli_credentials(home_dir) {
-        if !rt.trim().is_empty() {
-            local_tokens.push((rt, "Antigravity CLI"));
+    if let Some(cred) = read_live_agy_file_credentials(home_dir) {
+        if !cred.refresh_token.trim().is_empty() {
+            local_creds.push((cred, "Antigravity CLI"));
         }
     }
     if let Ok(rt) = get_refresh_token_from_db(Some("classic")) {
         if !rt.trim().is_empty() {
-            local_tokens.push((rt, "Antigravity APP"));
+            local_creds.push((
+                KeyringCredential {
+                    refresh_token: rt,
+                    id_token_email: None,
+                },
+                "Antigravity APP",
+            ));
         }
     }
-    if let Ok(rt) = read_from_system_keyring() {
-        if !rt.trim().is_empty() {
-            local_tokens.push((rt, "本机导入"));
+    if let Ok(cred) = read_from_system_keyring_only_detail() {
+        if !cred.refresh_token.trim().is_empty() {
+            local_creds.push((cred, "本机导入"));
         }
     }
 
-    for (rt, label) in local_tokens {
-        if find_account_id_by_refresh_token(store, &rt).is_none() {
-            if let Ok(new_acc) = build_account_from_refresh_token(&rt, None, Some(label.to_string())) {
-                if let Some(pos) = store
-                    .accounts
-                    .iter()
-                    .position(|a| a.email.eq_ignore_ascii_case(&new_acc.email))
-                {
-                    store.accounts[pos].refresh_token = new_acc.refresh_token;
-                    store.accounts[pos].access_token = new_acc.access_token;
-                    store.accounts[pos].expiry_timestamp = new_acc.expiry_timestamp;
-                    if new_acc.tier.is_some() {
-                        store.accounts[pos].tier = new_acc.tier;
-                    }
-                    if new_acc.quota.is_some() {
-                        store.accounts[pos].quota = new_acc.quota;
-                    }
-                    store.accounts[pos].ensure_subscription_tier();
-                    added_new = true;
-                } else {
-                    store.accounts.push(new_acc);
+    for (cred, label) in local_creds {
+        let rt = cred.refresh_token.trim();
+        if find_account_id_by_refresh_token(store, rt).is_some() {
+            continue;
+        }
+        // If `id_token_email` matches an existing account whose refresh token rotated (e.g. external `agy` re-login),
+        // update the stored refresh token immediately even offline.
+        if let Some(email) = cred.id_token_email.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(acc) = store
+                .accounts
+                .iter_mut()
+                .find(|a| a.email.eq_ignore_ascii_case(email))
+            {
+                if acc.refresh_token.trim() != rt {
+                    acc.refresh_token = rt.to_string();
                     added_new = true;
                 }
+                continue;
+            }
+        }
+        if let Ok(new_acc) = build_account_from_refresh_token(rt, None, Some(label.to_string())) {
+            if let Some(pos) = store
+                .accounts
+                .iter()
+                .position(|a| a.email.eq_ignore_ascii_case(&new_acc.email))
+            {
+                store.accounts[pos].refresh_token = new_acc.refresh_token;
+                store.accounts[pos].access_token = new_acc.access_token;
+                store.accounts[pos].expiry_timestamp = new_acc.expiry_timestamp;
+                if new_acc.tier.is_some() {
+                    store.accounts[pos].tier = new_acc.tier;
+                }
+                if new_acc.quota.is_some() {
+                    store.accounts[pos].quota = new_acc.quota;
+                }
+                store.accounts[pos].ensure_subscription_tier();
+                added_new = true;
+            } else {
+                store.accounts.push(new_acc);
+                added_new = true;
             }
         }
     }
@@ -3193,11 +3397,11 @@ pub fn switch_account(
     switch_account_target(home_dir, app_data, store, account_id, Some("classic"))
 }
 
-/// Helper to apply Classic credentials (Keyring + file credentials + storage.json + state.vscdb).
+/// Helper to apply Classic credentials (Keyring + non-CLI file credentials + storage.json + state.vscdb).
+/// Matches Antigravity-Manager `[FIX #3728]`: does NOT overwrite `~/.gemini/antigravity-cli/antigravity-oauth-token`.
 fn apply_classic_credentials(home_dir: &Path, account: &AntigravityAccount) -> Result<(), String> {
     write_to_system_keyring(account)?;
-    write_file_credentials(home_dir, account)?;
-    let _ = write_agy_cli_credentials(home_dir, account);
+    let _ = write_file_credentials_for_target(home_dir, account, false);
     if let Some(ref profile) = account.device_profile {
         let _ = write_device_profile_to_storage(Some("classic"), profile);
     }
@@ -3287,6 +3491,13 @@ pub fn switch_account_target(
                 return Err("未检测到 Antigravity IDE 数据库 (state.vscdb)，请先启动一次 Antigravity IDE".to_string());
             }
 
+            // 3. Sync System Keyring (`gemini:antigravity`) + file fallbacks for IDE 2.6.0+ embedded agy
+            //    language server (matching Antigravity-Manager `#3762/#3770/#3778`, with `sync_agy_cli = false`).
+            if let Err(e) = write_to_system_keyring(&account_clone) {
+                tracing::warn!("Failed to sync system keyring for IDE: {}", e);
+            }
+            let _ = write_file_credentials_for_target(home_dir, &account_clone, false);
+
             if was_running {
                 start_antigravity_client(Some("ide"), snapshot_exe.as_deref(), &snapshot_args);
             }
@@ -3297,13 +3508,12 @@ pub fn switch_account_target(
         "agy" => {
             // 1. Write to system keyring (`gemini:antigravity` - primary credential store for agy CLI)
             write_to_system_keyring(&account_clone)?;
-            // 2. Write to `~/.gemini/antigravity-cli/antigravity-oauth-token` (and `.antigravity.bak` / `.bak`)
-            write_agy_cli_credentials(home_dir, &account_clone)?;
-            // 3. Also sync `~/.gemini/oauth_creds.json`
-            let _ = write_file_credentials(home_dir, &account_clone);
-            // 4. Read-back verification from system keyring (matching Antigravity-Manager `verify_agy_credentials`)
+            // 2. Write `~/.gemini/jetski-standalone-oauth-token`, `~/.gemini/antigravity-cli/antigravity-oauth-token`,
+            //    `oauth_creds.json`, and `google_accounts.json` (`sync_agy_cli = true`).
+            write_file_credentials_for_target(home_dir, &account_clone, true)?;
+            // 3. Read-back verification strictly from system keyring (matching Antigravity-Manager `verify_agy_credentials`)
             verify_agy_credentials(&account_clone.refresh_token)?;
-            // 5. Sync device profile if storage.json exists (matching Antigravity-Manager `integration.rs:239-243`)
+            // 4. Sync device profile if storage.json exists (matching Antigravity-Manager `integration.rs:327-331`)
             if let Some(ref profile) = account_clone.device_profile {
                 let _ = write_device_profile_to_storage(Some("classic"), profile);
             }
@@ -4821,6 +5031,100 @@ mod tests {
         assert_eq!(status.agy_account_id.as_deref(), Some("id-cli"));
         assert!(status.is_agy("id-cli"));
         assert!(store.get_account("id-cli").unwrap().is_active);
+    }
+
+    #[test]
+    fn test_cli_active_detection_ignores_stale_bak_and_honors_keyring_truth() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+
+        let acc_old = AntigravityAccount::new(
+            "id-old".into(),
+            "old@example.com".into(),
+            "at-old".into(),
+            "1//04rt_old_bak_account".into(),
+            1800000000,
+        );
+        let acc_real = AntigravityAccount::new(
+            "id-real".into(),
+            "real@example.com".into(),
+            "at-real".into(),
+            "1//04rt_real_account".into(),
+            1800000000,
+        );
+        let acc_app = AntigravityAccount::new(
+            "id-app".into(),
+            "app@example.com".into(),
+            "at-app".into(),
+            "1//04rt_app_account".into(),
+            1800000000,
+        );
+
+        // Create ONLY stale `.bak` files pointing to `acc_old`, without live `antigravity-oauth-token`
+        // or `jetski-standalone-oauth-token`.
+        let cli_dir = home.join(".gemini").join("antigravity-cli");
+        std::fs::create_dir_all(&cli_dir).unwrap();
+        let stale_payload = serde_json::json!({
+            "token": { "refresh_token": acc_old.refresh_token },
+            "id_token_email": acc_old.email
+        })
+        .to_string();
+        std::fs::write(cli_dir.join("antigravity-oauth-token.bak"), &stale_payload).unwrap();
+        std::fs::write(cli_dir.join("antigravity-oauth-token.antigravity.bak"), &stale_payload).unwrap();
+
+        assert!(
+            read_live_agy_file_credentials(home).is_none(),
+            "Live CLI detection must ignore stale .bak backup files"
+        );
+        // Import discovery still finds `.bak`
+        assert_eq!(
+            read_antigravity_cli_credentials(home).as_deref(),
+            Some("1//04rt_old_bak_account")
+        );
+
+        let store = AntigravityStore {
+            accounts: vec![acc_old.clone(), acc_real.clone(), acc_app.clone()],
+            active_account_id: Some("id-app".into()),
+            current_target_ide: Some("classic".into()),
+            current_classic_account_id: Some("id-app".into()),
+            current_ide_account_id: None,
+            current_agy_account_id: Some("id-real".into()),
+        };
+
+        // 1. When live keyring holds `acc_app` (e.g. Classic or running `agy` wrote to Keyring),
+        //    even though `current_target_ide == "classic"` and `current_agy_account_id == "id-real"`,
+        //    CLI badge must truthfully reflect `id-app` (what `agy` will actually use).
+        let keyring_app = KeyringCredential {
+            refresh_token: acc_app.refresh_token.clone(),
+            id_token_email: Some(acc_app.email.clone()),
+        };
+        let status = detect_active_clients_status_with_keyring(home, &store, Some(&keyring_app));
+        assert_eq!(status.agy_account_id.as_deref(), Some("id-app"));
+        assert_eq!(status.classic_account_id.as_deref(), Some("id-app"));
+
+        // 2. When keyring refresh_token rotated (unknown RT) but `id_token_email` matches `acc_real`,
+        //    it must still resolve to `id-real` and NOT fall back to `.bak` (`id-old`).
+        let rotated_keyring = KeyringCredential {
+            refresh_token: "1//04rotated_refresh_token_new".into(),
+            id_token_email: Some("REAL@EXAMPLE.COM".into()),
+        };
+        let status_rotated =
+            detect_active_clients_status_with_keyring(home, &store, Some(&rotated_keyring));
+        assert_eq!(status_rotated.agy_account_id.as_deref(), Some("id-real"));
+
+        // 3. When Keyring is unavailable and only `.bak` exists (no live file), fallback must NOT select `.bak`.
+        let status_no_keyring = detect_active_clients_status_with_keyring(home, &store, None);
+        assert_eq!(status_no_keyring.agy_account_id.as_deref(), Some("id-real"));
+
+        // 4. Switching non-agy (`sync_agy_cli = false`) writes `jetski-standalone-oauth-token`
+        //    without creating or overwriting `antigravity-oauth-token` ([FIX #3728]).
+        write_file_credentials_for_target(home, &acc_app, false).unwrap();
+        assert!(home.join(".gemini").join("jetski-standalone-oauth-token").exists());
+        assert!(!cli_dir.join("antigravity-oauth-token").exists());
+
+        // Switching `agy` (`sync_agy_cli = true`) writes `antigravity-oauth-token` too.
+        write_file_credentials_for_target(home, &acc_real, true).unwrap();
+        assert!(cli_dir.join("antigravity-oauth-token").exists());
     }
 
     #[test]
