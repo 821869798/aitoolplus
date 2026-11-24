@@ -46,18 +46,17 @@ pub fn official_hub_user_agent() -> &'static str {
     HUB_UA.as_str()
 }
 
-// Quota API endpoints (fallback order: Daily → Sandbox → Prod, matching Antigravity-Manager v4.9.8)
-pub const QUOTA_MODELS_ENDPOINTS: [&str; 3] = [
+// Quota API endpoints (fallback order: Daily → Sandbox, matching Antigravity-Manager v5.0.4)
+// Prod (`cloudcode-pa.googleapis.com`) is excluded from quota reads because its values diverge from Daily/Sandbox.
+pub const QUOTA_MODELS_ENDPOINTS: [&str; 2] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
-    "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
 ];
 
-// Quota Summary API endpoints (weekly + 5h + Argon grouped quota, fallback order: Daily → Sandbox → Prod)
-pub const QUOTA_SUMMARY_ENDPOINTS: [&str; 3] = [
+// Quota Summary API endpoints (weekly + 5h grouped quota, fallback order: Daily → Sandbox)
+pub const QUOTA_SUMMARY_ENDPOINTS: [&str; 2] = [
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
 ];
 
 pub const LOAD_PROJECT_ENDPOINTS: [&str; 3] = [
@@ -114,6 +113,10 @@ pub struct AntigravityQuota {
     pub forbidden_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_models: Vec<String>,
 }
 
 impl Default for AntigravityQuota {
@@ -127,8 +130,20 @@ impl Default for AntigravityQuota {
             is_forbidden: false,
             forbidden_reason: None,
             subscription_tier: None,
+            raw_tier: None,
+            disabled_models: Vec::new(),
         }
     }
+}
+
+/// Model capability flags derived from active models and quota groups.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AntigravityModelCapabilities {
+    pub has_flagship: bool,
+    pub flagship_label: Option<String>,
+    pub has_claude_55: bool,
+    pub has_claude_46: bool,
+    pub has_gpt: bool,
 }
 
 /// Device fingerprint profile for Antigravity isolation.
@@ -216,7 +231,7 @@ impl AntigravityAccount {
         self.expiry_timestamp <= now + 300
     }
 
-    /// Resolve account subscription tier ("ULTRA", "PRO", "ENTERPRISE", or "FREE").
+    /// Resolve account subscription tier ("ULTRA", "PRO", "PLUS", "ENTERPRISE", or "FREE").
     /// Strictly uses authoritative `tier` / `quota.subscription_tier` normalized via `normalize_subscription_tier`.
     /// Never infers tier from `quota.models` (fetchAvailableModels returns all 33 models for FREE accounts too).
     pub fn get_tier(&self) -> &str {
@@ -226,6 +241,7 @@ impl AntigravityAccount {
                 return match normalize_subscription_tier(s).as_str() {
                     "ULTRA" => "ULTRA",
                     "PRO" => "PRO",
+                    "PLUS" => "PLUS",
                     "ENTERPRISE" => "ENTERPRISE",
                     _ => "FREE",
                 };
@@ -238,6 +254,7 @@ impl AntigravityAccount {
                     return match normalize_subscription_tier(s).as_str() {
                         "ULTRA" => "ULTRA",
                         "PRO" => "PRO",
+                        "PLUS" => "PLUS",
                         "ENTERPRISE" => "ENTERPRISE",
                         _ => "FREE",
                     };
@@ -247,9 +264,129 @@ impl AntigravityAccount {
         "FREE"
     }
 
+    /// Derive model capability flags from active models and dedicated quota groups.
+    pub fn model_capabilities(&self) -> AntigravityModelCapabilities {
+        let mut caps = AntigravityModelCapabilities::default();
+        let Some(q) = &self.quota else {
+            return caps;
+        };
+
+        let mut active_codenames: Vec<String> = Vec::new();
+        for m in &q.models {
+            let nl = m.name.trim().to_lowercase();
+            if nl.contains("-disabled") || nl.ends_with("_disabled") || nl.contains("-sonar") {
+                continue;
+            }
+            if let Some(code) = extract_gemini4_codename(&nl) {
+                if !active_codenames.iter().any(|c| c == &code) {
+                    active_codenames.push(code);
+                }
+            }
+            if nl.contains("claude") && (nl.contains("5-5") || nl.contains("5.5")) {
+                caps.has_claude_55 = true;
+            }
+            if nl.contains("claude") && (nl.contains("4-6") || nl.contains("4.6")) {
+                caps.has_claude_46 = true;
+            }
+            if nl.starts_with("gpt") {
+                caps.has_gpt = true;
+            }
+        }
+
+        let mut dedicated_group_codes: Vec<String> = Vec::new();
+        for g in &q.quota_groups {
+            let d = g.display_name.to_lowercase();
+            let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+            if let Some(code) = extract_group_g4_codename_with_known(&d, &bid, &active_codenames) {
+                if !dedicated_group_codes.iter().any(|c| c == &code) {
+                    dedicated_group_codes.push(code);
+                }
+            }
+        }
+
+        let tier = self.get_tier();
+        let is_high_tier_empty_fallback =
+            (tier == "ULTRA" || tier == "ENTERPRISE") && q.models.is_empty();
+        caps.has_flagship = !active_codenames.is_empty()
+            || !dedicated_group_codes.is_empty()
+            || is_high_tier_empty_fallback;
+
+        if caps.has_flagship {
+            let preferred_code = active_codenames
+                .iter()
+                .find(|c| c.as_str() == "neon")
+                .or_else(|| active_codenames.iter().find(|c| c.as_str() == "argon"))
+                .or_else(|| active_codenames.first())
+                .or_else(|| dedicated_group_codes.iter().find(|c| c.as_str() == "neon"))
+                .or_else(|| dedicated_group_codes.iter().find(|c| c.as_str() == "argon"))
+                .or_else(|| dedicated_group_codes.first());
+            caps.flagship_label = Some(
+                preferred_code
+                    .map(|c| capitalize_word(c))
+                    .unwrap_or_else(|| "Neon".to_string()),
+            );
+        }
+
+        caps
+    }
+
+    /// Check whether this account has active Argon or Neon model access (or a dedicated Argon/Neon quota group).
+    pub fn has_argon_or_neon(&self) -> bool {
+        let Some(q) = &self.quota else {
+            return false;
+        };
+        let has_in_models = q.models.iter().any(|m| {
+            let nl = m.name.trim().to_lowercase();
+            if nl.contains("-disabled") || nl.ends_with("_disabled") {
+                return false;
+            }
+            matches!(
+                extract_gemini4_codename(&nl).as_deref(),
+                Some("argon" | "neon")
+            ) || nl.contains("argon")
+                || nl.contains("neon")
+        });
+        if has_in_models {
+            return true;
+        }
+        q.quota_groups.iter().any(|g| {
+            let d = g.display_name.to_lowercase();
+            let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+            d.contains("argon") || d.contains("neon") || bid.contains("argon") || bid.contains("neon")
+        })
+    }
+
+    /// Detect AI Plus ("假 Pro"): when `tier` is `PRO`, having active Argon or Neon model access
+    /// is treated as true `PRO`; otherwise (once quota/disabled models are fetched) it is classified as `PLUS`.
+    pub fn is_ai_plus(&self) -> bool {
+        let tier = self.get_tier();
+        if tier == "PLUS" {
+            return true;
+        }
+        if tier != "PRO" {
+            return false;
+        }
+        let Some(q) = &self.quota else {
+            return false;
+        };
+        if q.is_forbidden || (q.models.is_empty() && q.disabled_models.is_empty()) {
+            return false;
+        }
+        !self.has_argon_or_neon()
+    }
+
+    /// Effective subscription tier for UI display & persistence ("PLUS" when AI Plus is detected).
+    pub fn get_effective_tier(&self) -> &str {
+        if self.is_ai_plus() {
+            "PLUS"
+        } else {
+            self.get_tier()
+        }
+    }
+
     /// Normalize and synchronize `self.tier` and `self.quota.subscription_tier` in-place.
     pub fn ensure_subscription_tier(&mut self) {
-        let resolved = self.get_tier().to_string();
+        let resolved = self.get_effective_tier().to_string();
         self.tier = Some(resolved.clone());
         if let Some(q) = &mut self.quota {
             q.subscription_tier = Some(resolved);
@@ -362,6 +499,24 @@ pub struct GoogleUserInfo {
 struct QuotaModelResponse {
     #[serde(default)]
     models: std::collections::HashMap<String, ModelInfoJson>,
+    #[serde(rename = "agentModelSorts", default)]
+    agent_model_sorts: Vec<AgentModelSortJson>,
+    #[serde(rename = "imageGenerationModelIds", default)]
+    image_generation_model_ids: Vec<String>,
+    #[serde(rename = "tieredModelIds", default)]
+    tiered_model_ids: Option<std::collections::HashMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentModelSortJson {
+    #[serde(default)]
+    groups: Vec<AgentModelSortGroupJson>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentModelSortGroupJson {
+    #[serde(rename = "modelIds", default)]
+    model_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -373,6 +528,8 @@ struct ModelInfoJson {
     #[serde(rename = "supportsThinking")]
     supports_thinking: Option<bool>,
     recommended: Option<bool>,
+    #[serde(default)]
+    disabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -517,10 +674,285 @@ pub fn fetch_user_info(access_token: &str) -> Result<GoogleUserInfo, String> {
     Ok(user_info)
 }
 
-/// Normalize raw tier string into "FREE", "PRO", "ULTRA", "ENTERPRISE".
-/// Matches Antigravity-Manager v4.9.8 `normalize_subscription_tier`:
+fn capitalize_word(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn is_generic_gemini_role_token(token: &str) -> bool {
+    matches!(
+        token,
+        "pro"
+            | "flash"
+            | "lite"
+            | "ultra"
+            | "nano"
+            | "image"
+            | "imagen"
+            | "thinking"
+            | "preview"
+            | "latest"
+            | "exp"
+            | "agent"
+            | "worker"
+            | "base"
+            | "chat"
+            | "code"
+            | "embedding"
+            | "tuned"
+            | "default"
+            | "general"
+            | "standard"
+            | "models"
+            | "model"
+    )
+}
+
+fn strip_effort_or_tier_suffix(lower: &str) -> &str {
+    for suffix in ["-high", "-medium", "-low", "-xhigh", "-tiered", "-thinking"] {
+        if let Some(stripped) = lower.strip_suffix(suffix) {
+            return stripped;
+        }
+    }
+    lower
+}
+
+/// Extract a Gemini 4+ flagship codename (e.g. `neon`, `argon`, `carbon`, `hydrogen`) from a model ID.
+/// Skips disabled variants, internal sonar variants, numeric versions (`gemini-4-1-flash`),
+/// and generic role words (`gemini-4-pro-preview`).
+pub fn extract_gemini4_codename(model_name: &str) -> Option<String> {
+    let lower = model_name.trim().to_lowercase();
+    if lower.contains("-disabled")
+        || lower.ends_with("_disabled")
+        || lower.contains("-sonar")
+        || lower == "gemini-flash-worker-agy"
+    {
+        return None;
+    }
+    let stripped = strip_effort_or_tier_suffix(&lower);
+    if stripped == "gemini-pro-orchestrator-g1-pro" {
+        return Some("neon".to_string());
+    }
+    if let Some(after_gemini) = stripped.strip_prefix("gemini-") {
+        if let Some((ver_part, rest)) = after_gemini.split_once('-') {
+            let major_ok = ver_part
+                .split('.')
+                .next()
+                .and_then(|m| m.parse::<u32>().ok())
+                .map(|m| m >= 4)
+                .unwrap_or(false);
+            if major_ok {
+                let code = rest.split('-').next().unwrap_or("").trim();
+                if !code.is_empty()
+                    && code.bytes().any(|b| b.is_ascii_alphabetic())
+                    && !is_generic_gemini_role_token(code)
+                {
+                    return Some(code.to_string());
+                }
+            }
+        }
+    }
+    if lower.contains("argon") {
+        return Some("argon".to_string());
+    }
+    None
+}
+
+/// Extract a dedicated Gemini 4+ codename from a quota group display name / bucket ID.
+pub fn extract_group_g4_codename(
+    display_name_lower: &str,
+    bucket_id_lower: &str,
+) -> Option<String> {
+    if display_name_lower.contains("argon") || bucket_id_lower.contains("argon") {
+        return Some("argon".to_string());
+    }
+    for text in [display_name_lower, bucket_id_lower] {
+        let normalized = text.replace('_', "-").replace(' ', "-");
+        let parts: Vec<&str> = normalized.split('-').filter(|s| !s.is_empty()).collect();
+        for win in parts.windows(3) {
+            if win[0] == "gemini" {
+                let is_v4_plus = win[1]
+                    .split('.')
+                    .next()
+                    .and_then(|m| m.parse::<u32>().ok())
+                    .map(|m| m >= 4)
+                    .unwrap_or(false);
+                if is_v4_plus
+                    && win[2].bytes().any(|b| b.is_ascii_alphabetic())
+                    && !is_generic_gemini_role_token(win[2])
+                {
+                    return Some(win[2].to_string());
+                }
+                if win[2] == "wtu"
+                    && win[1].bytes().any(|b| b.is_ascii_alphabetic())
+                    && !is_generic_gemini_role_token(win[1])
+                {
+                    return Some(win[1].to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Cross-match known Gemini 4+ codenames against a quota group display name or bucket ID.
+/// Only treats a group as dedicated G4 if its normalized tokens match a known codename and it is not
+/// the general multi-model `"Gemini Models"` or `"Claude and GPT models"` group.
+pub fn extract_group_g4_codename_with_known(
+    display_name_lower: &str,
+    bucket_id_lower: &str,
+    known_codenames: &[String],
+) -> Option<String> {
+    if let Some(code) = extract_group_g4_codename(display_name_lower, bucket_id_lower) {
+        return Some(code);
+    }
+    let is_general_group = (display_name_lower.contains("gemini")
+        && display_name_lower.contains("models"))
+        || bucket_id_lower.starts_with("gemini-5h")
+        || bucket_id_lower.starts_with("gemini-weekly")
+        || display_name_lower.contains("claude")
+        || display_name_lower.contains("gpt")
+        || bucket_id_lower.contains("3p");
+    if is_general_group {
+        return None;
+    }
+    for code in known_codenames {
+        if code.is_empty()
+            || matches!(
+                code.as_str(),
+                "gemini" | "models" | "claude" | "gpt" | "3p" | "weekly" | "5h"
+            )
+        {
+            continue;
+        }
+        let matches_token = [display_name_lower, bucket_id_lower].iter().any(|text| {
+            let norm = text.replace('_', "-").replace(' ', "-");
+            norm.split('-').any(|tok| tok == code.as_str())
+        });
+        if matches_token {
+            return Some(code.clone());
+        }
+    }
+    None
+}
+
+fn parse_version_tuple(s: &str) -> Option<(u32, u32)> {
+    let token = s.split('-').next()?;
+    let mut parts = token.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts
+        .next()
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or(0);
+    Some((major, minor))
+}
+
+fn parse_claude_version_tuple(lower: &str) -> Option<(u32, u32)> {
+    let tokens: Vec<&str> = lower.split('-').collect();
+    for win in tokens.windows(2) {
+        if let (Ok(maj), Ok(min)) = (win[0].parse::<u32>(), win[1].parse::<u32>()) {
+            if (3..=9).contains(&maj) {
+                return Some((maj, min));
+            }
+        }
+    }
+    None
+}
+
+/// Filter `fetchAvailableModels` entries against Antigravity-Manager v5.0.4 baseline compliance.
+pub fn is_model_compliant_with_baseline(model: &str) -> bool {
+    let lower = model.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+
+    if lower.contains("-disabled")
+        || lower.ends_with("_disabled")
+        || lower.starts_with("chat_")
+        || lower.starts_with("tab_")
+        || lower.contains("internal")
+        || lower.contains("-exp")
+        || lower.ends_with("-agent")
+        || lower == "gemini-3-flash"
+        || lower == "gemini-flash-worker-agy"
+        || lower == "gemini-4-hydrogen-sonar"
+    {
+        return false;
+    }
+
+    if let Some(rest) = lower.strip_prefix("gemini-") {
+        if let Some((major, _minor)) = parse_version_tuple(rest) {
+            if major < 3 {
+                return false;
+            }
+            if major >= 4 {
+                return true;
+            }
+        }
+    }
+
+    if lower.contains("argon")
+        || lower == "gemini-pro-orchestrator-g1-pro"
+        || lower == "gemini-3.1-flash-lite"
+        || lower == "gemini-3.5-flash-lite"
+        || lower == "gemini-3.1-flash-image"
+        || lower == "gemini-3-pro-image"
+    {
+        return true;
+    }
+
+    if lower.contains("claude") {
+        if (lower.starts_with("claude-sonnet-") || lower.contains("-5-5"))
+            && lower.contains("thinking")
+        {
+            return false;
+        }
+        if let Some(ver) = parse_claude_version_tuple(&lower) {
+            if lower.contains("fable") || lower.contains("mythos") {
+                return ver >= (5, 0);
+            }
+            return ver >= (4, 6);
+        }
+        return false;
+    }
+
+    if lower.contains("gpt") || lower.contains("o1") || lower.contains("o3") {
+        return lower == "gpt-oss-120b-medium" || lower == "gpt-oss-120b";
+    }
+
+    if lower.contains("image") {
+        return lower == "gemini-3.1-flash-image" || lower == "gemini-3-pro-image";
+    }
+
+    if lower.contains("pro") {
+        if let Some(rest) = lower.strip_prefix("gemini-") {
+            if let Some(ver) = parse_version_tuple(rest) {
+                return ver >= (3, 1);
+            }
+        }
+        return !lower.contains("2.5") && !lower.contains("2-5") && !lower.contains("1.5");
+    }
+
+    if lower.contains("flash") {
+        if let Some(rest) = lower.strip_prefix("gemini-") {
+            if let Some(ver) = parse_version_tuple(rest) {
+                return ver >= (3, 8);
+            }
+        }
+        return false;
+    }
+
+    false
+}
+
+/// Normalize raw tier string into "FREE", "PRO", "PLUS", "ULTRA", "ENTERPRISE".
+/// Matches Antigravity-Manager v5.0.4 `normalize_subscription_tier`, with forward support for `plus`:
 /// - `ultra` / `helium` -> `"ULTRA"` (`g1-ultra-tier`, `GOOGLE_ONE_HELIUM`, `GDP_HELIUM`, `Google AI Ultra`)
 /// - `free` / `starter` -> `"FREE"` (`free-tier`, `"Antigravity Starter Quota"`)
+/// - `plus` -> `"PLUS"` (`g1-plus-tier`, `"Google AI Plus"`)
 /// - `pro` / `premium` / `advanced` -> `"PRO"` (`g1-pro-tier`, `"Google AI Pro"`)
 /// - `enterprise` / `corp` -> `"ENTERPRISE"`
 /// - anything else (including `standard-tier`) -> `"FREE"`
@@ -530,6 +962,8 @@ pub fn normalize_subscription_tier(tier: &str) -> String {
         "ULTRA".to_string()
     } else if lower.contains("free") || lower.contains("starter") {
         "FREE".to_string()
+    } else if lower.contains("plus") {
+        "PLUS".to_string()
     } else if lower.contains("pro") || lower.contains("premium") || lower.contains("advanced") {
         "PRO".to_string()
     } else if lower.contains("enterprise") || lower.contains("corp") {
@@ -539,8 +973,8 @@ pub fn normalize_subscription_tier(tier: &str) -> String {
     }
 }
 
-/// Extract normalized subscription tier from a parsed `LoadProjectResponse`.
-fn extract_tier_from_load_project(data: &LoadProjectResponse) -> String {
+/// Extract normalized subscription tier and raw tier identifier from a parsed `LoadProjectResponse`.
+fn extract_raw_and_tier_from_load_project(data: &LoadProjectResponse) -> (String, String) {
     let raw_tier = data
         .paid_tier
         .as_ref()
@@ -556,13 +990,19 @@ fn extract_tier_from_load_project(data: &LoadProjectResponse) -> String {
         })
         .unwrap_or_else(|| "free-tier".to_string());
 
-    normalize_subscription_tier(&raw_tier)
+    (normalize_subscription_tier(&raw_tier), raw_tier)
 }
 
-/// Fetch project ID and subscription tier from loadCodeAssist API.
-/// Returns `(project_id, tier)` where `tier` is `Some` when any `loadCodeAssist` endpoint responds,
-/// or `(None, None)` if all endpoints failed at the network/transport level.
-pub fn fetch_project_and_tier(access_token: &str) -> (Option<String>, Option<String>) {
+/// Extract normalized subscription tier from a parsed `LoadProjectResponse`.
+#[cfg(test)]
+fn extract_tier_from_load_project(data: &LoadProjectResponse) -> String {
+    extract_raw_and_tier_from_load_project(data).0
+}
+
+/// Fetch project ID, normalized tier, and raw tier identifier from loadCodeAssist API.
+pub fn fetch_project_and_tier_with_raw(
+    access_token: &str,
+) -> (Option<String>, Option<String>, Option<String>) {
     let body = serde_json::json!({
         "metadata": {
             "ideType": "ANTIGRAVITY"
@@ -580,13 +1020,132 @@ pub fn fetch_project_and_tier(access_token: &str) -> (Option<String>, Option<Str
         if let Ok(res) = resp {
             if let Ok(data) = res.into_json::<LoadProjectResponse>() {
                 let project_id = data.project_id.clone();
-                let tier = Some(extract_tier_from_load_project(&data));
-                return (project_id, tier);
+                let (tier, raw_tier) = extract_raw_and_tier_from_load_project(&data);
+                return (project_id, Some(tier), Some(raw_tier));
             }
         }
     }
 
-    (None, None)
+    (None, None, None)
+}
+
+/// Fetch project ID and subscription tier from loadCodeAssist API.
+/// Returns `(project_id, tier)` where `tier` is `Some` when any `loadCodeAssist` endpoint responds,
+/// or `(None, None)` if all endpoints failed at the network/transport level.
+pub fn fetch_project_and_tier(access_token: &str) -> (Option<String>, Option<String>) {
+    let (project_id, tier, _) = fetch_project_and_tier_with_raw(access_token);
+    (project_id, tier)
+}
+
+/// Derive model-level percentage from `fetchAvailableModels` `quotaInfo`.
+/// proto3 JSON omits zero float fields, so an omitted `remainingFraction` with a non-empty `resetTime`
+/// means the model is exhausted (0%) rather than unknown (`None`).
+fn model_quota_percentage(quota_info: Option<&QuotaInfoJson>) -> Option<i32> {
+    let qi = quota_info?;
+    match qi.remaining_fraction {
+        Some(fraction) => Some((fraction * 100.0).round() as i32),
+        None if qi.reset_time.as_deref().is_some_and(|s| !s.is_empty()) => Some(0),
+        None => None,
+    }
+}
+
+fn select_bucket_from_group<'a>(
+    group: &'a QuotaSummaryGroupJson,
+) -> Option<&'a QuotaSummaryBucketJson> {
+    let bucket_5h = group.buckets.iter().find(|b| {
+        let win = b.window.as_deref().unwrap_or("").to_lowercase();
+        let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
+        win.contains("5h") || bid.contains("5h") || win.contains("hour") || bid.contains("hour")
+    });
+    let bucket_weekly = group.buckets.iter().find(|b| {
+        let win = b.window.as_deref().unwrap_or("").to_lowercase();
+        let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
+        win.contains("week") || bid.contains("week") || win.contains("7d") || bid.contains("7d")
+    });
+    let bucket_frac = |b: &QuotaSummaryBucketJson| -> f64 {
+        b.remaining_fraction.unwrap_or_else(|| {
+            if b.reset_time.as_deref().is_some_and(|s| !s.is_empty()) {
+                0.0
+            } else {
+                1.0
+            }
+        })
+    };
+
+    match (bucket_5h, bucket_weekly) {
+        (Some(h), Some(w)) => {
+            let w_frac = bucket_frac(w);
+            let h_frac = bucket_frac(h);
+            if w_frac <= 0.001 {
+                Some(w)
+            } else if h_frac <= w_frac {
+                Some(h)
+            } else {
+                Some(w)
+            }
+        }
+        (Some(h), None) => Some(h),
+        (None, Some(w)) => Some(w),
+        _ => group.buckets.first(),
+    }
+}
+
+fn is_claude_or_3p_summary_group(group: &QuotaSummaryGroupJson) -> bool {
+    let gname = group.display_name.as_deref().unwrap_or("").to_lowercase();
+    gname.contains("claude")
+        || gname.contains("gpt")
+        || gname.contains("3p")
+        || group.buckets.iter().any(|b| {
+            let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
+            let bname = b.display_name.as_deref().unwrap_or("").to_lowercase();
+            bid.contains("3p") || bname.contains("claude") || bname.contains("gpt")
+        })
+}
+
+fn is_dedicated_g4_summary_group(
+    group: &QuotaSummaryGroupJson,
+    known_codenames: &[String],
+) -> bool {
+    let gname = group.display_name.as_deref().unwrap_or("").to_lowercase();
+    if extract_group_g4_codename_with_known(&gname, "", known_codenames).is_some() {
+        return true;
+    }
+    group.buckets.iter().any(|b| {
+        let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
+        let bname = b.display_name.as_deref().unwrap_or("").to_lowercase();
+        extract_group_g4_codename_with_known(&bname, &bid, known_codenames).is_some()
+    })
+}
+
+fn find_general_gemini_summary_group<'a>(
+    groups: &'a [QuotaSummaryGroupJson],
+    known_codenames: &[String],
+) -> Option<&'a QuotaSummaryGroupJson> {
+    groups
+        .iter()
+        .find(|g| {
+            !is_dedicated_g4_summary_group(g, known_codenames)
+                && !is_claude_or_3p_summary_group(g)
+                && (g
+                    .display_name
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains("gemini")
+                    || g.buckets.iter().any(|b| {
+                        b.bucket_id
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains("gemini")
+                    }))
+        })
+        .or_else(|| {
+            groups.iter().find(|g| {
+                !is_dedicated_g4_summary_group(g, known_codenames)
+                    && !is_claude_or_3p_summary_group(g)
+            })
+        })
 }
 
 /// Fetch detailed model quota and summary groups.
@@ -601,6 +1160,9 @@ pub fn fetch_quota(
     let mut quota = AntigravityQuota::default();
     let mut models_fetched = false;
     let mut last_403_reason = None;
+    let mut model_level_percentages: std::collections::HashMap<String, Option<i32>> =
+        std::collections::HashMap::new();
+    let mut known_g4_codenames: Vec<String> = Vec::new();
 
     // 1. Fetch available models
     for endpoint in QUOTA_MODELS_ENDPOINTS {
@@ -626,48 +1188,92 @@ pub fn fetch_quota(
             match resp {
                 Ok(res) => {
                     if let Ok(data) = res.into_json::<QuotaModelResponse>() {
-                        let mut models = Vec::new();
-                        for (name, info) in data.models {
-                            if let Some(q_info) = info.quota_info {
-                                let name_lower = name.to_lowercase();
-                                // Keep user-facing models (exclude internal chat_*/tab_* models), matching Antigravity-Manager
-                                if name_lower.starts_with("gemini")
-                                    || name_lower.starts_with("claude")
-                                    || name_lower.starts_with("gpt")
-                                    || name_lower.starts_with("image")
-                                    || name_lower.starts_with("imagen")
-                                    || name_lower.contains("argon")
-                                {
-                                    let fraction = q_info.remaining_fraction.unwrap_or(1.0);
-                                    let percentage = (fraction * 100.0).round() as i32;
-                                    let reset_time = q_info.reset_time.unwrap_or_default();
-                                    models.push(ModelQuotaInfo {
-                                        name,
-                                        display_name: info.display_name,
-                                        percentage,
-                                        reset_time,
-                                        supports_thinking: info.supports_thinking.unwrap_or(false),
-                                        recommended: info.recommended.unwrap_or(false),
-                                    });
+                        let mut official_supported_ids = std::collections::HashSet::new();
+                        for sort in &data.agent_model_sorts {
+                            for group in &sort.groups {
+                                for id in &group.model_ids {
+                                    official_supported_ids.insert(id.trim().to_lowercase());
                                 }
                             }
                         }
-                        // Sort models: priority to Gemini 3.x / 2.5 Pro, Flash, Claude, Argon
+                        for id in &data.image_generation_model_ids {
+                            official_supported_ids.insert(id.trim().to_lowercase());
+                        }
+                        if let Some(ref tiered_map) = data.tiered_model_ids {
+                            for ids in tiered_map.values() {
+                                for id in ids {
+                                    official_supported_ids.insert(id.trim().to_lowercase());
+                                }
+                            }
+                        }
+
+                        let mut models = Vec::new();
+                        let mut disabled_models = Vec::new();
+                        for (name, info) in data.models {
+                            let name_lower = name.trim().to_lowercase();
+                            let is_disabled = info.disabled.unwrap_or(false)
+                                || name_lower.contains("-disabled")
+                                || name_lower.ends_with("_disabled");
+                            if is_disabled {
+                                disabled_models.push(name);
+                                continue;
+                            }
+                            if name_lower == "gemini-flash-worker-agy" {
+                                continue;
+                            }
+                            let in_official_sort = official_supported_ids.is_empty()
+                                || official_supported_ids.contains(&name_lower);
+                            if !in_official_sort || !is_model_compliant_with_baseline(&name) {
+                                continue;
+                            }
+
+                            if let Some(code) = extract_gemini4_codename(&name_lower) {
+                                if !known_g4_codenames.iter().any(|c| c == &code) {
+                                    known_g4_codenames.push(code);
+                                }
+                            }
+
+                            let q_info = info.quota_info.as_ref();
+                            let model_pct = model_quota_percentage(q_info);
+                            let reset_time = q_info
+                                .and_then(|qi| qi.reset_time.clone())
+                                .unwrap_or_default();
+                            model_level_percentages.insert(name_lower, model_pct);
+
+                            models.push(ModelQuotaInfo {
+                                name,
+                                display_name: info.display_name,
+                                percentage: model_pct.unwrap_or(100),
+                                reset_time,
+                                supports_thinking: info.supports_thinking.unwrap_or(false),
+                                recommended: info.recommended.unwrap_or(false),
+                            });
+                        }
+
+                        disabled_models.sort();
+                        disabled_models.dedup();
+                        quota.disabled_models = disabled_models;
+
+                        // Sort models: priority to Gemini 4 Neon/Argon/Carbon/Hydrogen, 3.8 Flash, Claude 5.5, Claude 4.6, GPT-120B
                         models.sort_by(|a, b| {
                             let score = |m: &ModelQuotaInfo| -> i32 {
                                 let n = m.name.to_lowercase();
-                                if n.contains("gemini-3.1-pro") || n.contains("gemini-3-pro") || n.contains("gemini-2.5-pro") {
+                                if n.contains("gemini-4-neon") || n == "gemini-pro-orchestrator-g1-pro" {
+                                    120
+                                } else if n.contains("gemini-4-argon") {
+                                    110
+                                } else if n.contains("gemini-4-") {
                                     100
-                                } else if n.contains("gemini-3.8-flash") || n.contains("gemini-3-flash") || n.contains("gemini-2.5-flash") {
+                                } else if n.contains("gemini-3.8-flash") {
                                     90
-                                } else if n.contains("claude-3-5-sonnet") || n.contains("claude-3-7-sonnet") || n.contains("claude-sonnet") || n.contains("claude-opus") {
-                                    80
-                                } else if n.contains("argon") {
-                                    70
+                                } else if n.contains("claude") && (n.contains("5-5") || n.contains("5.5")) {
+                                    85
+                                } else if n.contains("claude") {
+                                    75
+                                } else if n.starts_with("gpt") {
+                                    65
                                 } else if n.contains("gemini") {
                                     50
-                                } else if n.contains("claude") {
-                                    40
                                 } else {
                                     10
                                 }
@@ -707,7 +1313,7 @@ pub fn fetch_quota(
         }
     }
 
-    // 2. Fetch quota summary (5h, weekly, and Gemini 4 Argon buckets)
+    // 2. Fetch quota summary (5h, weekly, and any dedicated Gemini 4+ buckets)
     let summary_bodies = if let Some(pid) = project_id.filter(|p| !p.trim().is_empty()) {
         vec![
             serde_json::json!({ "project": pid }),
@@ -731,21 +1337,16 @@ pub fn fetch_quota(
                 if let Ok(data) = res.into_json::<QuotaSummaryResponse>() {
                     for group in &data.groups {
                         let group_name = group.display_name.clone().unwrap_or_else(|| "General".to_string());
-                        let g_lower = group_name.to_lowercase();
-                        let is_argon_group = g_lower.contains("argon");
-                        let is_claude_group = !is_argon_group
-                            && (g_lower.contains("claude") || g_lower.contains("gpt") || g_lower.contains("3p"));
-                        let is_gemini_group = !is_argon_group
-                            && !is_claude_group
-                            && (g_lower.contains("gemini")
-                                || (!g_lower.contains("claude")
-                                    && !g_lower.contains("gpt")
-                                    && !g_lower.contains("3p")));
+                        let is_g4_group = is_dedicated_g4_summary_group(group, &known_g4_codenames);
+                        let is_claude_group = !is_g4_group && is_claude_or_3p_summary_group(group);
+                        let is_gemini_group = !is_g4_group && !is_claude_group;
 
                         for bucket in &group.buckets {
                             let window = bucket.window.clone().unwrap_or_default();
-                            let fraction = bucket.remaining_fraction.unwrap_or(1.0);
                             let reset_time = bucket.reset_time.clone().unwrap_or_default();
+                            let fraction = bucket.remaining_fraction.unwrap_or_else(|| {
+                                if reset_time.is_empty() { 1.0 } else { 0.0 }
+                            });
                             let bucket_id = bucket.bucket_id.clone();
                             let display_name = group_name.clone();
 
@@ -772,73 +1373,78 @@ pub fn fetch_quota(
                         }
                     }
 
-                    // [FIX #3426 / Antigravity-Manager Parity] Fuse real bucket quotas into models so UI doesn't show fake 100%
+                    // Fuse group bucket quotas into models.
+                    // Gemini 4+ models (including Argon) match a dedicated codename group if present,
+                    // otherwise fall back to the general Gemini Models group (since upstream moved Argon into Gemini Models).
                     for model in quota.models.iter_mut() {
-                        let name_lower = model.name.to_lowercase();
-                        let is_argon = name_lower.contains("argon");
-                        let is_claude_or_gpt = !is_argon
+                        let name_lower = model.name.trim().to_lowercase();
+                        let g4_code = extract_gemini4_codename(&name_lower);
+                        let is_claude_or_gpt = g4_code.is_none()
                             && (name_lower.starts_with("claude") || name_lower.starts_with("gpt"));
-                        let is_gemini = !is_argon && name_lower.starts_with("gemini");
 
-                        for group in &data.groups {
-                            let gname = group.display_name.as_deref().unwrap_or("").to_lowercase();
-                            let is_argon_group = gname.contains("argon");
-                            let is_claude_group = !is_argon_group
-                                && (gname.contains("claude") || gname.contains("gpt") || gname.contains("3p"));
-                            let is_gemini_group = !is_argon_group
-                                && !is_claude_group
-                                && (gname.contains("gemini")
-                                    || (!gname.contains("claude") && !gname.contains("gpt") && !gname.contains("3p")));
+                        let matched_group = if is_claude_or_gpt {
+                            data.groups
+                                .iter()
+                                .find(|g| !is_dedicated_g4_summary_group(g, &known_g4_codenames) && is_claude_or_3p_summary_group(g))
+                        } else if let Some(ref code) = g4_code {
+                            data.groups
+                                .iter()
+                                .find(|g| {
+                                    let gname = g.display_name.as_deref().unwrap_or("").to_lowercase();
+                                    gname.contains(code.as_str())
+                                        || g.buckets.iter().any(|b| {
+                                            let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
+                                            let bname = b.display_name.as_deref().unwrap_or("").to_lowercase();
+                                            bid.contains(code.as_str()) || bname.contains(code.as_str())
+                                        })
+                                })
+                                .or_else(|| find_general_gemini_summary_group(&data.groups, &known_g4_codenames))
+                        } else {
+                            find_general_gemini_summary_group(&data.groups, &known_g4_codenames)
+                        };
 
-                            let matches_group = if is_argon {
-                                is_argon_group
-                            } else if is_claude_or_gpt {
-                                is_claude_group
-                            } else if is_gemini {
-                                is_gemini_group
-                            } else {
-                                false
-                            };
-
-                            if matches_group {
-                                let bucket_5h = group.buckets.iter().find(|b| {
-                                    let win = b.window.as_deref().unwrap_or("").to_lowercase();
-                                    let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
-                                    win.contains("5h") || bid.contains("5h") || win.contains("hour") || bid.contains("hour")
+                        if let Some(group) = matched_group {
+                            if let Some(b) = select_bucket_from_group(group) {
+                                let g_reset = b.reset_time.as_deref().unwrap_or("");
+                                let fraction = b.remaining_fraction.unwrap_or_else(|| {
+                                    if g_reset.is_empty() { 1.0 } else { 0.0 }
                                 });
-                                let bucket_weekly = group.buckets.iter().find(|b| {
-                                    let win = b.window.as_deref().unwrap_or("").to_lowercase();
-                                    let bid = b.bucket_id.as_deref().unwrap_or("").to_lowercase();
-                                    win.contains("week") || bid.contains("week") || win.contains("7d") || bid.contains("7d")
-                                });
+                                let g_pct = (fraction * 100.0).round() as i32;
+                                let model_pct = model_level_percentages.get(&name_lower).copied().flatten();
+                                let m_reset = model.reset_time.clone();
 
-                                let chosen_bucket = match (bucket_5h, bucket_weekly) {
-                                    (Some(h), Some(w)) => {
-                                        let w_frac = w.remaining_fraction.unwrap_or(1.0);
-                                        let h_frac = h.remaining_fraction.unwrap_or(1.0);
-                                        if w_frac <= 0.001 {
-                                            Some(w)
-                                        } else if h_frac <= w_frac {
-                                            Some(h)
+                                let (final_pct, final_reset) = match model_pct {
+                                    Some(m_p) if m_p <= 0 => (
+                                        0,
+                                        if !m_reset.is_empty() {
+                                            m_reset
                                         } else {
-                                            Some(w)
-                                        }
+                                            g_reset.to_string()
+                                        },
+                                    ),
+                                    Some(m_p) => {
+                                        let p = m_p.min(g_pct);
+                                        let r = if p == g_pct && !g_reset.is_empty() {
+                                            g_reset.to_string()
+                                        } else if !m_reset.is_empty() {
+                                            m_reset
+                                        } else {
+                                            g_reset.to_string()
+                                        };
+                                        (p, r)
                                     }
-                                    (Some(h), None) => Some(h),
-                                    (None, Some(w)) => Some(w),
-                                    _ => group.buckets.first(),
+                                    None => (
+                                        g_pct,
+                                        if !g_reset.is_empty() {
+                                            g_reset.to_string()
+                                        } else {
+                                            m_reset
+                                        },
+                                    ),
                                 };
 
-                                if let Some(b) = chosen_bucket {
-                                    let fraction = b.remaining_fraction.unwrap_or(1.0);
-                                    model.percentage = (fraction * 100.0).round() as i32;
-                                    if let Some(ref rt) = b.reset_time {
-                                        if !rt.is_empty() {
-                                            model.reset_time = rt.clone();
-                                        }
-                                    }
-                                    break;
-                                }
+                                model.percentage = final_pct;
+                                model.reset_time = final_reset;
                             }
                         }
                     }
@@ -853,12 +1459,34 @@ pub fn fetch_quota(
         }
     }
 
+    // [3P ISOLATION] If the account has no active Claude or GPT models at all, drop any upstream
+    // 3P quota group so UI and pool logic don't surface a ghost 3P bar.
+    if models_fetched {
+        let has_claude_or_gpt = quota.models.iter().any(|m| {
+            let n = m.name.trim().to_lowercase();
+            n.starts_with("claude") || n.starts_with("gpt")
+        });
+        if !has_claude_or_gpt {
+            quota.quota_groups.retain(|g| {
+                let gname = g.display_name.to_lowercase();
+                let bid = g.bucket_id.as_deref().unwrap_or("").to_lowercase();
+                !gname.contains("claude")
+                    && !gname.contains("gpt")
+                    && !gname.contains("3p")
+                    && !bid.contains("3p")
+            });
+        }
+    }
+
     // Fallback: If models or quota_groups could not be fetched (e.g. network error or rate limit 429),
     // retain existing cached quota data instead of wiping them out. When retrieveUserQuotaSummary
     // succeeds (`summary_fetched == true`), use the fresh groups authoritatively without merging stale groups.
     if let Some(existing) = existing_quota {
         if !models_fetched && quota.models.is_empty() && !existing.models.is_empty() {
             quota.models = existing.models.clone();
+            if quota.disabled_models.is_empty() && !existing.disabled_models.is_empty() {
+                quota.disabled_models = existing.disabled_models.clone();
+            }
         }
         if !summary_fetched && quota.quota_groups.is_empty() && !existing.quota_groups.is_empty() {
             quota.quota_groups = existing.quota_groups.clone();
@@ -871,6 +1499,9 @@ pub fn fetch_quota(
         }
         if quota.subscription_tier.is_none() {
             quota.subscription_tier = existing.subscription_tier.clone();
+        }
+        if quota.raw_tier.is_none() {
+            quota.raw_tier = existing.raw_tier.clone();
         }
     }
 
@@ -1556,10 +2187,15 @@ pub fn build_account_from_refresh_token(
     let expiry_timestamp = Utc::now().timestamp() + expires_in;
 
     let user_info = fetch_user_info(&access_token)?;
-    let (project_id, tier) = fetch_project_and_tier(&access_token);
+    let (project_id, tier, raw_tier) = fetch_project_and_tier_with_raw(&access_token);
     let mut quota = fetch_quota(&access_token, project_id.as_deref(), None).ok();
-    if let (Some(q), Some(t)) = (&mut quota, &tier) {
-        q.subscription_tier = Some(t.clone());
+    if let Some(q) = &mut quota {
+        if let Some(t) = &tier {
+            q.subscription_tier = Some(t.clone());
+        }
+        if let Some(rt) = raw_tier {
+            q.raw_tier = Some(rt);
+        }
     }
 
     let id = existing_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -2562,7 +3198,7 @@ pub fn refresh_all_quotas(store: &mut AntigravityStore) -> usize {
                 }
                 if let Ok(()) = ensure_fresh_token(acc) {
                     // Always query loadCodeAssist for authoritative project_id & subscription tier
-                    let (pid, tier) = fetch_project_and_tier(&acc.access_token);
+                    let (pid, tier, raw_tier) = fetch_project_and_tier_with_raw(&acc.access_token);
                     if pid.is_some() {
                         acc.project_id = pid;
                     }
@@ -2572,6 +3208,9 @@ pub fn refresh_all_quotas(store: &mut AntigravityStore) -> usize {
                     if let Ok(mut q) = fetch_quota(&acc.access_token, acc.project_id.as_deref(), acc.quota.as_ref()) {
                         if let Some(ref t) = acc.tier {
                             q.subscription_tier = Some(t.clone());
+                        }
+                        if raw_tier.is_some() {
+                            q.raw_tier = raw_tier;
                         }
                         acc.quota = Some(q);
                         acc.ensure_subscription_tier();
@@ -2959,6 +3598,16 @@ pub fn import_from_antigravity_manager(home_dir: &Path) -> Result<Vec<Antigravit
                 quota.subscription_tier = Some(norm.clone());
                 if acc.tier.is_none() {
                     acc.tier = Some(norm);
+                }
+            }
+            if let Some(rt) = quota_val.get("raw_tier").and_then(|v| v.as_str()) {
+                quota.raw_tier = Some(rt.to_string());
+            }
+            if let Some(dms) = quota_val.get("disabled_models").and_then(|v| v.as_array()) {
+                for dm in dms {
+                    if let Some(s) = dm.as_str() {
+                        quota.disabled_models.push(s.to_string());
+                    }
                 }
             }
             if let Some(models) = quota_val.get("models").and_then(|v| v.as_array()) {
@@ -4549,6 +5198,8 @@ mod tests {
     fn test_tier_normalization() {
         assert_eq!(normalize_subscription_tier("free-tier"), "FREE");
         assert_eq!(normalize_subscription_tier("Antigravity Starter Quota"), "FREE");
+        assert_eq!(normalize_subscription_tier("g1-plus-tier"), "PLUS");
+        assert_eq!(normalize_subscription_tier("Google AI Plus"), "PLUS");
         assert_eq!(normalize_subscription_tier("g1-pro-tier"), "PRO");
         assert_eq!(normalize_subscription_tier("Google AI Pro"), "PRO");
         assert_eq!(normalize_subscription_tier("g1-ultra-tier"), "ULTRA");
@@ -4700,7 +5351,8 @@ mod tests {
         assert_eq!(imported.len(), 1);
         let acc = &imported[0];
         assert_eq!(acc.email, "pro@example.com");
-        assert_eq!(acc.tier.as_deref(), Some("PRO"));
+        // Fixture declares PRO with only gemini-3.8-flash (no Argon/Neon), so it reclassifies as PLUS
+        assert_eq!(acc.tier.as_deref(), Some("PLUS"));
         let q = acc.quota.as_ref().unwrap();
         assert!(!q.is_forbidden);
         assert_eq!(q.models.len(), 1);
@@ -5150,5 +5802,186 @@ mod tests {
         let stale = filter_stale_antigravity_sessions(&list, 14, now_ms);
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].session_id, "old");
+    }
+
+    #[test]
+    fn test_extract_gemini4_codename_and_group_detection() {
+        assert_eq!(extract_gemini4_codename("gemini-4-neon-high"), Some("neon".to_string()));
+        assert_eq!(extract_gemini4_codename("gemini-4-argon-high"), Some("argon".to_string()));
+        assert_eq!(extract_gemini4_codename("gemini-pro-orchestrator-g1-pro"), Some("neon".to_string()));
+        assert_eq!(extract_gemini4_codename("gemini-4-1-flash"), None);
+        assert_eq!(extract_gemini4_codename("gemini-4-pro-preview"), None);
+        assert_eq!(extract_gemini4_codename("gemini-4-hydrogen-sonar"), None);
+        assert_eq!(extract_gemini4_codename("gemini-4-argon-disabled"), None);
+
+        let known = vec!["neon".to_string(), "argon".to_string()];
+        // General Gemini/3P pools must not be misclassified as dedicated G4 groups
+        assert_eq!(
+            extract_group_g4_codename_with_known("gemini models", "gemini-weekly", &known),
+            None
+        );
+        assert_eq!(
+            extract_group_g4_codename_with_known("claude and gpt models", "3p-weekly", &known),
+            None
+        );
+        // Dedicated G4 groups are extracted cleanly
+        assert_eq!(
+            extract_group_g4_codename_with_known("gemini 4 neon", "neon-weekly", &known),
+            Some("neon".to_string())
+        );
+        assert_eq!(
+            extract_group_g4_codename_with_known("gemini 4 argon", "gemini-argon-wtu-weekly", &known),
+            Some("argon".to_string())
+        );
+    }
+
+    #[test]
+    fn test_model_baseline_compliance_and_proto3_zero_percentage() {
+        assert!(!is_model_compliant_with_baseline("gemini-2.5-pro"));
+        assert!(!is_model_compliant_with_baseline("gemini-3-flash"));
+        assert!(!is_model_compliant_with_baseline("gemini-4-argon-disabled"));
+        assert!(!is_model_compliant_with_baseline("gemini-4-hydrogen-sonar"));
+        assert!(is_model_compliant_with_baseline("gemini-4-neon-high"));
+        assert!(is_model_compliant_with_baseline("gemini-4-argon-high"));
+        assert!(is_model_compliant_with_baseline("gemini-3.8-flash-high"));
+        assert!(is_model_compliant_with_baseline("claude-opus-5-5-high"));
+        assert!(is_model_compliant_with_baseline("claude-sonnet-4-6"));
+        assert!(is_model_compliant_with_baseline("gpt-oss-120b-medium"));
+
+        let omitted_exhausted = QuotaInfoJson {
+            remaining_fraction: None,
+            reset_time: Some("2026-11-24T12:00:00Z".into()),
+        };
+        assert_eq!(model_quota_percentage(Some(&omitted_exhausted)), Some(0));
+
+        let partial = QuotaInfoJson {
+            remaining_fraction: Some(0.42),
+            reset_time: Some("2026-11-24T12:00:00Z".into()),
+        };
+        assert_eq!(model_quota_percentage(Some(&partial)), Some(42));
+
+        let empty = QuotaInfoJson {
+            remaining_fraction: None,
+            reset_time: None,
+        };
+        assert_eq!(model_quota_percentage(Some(&empty)), None);
+    }
+
+    #[test]
+    fn test_ai_plus_detection_and_model_capabilities() {
+        let mk_model = |name: &str| ModelQuotaInfo {
+            name: name.into(),
+            display_name: None,
+            percentage: 100,
+            reset_time: String::new(),
+            supports_thinking: true,
+            recommended: true,
+        };
+
+        // 1a. True PRO with Neon (no Argon): stays PRO
+        let mut neon_pro = AntigravityAccount::new(
+            "pro-neon".into(),
+            "neon@example.com".into(),
+            "at".into(),
+            "rt".into(),
+            1800000000,
+        );
+        neon_pro.tier = Some("PRO".into());
+        neon_pro.quota = Some(AntigravityQuota {
+            models: vec![
+                mk_model("gemini-4-neon-high"),
+                mk_model("claude-opus-5-5-high"),
+                mk_model("gpt-oss-120b-medium"),
+            ],
+            ..Default::default()
+        });
+        assert!(neon_pro.has_argon_or_neon());
+        assert!(!neon_pro.is_ai_plus());
+        assert_eq!(neon_pro.get_effective_tier(), "PRO");
+        neon_pro.ensure_subscription_tier();
+        assert_eq!(neon_pro.tier.as_deref(), Some("PRO"));
+        let pro_caps = neon_pro.model_capabilities();
+        assert!(pro_caps.has_flagship);
+        assert_eq!(pro_caps.flagship_label.as_deref(), Some("Neon"));
+        assert!(pro_caps.has_claude_55);
+        assert!(pro_caps.has_gpt);
+
+        // 1b. True PRO with Argon only: stays PRO
+        let mut argon_pro = AntigravityAccount::new(
+            "pro-argon".into(),
+            "argon@example.com".into(),
+            "at".into(),
+            "rt".into(),
+            1800000000,
+        );
+        argon_pro.tier = Some("PRO".into());
+        argon_pro.quota = Some(AntigravityQuota {
+            models: vec![mk_model("gemini-4-argon-high")],
+            ..Default::default()
+        });
+        assert!(argon_pro.has_argon_or_neon());
+        assert!(!argon_pro.is_ai_plus());
+        assert_eq!(argon_pro.get_effective_tier(), "PRO");
+
+        // 2. Fake PRO (AI Plus): paidTier is PRO, but lacks Argon & Neon
+        //    Even if cached/other models like Claude 5.5 or Carbon exist, missing Argon/Neon -> PLUS
+        let mut ai_plus = AntigravityAccount::new(
+            "plus-1".into(),
+            "plus@example.com".into(),
+            "at".into(),
+            "rt".into(),
+            1800000000,
+        );
+        ai_plus.tier = Some("PRO".into());
+        ai_plus.quota = Some(AntigravityQuota {
+            models: vec![
+                mk_model("gemini-3.8-flash-high"),
+                mk_model("gemini-4-hydrogen-sonar"),
+                mk_model("gemini-4-carbon-high"),
+                mk_model("claude-opus-5-5-high"),
+                mk_model("claude-sonnet-4-6"),
+                mk_model("gpt-oss-120b-medium"),
+            ],
+            disabled_models: vec!["gemini-4-neon-disabled".into(), "gemini-4-argon-disabled".into()],
+            ..Default::default()
+        });
+        assert!(!ai_plus.has_argon_or_neon());
+        assert!(ai_plus.is_ai_plus());
+        assert_eq!(ai_plus.get_effective_tier(), "PLUS");
+        ai_plus.ensure_subscription_tier();
+        assert_eq!(ai_plus.tier.as_deref(), Some("PLUS"));
+        assert_eq!(
+            ai_plus.quota.as_ref().and_then(|q| q.subscription_tier.as_deref()),
+            Some("PLUS")
+        );
+
+        // 3. PRO account with empty models & empty disabled_models must NOT be downgraded before quota fetch
+        let mut empty_pro = AntigravityAccount::new(
+            "pro-empty".into(),
+            "empty@example.com".into(),
+            "at".into(),
+            "rt".into(),
+            1800000000,
+        );
+        empty_pro.tier = Some("PRO".into());
+        empty_pro.quota = Some(AntigravityQuota::default());
+        assert!(!empty_pro.is_ai_plus());
+        assert_eq!(empty_pro.get_effective_tier(), "PRO");
+
+        // 4. ULTRA and FREE must never become PLUS even if models lack Argon/Neon
+        let mut ultra = AntigravityAccount::new(
+            "ultra-1".into(),
+            "ultra@example.com".into(),
+            "at".into(),
+            "rt".into(),
+            1800000000,
+        );
+        ultra.tier = Some("ULTRA".into());
+        ultra.quota = Some(AntigravityQuota {
+            models: vec![mk_model("gemini-3.8-flash-high")],
+            ..Default::default()
+        });
+        assert!(!ultra.is_ai_plus());
+        assert_eq!(ultra.get_effective_tier(), "ULTRA");
     }
 }

@@ -462,6 +462,7 @@ pub enum AntigravityTierFilter {
     #[default]
     All,
     Pro,
+    Plus,
     Ultra,
     Free,
 }
@@ -1177,6 +1178,7 @@ impl WorkspaceState {
             },
             antigravity_tier_filter: match std::env::var("AITOOLPLUS_ANTIGRAVITY_TIER").map(|v| v.to_lowercase()).as_deref() {
                 Ok("pro") => AntigravityTierFilter::Pro,
+                Ok("plus") => AntigravityTierFilter::Plus,
                 Ok("ultra") => AntigravityTierFilter::Ultra,
                 Ok("free") => AntigravityTierFilter::Free,
                 _ => AntigravityTierFilter::All,
