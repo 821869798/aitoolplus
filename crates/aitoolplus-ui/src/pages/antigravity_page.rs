@@ -12,7 +12,7 @@ use aitoolplus_core::antigravity::{
     detect_active_clients_status, exchange_auth_code, extract_gemini4_codename,
     extract_group_g4_codename_with_known, extract_oauth_code, extract_tokens_from_text,
     fetch_project_and_tier_with_raw, fetch_quota, fetch_user_info, import_all_local_accounts,
-    import_from_custom_db_path, import_from_local_system, import_from_v1_backup, load_store,
+    import_from_custom_db_path, import_from_v1_backup, load_store,
     open_browser, save_store, scan_antigravity_sessions, switch_account_target,
     sync_store_active_flags, toggle_account_disabled, update_account_device_profile,
     update_account_label,
@@ -230,7 +230,6 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
     }
 
     let add_label = i.t("antigravity.add_account_2");
-    let import_label = i.t("antigravity.import_local");
     let refresh_all_label = i.t("antigravity.refresh_all_quotas");
     let cur_tier_filter = ws.ui.antigravity_tier_filter;
 
@@ -287,17 +286,6 @@ pub fn render_accounts_tab(ws: &mut Workspace, cx: &mut Context<Workspace>) -> g
                             cx,
                             |ws, _, window, cx| {
                                 open_add_account_dialog(ws, window, cx);
-                            },
-                        ))
-                        .child(button_with_icon_l(
-                            "ag-import-btn",
-                            DOWNLOAD_SVG,
-                            import_label,
-                            ButtonVariant::Secondary,
-                            &t,
-                            cx,
-                            |ws, _, _, cx| {
-                                import_local_account_action(ws, cx);
                             },
                         ))
                         .child(button_with_icon_loading_l(
@@ -4560,53 +4548,6 @@ fn import_v1_backup_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
                         d.auth_status = None;
                         d.error_message = Some(e);
                     }
-                }
-            }
-            cx.notify();
-        });
-    }).detach();
-}
-
-/// Import active account from local system (Credential Manager or ~/.gemini/oauth_creds.json).
-fn import_local_account_action(ws: &mut Workspace, cx: &mut Context<Workspace>) {
-    let home = ws.paths.home.clone();
-    let app_data = ws.paths.app_data.clone();
-    let weak = cx.entity().downgrade();
-
-    ws.ui.toast(
-        ws.i18n.t("antigravity.importing_local_antigravity_cr"),
-        false,
-    );
-    cx.notify();
-
-    cx.spawn(async move |_this, cx| {
-        let result = cx.background_spawn(async move {
-            import_from_local_system(&home)
-        }).await;
-
-        let _ = weak.update(cx, |ws: &mut Workspace, cx| {
-            match result {
-                Ok(account) => {
-                    let email = account.email.clone();
-                    let mut store = ws.ui.antigravity_store.clone().unwrap_or_default();
-                    if let Some(pos) = store.accounts.iter().position(|a| a.email == email) {
-                        store.accounts[pos] = account;
-                    } else {
-                        store.accounts.push(account);
-                    }
-                    sync_store_active_flags(&ws.paths.home, &mut store);
-                    let _ = save_store(&app_data, &store);
-                    ws.ui.antigravity_store = Some(store);
-
-                    let msg = ws.i18n.raw(
-                        &format!("成功从本机导入账号：{}", email),
-                        &format!("Imported local account: {}", email),
-                    ).to_string();
-                    ws.ui.toast(msg, false);
-                }
-                Err(e) => {
-                    let msg = format!("从本机导入失败: {}", e);
-                    ws.ui.toast(msg, true);
                 }
             }
             cx.notify();
